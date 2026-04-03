@@ -67,3 +67,24 @@ async def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
             },
         )
         return resp.json()
+
+
+async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prompt: str) -> dict:
+    """Send an inline keyboard where each button is a transaction to delete."""
+    keyboard = []
+    for tx in transactions:
+        label = f"❌ {tx['item']} — ${tx['amount']:.2f} ({tx['category']})"
+        callback_data = f"del:{tx['_doc_id']}"
+        keyboard.append([{"text": label, "callback_data": callback_data}])
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
