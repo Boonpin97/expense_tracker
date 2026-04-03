@@ -63,6 +63,48 @@ def get_transactions(chat_id: int, start: datetime, end: datetime) -> list[dict]
     return [doc.to_dict() for doc in docs]
 
 
+def get_transactions_with_ids(chat_id: int, start: datetime, end: datetime) -> list[dict]:
+    """Like get_transactions but includes the Firestore document ID."""
+    start_iso = start.isoformat()
+    end_iso = end.isoformat()
+
+    docs = (
+        get_db()
+        .collection("transactions")
+        .where("chat_id", "==", chat_id)
+        .where("timestamp", ">=", start_iso)
+        .where("timestamp", "<", end_iso)
+        .stream()
+    )
+    results = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        results.append(data)
+    return results
+
+
+def get_last_transaction(chat_id: int) -> Optional[dict]:
+    """Get the most recent transaction for a chat."""
+    docs = (
+        get_db()
+        .collection("transactions")
+        .where("chat_id", "==", chat_id)
+        .order_by("timestamp", direction=firestore.Query.DESCENDING)
+        .limit(1)
+        .stream()
+    )
+    for doc in docs:
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        return data
+    return None
+
+
+def delete_transaction(doc_id: str) -> None:
+    get_db().collection("transactions").document(doc_id).delete()
+
+
 # ── Pending Transactions (temp storage for category selection) ─
 
 def save_pending(chat_id: int, item: str, amount: float) -> None:
