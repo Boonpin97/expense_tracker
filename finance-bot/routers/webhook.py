@@ -54,6 +54,16 @@ async def webhook(request: Request):
             delete_transaction(doc_id)
             await telegram.answer_callback_query(callback_query_id, "Deleted!")
             await telegram.send_message(chat_id, "🗑️ Transaction deleted.")
+        elif callback_data.startswith("rmcat:"):
+            category_name = callback_data[6:]
+            removed = remove_category_from_list(category_name)
+            count = delete_category(category_name)
+            if removed:
+                await telegram.answer_callback_query(callback_query_id, f"Removed {category_name}")
+                await telegram.send_message(chat_id, f"🗑️ Removed category <b>{category_name}</b> and {count} item mapping(s).")
+            else:
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, f"⚠️ Category <b>{category_name}</b> not found.")
 
         return {"ok": True}
 
@@ -157,12 +167,7 @@ async def webhook(request: Request):
                 if not removable:
                     await telegram.send_message(chat_id, "No categories to remove.")
                 else:
-                    set_user_state(chat_id, "awaiting_remove_category")
-                    category_list_str = "\n".join(f"• {c['emoji']} {c['name']}" for c in removable)
-                    await telegram.send_message(
-                        chat_id,
-                        f"🗂 Existing categories:\n{category_list_str}\n\nType the exact name of the category to remove:",
-                    )
+                    await telegram.send_remove_category_keyboard(chat_id, removable)
             return {"ok": True}
 
         # Check user state for standalone command flows

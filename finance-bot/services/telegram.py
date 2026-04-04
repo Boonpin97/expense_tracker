@@ -89,3 +89,23 @@ async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prom
             },
         )
         return resp.json()
+
+
+async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) -> dict:
+    """Send an inline keyboard for removing a category."""
+    keyboard = []
+    for cat in categories:
+        label = f"❌ {cat['emoji']} {cat['name']}"
+        keyboard.append([{"text": label, "callback_data": f"rmcat:{cat['name']}"}])
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "🗂 Tap a category to remove it:",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
