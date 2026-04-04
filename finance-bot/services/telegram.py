@@ -23,29 +23,16 @@ async def send_message(chat_id: int, text: str, parse_mode: str = "HTML") -> dic
 
 
 async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict:
-    from services.firestore import get_all_categories
+    from services.firestore import get_category_list
 
-    DEFAULT_CATEGORIES = {
-        "Food & Drink": "🍔",
-        "Transport": "🚗",
-        "Housing": "🏠",
-        "Health": "💊",
-        "Entertainment": "🎬",
-        "Shopping": "🛍️",
-        "Utilities": "💡",
-        "Other": "📦",
-    }
+    # Build buttons from category_list (already ordered, "Other" last)
+    categories = []
+    for cat in get_category_list():
+        emoji = cat.get("emoji", "🏷️")
+        name = cat["name"]
+        categories.append((f"{emoji} {name}", f"cat:{name}"))
 
-    # Start with default categories
-    categories = [(f"{emoji} {name}", f"cat:{name}") for name, emoji in DEFAULT_CATEGORIES.items()]
-
-    # Add custom categories from Firestore
-    all_cats = get_all_categories()
-    for cat in all_cats:
-        if cat not in DEFAULT_CATEGORIES:
-            categories.append((f"🏷️ {cat}", f"cat:{cat}"))
-
-    # Always add "New category" at the end
+    # Always add "New category" at the very end
     categories.append(("✏️ New category", "cat:__new__"))
 
     keyboard = []

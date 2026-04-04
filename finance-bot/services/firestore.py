@@ -157,11 +157,54 @@ def clear_user_state(chat_id: int) -> None:
 
 # ── Category Management ───────────────────────────────────────
 
-def get_all_categories() -> list[str]:
-    """Return sorted unique list of all categories in category_map."""
-    docs = get_db().collection("category_map").stream()
-    categories = {doc.to_dict().get("category") for doc in docs if doc.to_dict().get("category")}
-    return sorted(categories)
+DEFAULT_CATEGORIES = [
+    {"name": "Food & Drink", "emoji": "🍔", "order": 1},
+    {"name": "Transport", "emoji": "🚗", "order": 2},
+    {"name": "Housing", "emoji": "🏠", "order": 3},
+    {"name": "Health", "emoji": "💊", "order": 4},
+    {"name": "Entertainment", "emoji": "🎬", "order": 5},
+    {"name": "Shopping", "emoji": "🛍️", "order": 6},
+    {"name": "Utilities", "emoji": "💡", "order": 7},
+    {"name": "Other", "emoji": "📦", "order": 9999},
+]
+
+
+def _seed_category_list() -> None:
+    """Seed the category_list collection with defaults if empty."""
+    coll = get_db().collection("category_list")
+    existing = list(coll.limit(1).stream())
+    if existing:
+        return
+    for cat in DEFAULT_CATEGORIES:
+        coll.document(cat["name"]).set(cat)
+
+
+def get_category_list() -> list[dict]:
+    """Return all categories ordered by 'order' field. Ensures 'Other' is last (before 'New category' button)."""
+    _seed_category_list()
+    docs = get_db().collection("category_list").stream()
+    categories = [doc.to_dict() for doc in docs]
+    categories.sort(key=lambda c: c.get("order", 9998))
+    return categories
+
+
+def add_category_to_list(name: str, emoji: str = "🏷️") -> None:
+    """Add a new category to category_list with an order just before 'Other'."""
+    coll = get_db().collection("category_list")
+    # Get max order that isn't 9999 (Other)
+    all_cats = get_category_list()
+    max_order = max((c.get("order", 0) for c in all_cats if c.get("order", 0) < 9999), default=100)
+    coll.document(name).set({"name": name, "emoji": emoji, "order": max_order + 1})
+
+
+def remove_category_from_list(name: str) -> bool:
+    """Remove a category from category_list. Returns True if it existed."""
+    doc_ref = get_db().collection("category_list").document(name)
+    doc = doc_ref.get()
+    if doc.exists:
+        doc_ref.delete()
+        return True
+    return False
 
 
 def delete_category(category_name: str) -> int:
