@@ -144,6 +144,30 @@ def delete_pending(chat_id: int) -> None:
     get_db().collection("pending").document(str(chat_id)).delete()
 
 
+# ── Pending Category Change (for "Change category" button) ────
+
+def save_pending_change(chat_id: int, tx_id: str, item_key: str) -> None:
+    get_db().collection("pending_change").document(str(chat_id)).set({
+        "tx_id": tx_id,
+        "item_key": item_key,
+    })
+
+
+def get_pending_change(chat_id: int) -> Optional[dict]:
+    doc = get_db().collection("pending_change").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def delete_pending_change(chat_id: int) -> None:
+    get_db().collection("pending_change").document(str(chat_id)).delete()
+
+
+def update_transaction_category(tx_id: str, new_category: str) -> None:
+    get_db().collection("transactions").document(tx_id).update({"category": new_category})
+
+
 def set_awaiting_custom_category(chat_id: int) -> None:
     get_db().collection("pending").document(str(chat_id)).update({"awaiting_custom_category": True})
 

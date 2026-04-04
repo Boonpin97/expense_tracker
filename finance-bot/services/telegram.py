@@ -22,6 +22,21 @@ async def send_message(chat_id: int, text: str, parse_mode: str = "HTML") -> dic
         return resp.json()
 
 
+async def send_message_with_change_category(chat_id: int, text: str, tx_id: str, item_key: str) -> dict:
+    keyboard = [[{"text": "🔄 Change category", "callback_data": f"chgcat:{tx_id}:{item_key}"}]]
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict:
     from services.firestore import get_category_list
 

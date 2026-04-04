@@ -69,6 +69,16 @@ async def webhook(request: Request):
             else:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 await telegram.send_message(chat_id, f"⚠️ Category <b>{category_name}</b> not found.")
+        elif callback_data.startswith("chgcat:"):
+            # chgcat:<tx_id>:<item_key>
+            parts = callback_data[7:].split(":", 1)
+            if len(parts) == 2:
+                tx_id, item_key = parts
+                # Store tx_id and item_key so category selection can update them
+                from services.firestore import save_pending_change
+                save_pending_change(chat_id, tx_id, item_key)
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_category_keyboard(chat_id, item_key, 0)
 
         return {"ok": True}
 
@@ -182,6 +192,20 @@ async def webhook(request: Request):
             add_category_to_list(new_cat)
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"✅ Category <b>{new_cat}</b> added! It will now appear in the category keyboard.")
+            return {"ok": True}
+        elif user_state and user_state.startswith("awaiting_change_cat:"):
+            # awaiting_change_cat:<tx_id>:<item_key>
+            parts = user_state.split(":", 2)
+            if len(parts) == 3:
+                _, tx_id, item_key = parts
+                new_cat = text.strip().title()
+                from services.firestore import update_transaction_category, save_pending_change, delete_pending_change, save_category
+                update_transaction_category(tx_id, new_cat)
+                save_category(item_key, new_cat, confirmed_by_user=True)
+                add_category_to_list(new_cat)
+                delete_pending_change(chat_id)
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to <b>{new_cat}</b> (new category saved)")
             return {"ok": True}
 
         # Check if awaiting a custom category name from inline keyboard flow
