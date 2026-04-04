@@ -40,9 +40,9 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
         # Check if this is a change-category flow or new-expense flow
         pending_change = firestore.get_pending_change(chat_id)
         if pending_change:
-            firestore.set_user_state(chat_id, f"awaiting_change_cat:{pending_change['tx_id']}:{pending_change['item_key']}")
+            firestore.set_user_state(chat_id, f"awaiting_change_new_name:{pending_change['tx_id']}:{pending_change['item_key']}")
         else:
-            firestore.set_awaiting_custom_category(chat_id)
+            firestore.set_user_state(chat_id, "awaiting_inline_cat_name")
         await telegram.answer_callback_query(callback_query_id, "")
         await telegram.send_message(chat_id, "✏️ Type the name of the new category:")
         return
@@ -87,7 +87,7 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
     )
 
 
-async def handle_custom_category_input(chat_id: int, category_name: str) -> None:
+async def handle_custom_category_input(chat_id: int, category_name: str, emoji: str = "🏷️") -> None:
     pending = firestore.get_pending(chat_id)
     if not pending:
         await telegram.send_message(chat_id, "⚠️ No pending expense found. Please send your expense again.")
@@ -108,7 +108,7 @@ async def handle_custom_category_input(chat_id: int, category_name: str) -> None
     )
     firestore.save_transaction(tx)
     firestore.save_category(item_key, category, confirmed_by_user=True)
-    firestore.add_category_to_list(category)
+    firestore.add_category_to_list(category, emoji)
     firestore.delete_pending(chat_id)
 
     await telegram.send_message(
