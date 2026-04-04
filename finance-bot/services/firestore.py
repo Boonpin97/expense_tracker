@@ -127,3 +127,53 @@ def get_pending(chat_id: int) -> Optional[dict]:
 
 def delete_pending(chat_id: int) -> None:
     get_db().collection("pending").document(str(chat_id)).delete()
+
+
+def set_awaiting_custom_category(chat_id: int) -> None:
+    get_db().collection("pending").document(str(chat_id)).update({"awaiting_custom_category": True})
+
+
+def is_awaiting_custom_category(chat_id: int) -> bool:
+    pending = get_pending(chat_id)
+    return bool(pending and pending.get("awaiting_custom_category"))
+
+
+# ── User State (for standalone command flows) ─────────────────
+
+def set_user_state(chat_id: int, state: str) -> None:
+    get_db().collection("user_state").document(str(chat_id)).set({"state": state})
+
+
+def get_user_state(chat_id: int) -> Optional[str]:
+    doc = get_db().collection("user_state").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict().get("state")
+    return None
+
+
+def clear_user_state(chat_id: int) -> None:
+    get_db().collection("user_state").document(str(chat_id)).delete()
+
+
+# ── Category Management ───────────────────────────────────────
+
+def get_all_categories() -> list[str]:
+    """Return sorted unique list of all categories in category_map."""
+    docs = get_db().collection("category_map").stream()
+    categories = {doc.to_dict().get("category") for doc in docs if doc.to_dict().get("category")}
+    return sorted(categories)
+
+
+def delete_category(category_name: str) -> int:
+    """Delete all category_map entries with the given category. Returns count deleted."""
+    docs = (
+        get_db()
+        .collection("category_map")
+        .where("category", "==", category_name)
+        .stream()
+    )
+    count = 0
+    for doc in docs:
+        doc.reference.delete()
+        count += 1
+    return count

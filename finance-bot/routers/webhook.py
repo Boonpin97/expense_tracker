@@ -5,10 +5,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request
 
 from services.parser import parse_expense
-from services.categoriser import handle_expense, handle_category_selection
+from services.categoriser import handle_expense, handle_category_selection, handle_custom_category_input
 from services import telegram
 from routers.reports import _get_period_window, _format_report
-from services.firestore import get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction
+from services.firestore import (
+    get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction,
+    is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
+    get_all_categories, delete_category,
+)
 
 router = APIRouter()
 
@@ -144,6 +148,42 @@ async def webhook(request: Request):
                             )
                         else:
                             await telegram.send_message(chat_id, f"No transactions on {date_str}.")
+            elif text == "/new_category":
+                set_user_state(chat_id, "awaiting_new_category")
+                await telegram.send_message(chat_id, "✏️ Type the name of the new category to add:")
+            elif text == "/remove_category":
+                categories = get_all_categories()
+                if not categories:
+                    await telegram.send_message(chat_id, "No custom categories found.")
+                else:
+                    set_user_state(chat_id, "awaiting_remove_category")
+                    category_list = "\n".join(f"• {c}" for c in categories)
+                    await telegram.send_message(
+                        chat_id,
+                        f"🗂 Existing categories:\n{category_list}\n\nType the exact name of the category to remove:",
+                    )
+            return {"ok": True}
+
+        # Check user state for standalone command flows
+        user_state = get_user_state(chat_id)
+        if user_state == "awaiting_new_category":
+            new_cat = text.strip().title()
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, f"✅ Category <b>{new_cat}</b> is ready to use. Send an expense and select it from the keyboard.")
+            return {"ok": True}
+        elif user_state == "awaiting_remove_category":
+            category_name = text.strip().title()
+            count = delete_category(category_name)
+            clear_user_state(chat_id)
+            if count > 0:
+                await telegram.send_message(chat_id, f"🗑️ Removed category <b>{category_name}</b> and {count} item mapping(s). Future expenses with those items will ask for a category again.")
+            else:
+                await telegram.send_message(chat_id, f"⚠️ No category named <b>{category_name}</b> found. Make sure you typed it exactly as shown.")
+            return {"ok": True}
+
+        # Check if awaiting a custom category name from inline keyboard flow
+        if is_awaiting_custom_category(chat_id):
+            await handle_custom_category_input(chat_id, text)
             return {"ok": True}
 
         parsed = parse_expense(text)
