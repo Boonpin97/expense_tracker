@@ -37,12 +37,20 @@ def _get_period_window(period: str) -> tuple[datetime, datetime, str]:
         end_display = (end - timedelta(days=1))
         label = f"Weekly Report ({start.strftime('%d')}–{end_display.strftime('%d %b')})"
     elif period == "monthly":
-        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        # Next month
-        if start.month == 12:
-            end = start.replace(year=start.year + 1, month=1)
+        first_of_current = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        # If triggered on the 1st, report the previous month
+        if now.day == 1:
+            if first_of_current.month == 1:
+                start = first_of_current.replace(year=first_of_current.year - 1, month=12)
+            else:
+                start = first_of_current.replace(month=first_of_current.month - 1)
+            end = first_of_current
         else:
-            end = start.replace(month=start.month + 1)
+            start = first_of_current
+            if start.month == 12:
+                end = start.replace(year=start.year + 1, month=1)
+            else:
+                end = start.replace(month=start.month + 1)
         label = f"Monthly Report ({start.strftime('%b %Y')})"
     else:
         raise HTTPException(status_code=400, detail="period must be daily, weekly, or monthly")
