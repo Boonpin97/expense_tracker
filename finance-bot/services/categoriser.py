@@ -34,6 +34,12 @@ async def handle_expense(chat_id: int, item: str, amount: float) -> None:
 
 
 async def handle_category_selection(chat_id: int, category: str, callback_query_id: str) -> None:
+    if category == "__new__":
+        firestore.set_awaiting_custom_category(chat_id)
+        await telegram.answer_callback_query(callback_query_id, "")
+        await telegram.send_message(chat_id, "✏️ Type the name of the new category:")
+        return
+
     pending = firestore.get_pending(chat_id)
     if not pending:
         await telegram.answer_callback_query(callback_query_id, "No pending expense found.")
@@ -59,4 +65,33 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
     await telegram.send_message(
         chat_id,
         f"✅ <b>{item}</b> — ${amount:.2f} → {category}",
+    )
+
+
+async def handle_custom_category_input(chat_id: int, category_name: str) -> None:
+    pending = firestore.get_pending(chat_id)
+    if not pending:
+        await telegram.send_message(chat_id, "⚠️ No pending expense found. Please send your expense again.")
+        return
+
+    item = pending["item"]
+    amount = pending["amount"]
+    timestamp = pending["timestamp"]
+    item_key = _normalise(item)
+    category = category_name.strip().title()
+
+    tx = Transaction(
+        item=item,
+        amount=amount,
+        category=category,
+        timestamp=timestamp,
+        chat_id=chat_id,
+    )
+    firestore.save_transaction(tx)
+    firestore.save_category(item_key, category, confirmed_by_user=True)
+    firestore.delete_pending(chat_id)
+
+    await telegram.send_message(
+        chat_id,
+        f"✅ <b>{item}</b> — ${amount:.2f} → {category} (new category saved)",
     )

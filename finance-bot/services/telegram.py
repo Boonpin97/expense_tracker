@@ -31,7 +31,8 @@ async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict
         ("🎬 Entertainment", "cat:Entertainment"),
         ("🛍️ Shopping", "cat:Shopping"),
         ("💡 Utilities", "cat:Utilities"),
-        ("➕ Other", "cat:Other"),
+        ("📦 Other", "cat:Other"),
+        ("✏️ New category", "cat:__new__"),
     ]
 
     keyboard = []
