@@ -105,6 +105,21 @@ def delete_transaction(doc_id: str) -> None:
     get_db().collection("transactions").document(doc_id).delete()
 
 
+def reassign_transactions_category(old_category: str, new_category: str) -> int:
+    """Reassign all transactions from old_category to new_category. Returns count updated."""
+    docs = (
+        get_db()
+        .collection("transactions")
+        .where("category", "==", old_category)
+        .stream()
+    )
+    count = 0
+    for doc in docs:
+        doc.reference.update({"category": new_category})
+        count += 1
+    return count
+
+
 # ── Pending Transactions (temp storage for category selection) ─
 
 def save_pending(chat_id: int, item: str, amount: float) -> None:
