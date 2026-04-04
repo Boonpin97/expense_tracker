@@ -174,8 +174,8 @@ async def webhook(request: Request):
                         else:
                             await telegram.send_message(chat_id, f"No transactions on {date_str}.")
             elif text == "/new_category":
-                set_user_state(chat_id, "awaiting_new_category")
-                await telegram.send_message(chat_id, "✏️ Type the name of the new category to add:")
+                set_user_state(chat_id, "awaiting_new_cat_name")
+                await telegram.send_message(chat_id, "✏️ Type the name of the new category:")
             elif text == "/remove_category":
                 categories = get_category_list()
                 removable = [c for c in categories if c["name"] != "Other"]
@@ -185,32 +185,56 @@ async def webhook(request: Request):
                     await telegram.send_remove_category_keyboard(chat_id, removable)
             return {"ok": True}
 
-        # Check user state for standalone command flows
+        # Check user state for standalone and inline new-category flows
         user_state = get_user_state(chat_id)
-        if user_state == "awaiting_new_category":
-            new_cat = text.strip().title()
-            add_category_to_list(new_cat)
-            clear_user_state(chat_id)
-            await telegram.send_message(chat_id, f"✅ Category <b>{new_cat}</b> added! It will now appear in the category keyboard.")
-            return {"ok": True}
-        elif user_state and user_state.startswith("awaiting_change_cat:"):
-            # awaiting_change_cat:<tx_id>:<item_key>
-            parts = user_state.split(":", 2)
-            if len(parts) == 3:
-                _, tx_id, item_key = parts
-                new_cat = text.strip().title()
-                from services.firestore import update_transaction_category, save_pending_change, delete_pending_change, save_category
-                update_transaction_category(tx_id, new_cat)
-                save_category(item_key, new_cat, confirmed_by_user=True)
-                add_category_to_list(new_cat)
-                delete_pending_change(chat_id)
-                clear_user_state(chat_id)
-                await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to <b>{new_cat}</b> (new category saved)")
-            return {"ok": True}
 
-        # Check if awaiting a custom category name from inline keyboard flow
-        if is_awaiting_custom_category(chat_id):
-            await handle_custom_category_input(chat_id, text)
+        # /new_category step 1: name
+        if user_state == "awaiting_new_cat_name":
+            name = text.strip().title()
+            set_user_state(chat_id, f"awaiting_new_cat_emoji:{name}")
+            await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
+            return {"ok": True}
+        # /new_category step 2: emoji
+        elif user_state and user_state.startswith("awaiting_new_cat_emoji:"):
+            name = user_state[len("awaiting_new_cat_emoji:"):]
+            emoji = text.strip()
+            add_category_to_list(name, emoji)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, f"✅ Category {emoji} <b>{name}</b> added! It will now appear in the category keyboard.")
+            return {"ok": True}
+        # Inline ✏️ new category (new expense) step 1: name
+        elif user_state == "awaiting_inline_cat_name":
+            name = text.strip().title()
+            set_user_state(chat_id, f"awaiting_inline_cat_emoji:{name}")
+            await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
+            return {"ok": True}
+        # Inline ✏️ new category (new expense) step 2: emoji
+        elif user_state and user_state.startswith("awaiting_inline_cat_emoji:"):
+            name = user_state[len("awaiting_inline_cat_emoji:"):]
+            emoji = text.strip()
+            clear_user_state(chat_id)
+            await handle_custom_category_input(chat_id, name, emoji)
+            return {"ok": True}
+        # Change category ✏️ new category step 1: name
+        elif user_state and user_state.startswith("awaiting_change_new_name:"):
+            remainder = user_state[len("awaiting_change_new_name:"):]
+            tx_id, item_key = remainder.split(":", 1)
+            name = text.strip().title()
+            set_user_state(chat_id, f"awaiting_change_new_emoji:{name}:{tx_id}:{item_key}")
+            await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
+            return {"ok": True}
+        # Change category ✏️ new category step 2: emoji
+        elif user_state and user_state.startswith("awaiting_change_new_emoji:"):
+            remainder = user_state[len("awaiting_change_new_emoji:"):]
+            name, tx_id, item_key = remainder.split(":", 2)
+            emoji = text.strip()
+            from services.firestore import update_transaction_category, delete_pending_change, save_category
+            update_transaction_category(tx_id, name)
+            save_category(item_key, name, confirmed_by_user=True)
+            add_category_to_list(name, emoji)
+            delete_pending_change(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to {emoji} <b>{name}</b> (new category saved)")
             return {"ok": True}
 
         parsed = parse_expense(text)
