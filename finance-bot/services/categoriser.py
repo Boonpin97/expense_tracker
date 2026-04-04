@@ -23,10 +23,12 @@ async def handle_expense(chat_id: int, item: str, amount: float) -> None:
             timestamp=datetime.now(SGT).isoformat(),
             chat_id=chat_id,
         )
-        firestore.save_transaction(tx)
-        await telegram.send_message(
+        tx_id = firestore.save_transaction(tx)
+        await telegram.send_message_with_change_category(
             chat_id,
             f"✅ <b>{item}</b> — ${amount:.2f} → {category}",
+            tx_id,
+            item_key,
         )
     else:
         firestore.save_pending(chat_id, item, amount)
@@ -35,9 +37,26 @@ async def handle_expense(chat_id: int, item: str, amount: float) -> None:
 
 async def handle_category_selection(chat_id: int, category: str, callback_query_id: str) -> None:
     if category == "__new__":
-        firestore.set_awaiting_custom_category(chat_id)
+        # Check if this is a change-category flow or new-expense flow
+        pending_change = firestore.get_pending_change(chat_id)
+        if pending_change:
+            firestore.set_user_state(chat_id, f"awaiting_change_cat:{pending_change['tx_id']}:{pending_change['item_key']}")
+        else:
+            firestore.set_awaiting_custom_category(chat_id)
         await telegram.answer_callback_query(callback_query_id, "")
         await telegram.send_message(chat_id, "✏️ Type the name of the new category:")
+        return
+
+    # Check if this is a category change (not a new transaction)
+    pending_change = firestore.get_pending_change(chat_id)
+    if pending_change:
+        tx_id = pending_change["tx_id"]
+        item_key = pending_change["item_key"]
+        firestore.update_transaction_category(tx_id, category)
+        firestore.save_category(item_key, category, confirmed_by_user=True)
+        firestore.delete_pending_change(chat_id)
+        await telegram.answer_callback_query(callback_query_id, f"Changed to {category}")
+        await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to <b>{category}</b>")
         return
 
     pending = firestore.get_pending(chat_id)
