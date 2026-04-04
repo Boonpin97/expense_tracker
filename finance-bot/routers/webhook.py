@@ -11,7 +11,7 @@ from routers.reports import _get_period_window, _format_report
 from services.firestore import (
     get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction,
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
-    get_all_categories, delete_category,
+    get_category_list, add_category_to_list, remove_category_from_list, delete_category,
 )
 
 router = APIRouter()
@@ -152,15 +152,16 @@ async def webhook(request: Request):
                 set_user_state(chat_id, "awaiting_new_category")
                 await telegram.send_message(chat_id, "✏️ Type the name of the new category to add:")
             elif text == "/remove_category":
-                categories = get_all_categories()
-                if not categories:
-                    await telegram.send_message(chat_id, "No custom categories found.")
+                categories = get_category_list()
+                removable = [c for c in categories if c["name"] != "Other"]
+                if not removable:
+                    await telegram.send_message(chat_id, "No categories to remove.")
                 else:
                     set_user_state(chat_id, "awaiting_remove_category")
-                    category_list = "\n".join(f"• {c}" for c in categories)
+                    category_list_str = "\n".join(f"• {c['emoji']} {c['name']}" for c in removable)
                     await telegram.send_message(
                         chat_id,
-                        f"🗂 Existing categories:\n{category_list}\n\nType the exact name of the category to remove:",
+                        f"🗂 Existing categories:\n{category_list_str}\n\nType the exact name of the category to remove:",
                     )
             return {"ok": True}
 
@@ -168,14 +169,20 @@ async def webhook(request: Request):
         user_state = get_user_state(chat_id)
         if user_state == "awaiting_new_category":
             new_cat = text.strip().title()
+            add_category_to_list(new_cat)
             clear_user_state(chat_id)
-            await telegram.send_message(chat_id, f"✅ Category <b>{new_cat}</b> is ready to use. Send an expense and select it from the keyboard.")
+            await telegram.send_message(chat_id, f"✅ Category <b>{new_cat}</b> added! It will now appear in the category keyboard.")
             return {"ok": True}
         elif user_state == "awaiting_remove_category":
             category_name = text.strip().title()
+            if category_name == "Other":
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ Cannot remove the <b>Other</b> category.")
+                return {"ok": True}
+            removed = remove_category_from_list(category_name)
             count = delete_category(category_name)
             clear_user_state(chat_id)
-            if count > 0:
+            if removed:
                 await telegram.send_message(chat_id, f"🗑️ Removed category <b>{category_name}</b> and {count} item mapping(s). Future expenses with those items will ask for a category again.")
             else:
                 await telegram.send_message(chat_id, f"⚠️ No category named <b>{category_name}</b> found. Make sure you typed it exactly as shown.")

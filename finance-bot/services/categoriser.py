@@ -89,6 +89,7 @@ async def handle_custom_category_input(chat_id: int, category_name: str) -> None
     )
     firestore.save_transaction(tx)
     firestore.save_category(item_key, category, confirmed_by_user=True)
+    firestore.add_category_to_list(category)
     firestore.delete_pending(chat_id)
 
     await telegram.send_message(
