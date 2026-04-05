@@ -66,15 +66,16 @@ def _format_report(label: str, transactions: list[dict]) -> str:
     for tx in transactions:
         by_category[tx["category"]] += tx["amount"]
 
+    grand_total = sum(by_category.values())
     lines = [f"📊 {label}", "─────────────────────────"]
 
     for cat, total in sorted(by_category.items(), key=lambda x: -x[1]):
         emoji = CATEGORY_EMOJI.get(cat, "📦")
-        lines.append(f"{emoji} {cat:<16} ${total:>8.2f}")
+        pct = (total / grand_total * 100) if grand_total else 0
+        lines.append(f"{emoji} {cat:<16} ${total:>8.2f}  {pct:>5.1f}%")
 
-    grand_total = sum(by_category.values())
     lines.append("─────────────────────────")
-    lines.append(f"💰 Total{' ' * 12}${grand_total:>8.2f}")
+    lines.append(f"💰 Total{' ' * 12}${grand_total:>8.2f}  100.0%")
 
     return "\n".join(lines)
 
