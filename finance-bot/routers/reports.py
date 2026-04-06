@@ -4,23 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
-from services.firestore import get_transactions
+from services.firestore import get_category_list, get_transactions
 from services.telegram import send_message
 
 router = APIRouter()
 
 SGT = timezone(timedelta(hours=8))
-
-CATEGORY_EMOJI = {
-    "Food & Drink": "🍔",
-    "Transport": "🚗",
-    "Housing": "🏠",
-    "Health": "💊",
-    "Entertainment": "🎬",
-    "Shopping": "🛍️",
-    "Utilities": "💡",
-    "Other": "📦",
-}
 
 
 def _get_period_window(period: str) -> tuple[datetime, datetime, str]:
@@ -69,8 +58,10 @@ def _format_report(label: str, transactions: list[dict]) -> str:
     grand_total = sum(by_category.values())
     lines = [f"📊 {label}", "─────────────────────────"]
 
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+
     for cat, total in sorted(by_category.items(), key=lambda x: -x[1]):
-        emoji = CATEGORY_EMOJI.get(cat, "📦")
+        emoji = category_emoji.get(cat, "📦")
         pct = (total / grand_total * 100) if grand_total else 0
         lines.append(f"{emoji} {cat:<16} ${total:>8.2f}  {pct:>5.1f}%")
 
