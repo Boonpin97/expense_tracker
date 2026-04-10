@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
 
 from services.parser import parse_expense
 from services.categoriser import handle_expense, handle_category_selection, handle_custom_category_input
@@ -34,6 +34,12 @@ def _get_allowed_chat_ids() -> set[int]:
 
 @router.post("/webhook")
 async def webhook(request: Request):
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
+    if secret:
+        token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if token != secret:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
     data = await request.json()
 
     # Handle callback_query (category button tap)

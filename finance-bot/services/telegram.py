@@ -124,3 +124,15 @@ async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) ->
             },
         )
         return resp.json()
+
+
+async def set_webhook(url: str, secret_token: str) -> dict:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            _api_url("setWebhook"),
+            json={
+                "url": url,
+                "secret_token": secret_token,
+            },
+        )
+        return resp.json()
