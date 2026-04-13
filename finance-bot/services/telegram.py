@@ -147,7 +147,7 @@ async def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
 async def set_my_commands() -> dict:
     commands = [
         {"command": "start", "description": "Welcome message"},
-        {"command": "report", "description": "Spending report for a date range"},
+        {"command": "report", "description": "Daily report for a specific date (YYYY-MM-DD)"},
         {"command": "daily", "description": "Today's spending summary"},
         {"command": "weekly", "description": "This week's spending summary"},
         {"command": "monthly", "description": "This month's spending summary"},
