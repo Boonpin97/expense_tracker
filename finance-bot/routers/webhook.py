@@ -67,13 +67,39 @@ async def webhook(request: Request):
             await handle_category_selection(chat_id, category, callback_query_id)
 
         elif callback_data.startswith("del:"):
-            doc_id = callback_data[4:]
+            remainder = callback_data[4:]
+            # Format: del:<doc_id>:<timestamp> (timestamp optional for backward compat)
+            colon_pos = remainder.find(":")
+            if colon_pos != -1:
+                doc_id = remainder[:colon_pos]
+                ts = remainder[colon_pos + 1:]
+                if _is_expired(ts):
+                    await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                    await telegram.send_message(chat_id, "⏰ These delete options have expired. Please send the command again.")
+                    return {"ok": True}
+            else:
+                doc_id = remainder
             delete_transaction(doc_id)
             await telegram.answer_callback_query(callback_query_id, "Deleted!")
             await telegram.send_message(chat_id, "🗑️ Transaction deleted.")
 
         elif callback_data.startswith("rmcat:"):
-            category_name = callback_data[6:]
+            remainder = callback_data[6:]
+            # Format: rmcat:<name>:<timestamp> (timestamp optional for backward compat)
+            colon_pos = remainder.rfind(":")
+            if colon_pos != -1:
+                potential_ts = remainder[colon_pos + 1:]
+                # A timestamp starts with a 4-digit year
+                if potential_ts[:4].isdigit():
+                    category_name = remainder[:colon_pos]
+                    if _is_expired(potential_ts):
+                        await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                        await telegram.send_message(chat_id, "⏰ These options have expired. Please send /remove_category again.")
+                        return {"ok": True}
+                else:
+                    category_name = remainder
+            else:
+                category_name = remainder
             removed = remove_category_from_list(category_name)
             count = delete_category(category_name)
             tx_count = reassign_transactions_category(category_name, "Other")
@@ -189,7 +215,7 @@ async def webhook(request: Request):
                         else:
                             await telegram.send_message(chat_id, f"No transactions on {date_str}.")
             elif text == "/new_category":
-                set_user_state(chat_id, "awaiting_new_cat_name")
+                set_user_state(chat_id, f"awaiting_new_cat_name|{datetime.now(SGT).isoformat()}")
                 await telegram.send_message(chat_id, "✏️ Type the name of the new category:")
             elif text == "/remove_category":
                 categories = get_category_list()
@@ -204,20 +230,33 @@ async def webhook(request: Request):
         user_state = get_user_state(chat_id)
 
         # /new_category step 1: name
-        if user_state == "awaiting_new_cat_name":
+        if user_state and user_state.startswith("awaiting_new_cat_name|"):
+            ts = user_state[len("awaiting_new_cat_name|"):]
+            if _is_expired(ts):
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⏰ The /new_category request has expired. Please send /new_category again.")
+                return {"ok": True}
             name = text.strip().title()
             existing = [c["name"] for c in get_category_list()]
             if name in existing:
                 clear_user_state(chat_id)
                 await telegram.send_message(chat_id, f"⚠️ Category <b>{name}</b> already exists.")
                 return {"ok": True}
-            set_user_state(chat_id, f"awaiting_new_cat_emoji:{name}")
+            set_user_state(chat_id, f"awaiting_new_cat_emoji:{name}|{ts}")
             await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
             return {"ok": True}
 
         # /new_category step 2: emoji
         elif user_state and user_state.startswith("awaiting_new_cat_emoji:"):
-            name = user_state[len("awaiting_new_cat_emoji:"):]
+            remainder = user_state[len("awaiting_new_cat_emoji:"):]
+            if "|" in remainder:
+                name, ts = remainder.rsplit("|", 1)
+                if _is_expired(ts):
+                    clear_user_state(chat_id)
+                    await telegram.send_message(chat_id, "⏰ The /new_category request has expired. Please send /new_category again.")
+                    return {"ok": True}
+            else:
+                name = remainder
             emoji = text.strip()
             add_category_to_list(name, emoji)
             clear_user_state(chat_id)
