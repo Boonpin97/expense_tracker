@@ -15,7 +15,8 @@ def get_db() -> firestore.Client:
     global _db
     if _db is None:
         project_id = os.getenv("FIRESTORE_PROJECT_ID")
-        _db = firestore.Client(project=project_id)
+        database = os.getenv("FIRESTORE_DATABASE", "(default)")
+        _db = firestore.Client(project=project_id, database=database)
     return _db
 
 
@@ -63,63 +64,6 @@ def get_transactions(chat_id: int, start: datetime, end: datetime) -> list[dict]
     return [doc.to_dict() for doc in docs]
 
 
-def get_transactions_with_ids(chat_id: int, start: datetime, end: datetime) -> list[dict]:
-    """Like get_transactions but includes the Firestore document ID."""
-    start_iso = start.isoformat()
-    end_iso = end.isoformat()
-
-    docs = (
-        get_db()
-        .collection("transactions")
-        .where("chat_id", "==", chat_id)
-        .where("timestamp", ">=", start_iso)
-        .where("timestamp", "<", end_iso)
-        .stream()
-    )
-    results = []
-    for doc in docs:
-        data = doc.to_dict()
-        data["_doc_id"] = doc.id
-        results.append(data)
-    return results
-
-
-def get_last_transaction(chat_id: int) -> Optional[dict]:
-    """Get the most recent transaction for a chat."""
-    docs = (
-        get_db()
-        .collection("transactions")
-        .where("chat_id", "==", chat_id)
-        .order_by("timestamp", direction=firestore.Query.DESCENDING)
-        .limit(1)
-        .stream()
-    )
-    for doc in docs:
-        data = doc.to_dict()
-        data["_doc_id"] = doc.id
-        return data
-    return None
-
-
-def delete_transaction(doc_id: str) -> None:
-    get_db().collection("transactions").document(doc_id).delete()
-
-
-def reassign_transactions_category(old_category: str, new_category: str) -> int:
-    """Reassign all transactions from old_category to new_category. Returns count updated."""
-    docs = (
-        get_db()
-        .collection("transactions")
-        .where("category", "==", old_category)
-        .stream()
-    )
-    count = 0
-    for doc in docs:
-        doc.reference.update({"category": new_category})
-        count += 1
-    return count
-
-
 # ── Pending Transactions (temp storage for category selection) ─
 
 def save_pending(chat_id: int, item: str, amount: float) -> None:
@@ -142,120 +86,3 @@ def get_pending(chat_id: int) -> Optional[dict]:
 
 def delete_pending(chat_id: int) -> None:
     get_db().collection("pending").document(str(chat_id)).delete()
-
-
-# ── Pending Category Change (for "Change category" button) ────
-
-def save_pending_change(chat_id: int, tx_id: str, item_key: str) -> None:
-    get_db().collection("pending_change").document(str(chat_id)).set({
-        "tx_id": tx_id,
-        "item_key": item_key,
-    })
-
-
-def get_pending_change(chat_id: int) -> Optional[dict]:
-    doc = get_db().collection("pending_change").document(str(chat_id)).get()
-    if doc.exists:
-        return doc.to_dict()
-    return None
-
-
-def delete_pending_change(chat_id: int) -> None:
-    get_db().collection("pending_change").document(str(chat_id)).delete()
-
-
-def update_transaction_category(tx_id: str, new_category: str) -> None:
-    get_db().collection("transactions").document(tx_id).update({"category": new_category})
-
-
-def set_awaiting_custom_category(chat_id: int) -> None:
-    get_db().collection("pending").document(str(chat_id)).update({"awaiting_custom_category": True})
-
-
-def is_awaiting_custom_category(chat_id: int) -> bool:
-    pending = get_pending(chat_id)
-    return bool(pending and pending.get("awaiting_custom_category"))
-
-
-# ── User State (for standalone command flows) ─────────────────
-
-def set_user_state(chat_id: int, state: str) -> None:
-    get_db().collection("user_state").document(str(chat_id)).set({"state": state})
-
-
-def get_user_state(chat_id: int) -> Optional[str]:
-    doc = get_db().collection("user_state").document(str(chat_id)).get()
-    if doc.exists:
-        return doc.to_dict().get("state")
-    return None
-
-
-def clear_user_state(chat_id: int) -> None:
-    get_db().collection("user_state").document(str(chat_id)).delete()
-
-
-# ── Category Management ───────────────────────────────────────
-
-DEFAULT_CATEGORIES = [
-    {"name": "Food & Drink", "emoji": "🍔", "order": 1},
-    {"name": "Transport", "emoji": "🚗", "order": 2},
-    {"name": "Housing", "emoji": "🏠", "order": 3},
-    {"name": "Health", "emoji": "💊", "order": 4},
-    {"name": "Entertainment", "emoji": "🎬", "order": 5},
-    {"name": "Shopping", "emoji": "🛍️", "order": 6},
-    {"name": "Utilities", "emoji": "💡", "order": 7},
-    {"name": "Other", "emoji": "📦", "order": 9999},
-]
-
-
-def _seed_category_list() -> None:
-    """Seed the category_list collection with defaults if empty."""
-    coll = get_db().collection("category_list")
-    existing = list(coll.limit(1).stream())
-    if existing:
-        return
-    for cat in DEFAULT_CATEGORIES:
-        coll.document(cat["name"]).set(cat)
-
-
-def get_category_list() -> list[dict]:
-    """Return all categories ordered by 'order' field. Ensures 'Other' is last (before 'New category' button)."""
-    _seed_category_list()
-    docs = get_db().collection("category_list").stream()
-    categories = [doc.to_dict() for doc in docs]
-    categories.sort(key=lambda c: c.get("order", 9998))
-    return categories
-
-
-def add_category_to_list(name: str, emoji: str = "🏷️") -> None:
-    """Add a new category to category_list with an order just before 'Other'."""
-    coll = get_db().collection("category_list")
-    # Get max order that isn't 9999 (Other)
-    all_cats = get_category_list()
-    max_order = max((c.get("order", 0) for c in all_cats if c.get("order", 0) < 9999), default=100)
-    coll.document(name).set({"name": name, "emoji": emoji, "order": max_order + 1})
-
-
-def remove_category_from_list(name: str) -> bool:
-    """Remove a category from category_list. Returns True if it existed."""
-    doc_ref = get_db().collection("category_list").document(name)
-    doc = doc_ref.get()
-    if doc.exists:
-        doc_ref.delete()
-        return True
-    return False
-
-
-def delete_category(category_name: str) -> int:
-    """Delete all category_map entries with the given category. Returns count deleted."""
-    docs = (
-        get_db()
-        .collection("category_map")
-        .where("category", "==", category_name)
-        .stream()
-    )
-    count = 0
-    for doc in docs:
-        doc.reference.delete()
-        count += 1
-    return count
