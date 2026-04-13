@@ -16,6 +16,7 @@ async def lifespan(app: FastAPI):
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
     if cloud_run_url and webhook_secret:
         await telegram.set_webhook(f"{cloud_run_url}/webhook", webhook_secret)
+    await telegram.set_my_commands()
     yield
 
 
