@@ -5,7 +5,7 @@ from models.transaction import Transaction
 from services import firestore, telegram
 
 SGT = timezone(timedelta(hours=8))
-PENDING_EXPIRY_SECONDS = 180  # 3 minutes
+PENDING_EXPIRY_SECONDS = 20
 
 
 def _normalise(item: str) -> str:
