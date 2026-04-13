@@ -5,14 +5,15 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request, HTTPException
 
 from services.parser import parse_expense
-from services.categoriser import handle_expense, handle_category_selection, handle_custom_category_input
+from services.categoriser import handle_expense, handle_category_selection, handle_custom_category_input, PENDING_EXPIRY_SECONDS
 from services import telegram
 from routers.reports import _get_period_window, _format_report
 from services.firestore import (
     get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction,
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
     get_category_list, add_category_to_list, remove_category_from_list, delete_category,
-    reassign_transactions_category,
+    reassign_transactions_category, get_pending, get_pending_change, delete_pending_change,
+    save_pending_change, update_transaction_category, save_category,
 )
 
 router = APIRouter()
@@ -32,6 +33,14 @@ def _get_allowed_chat_ids() -> set[int]:
     return ALLOWED_CHAT_IDS
 
 
+def _is_expired(timestamp_iso: str) -> bool:
+    try:
+        created_at = datetime.fromisoformat(timestamp_iso)
+        return (datetime.now(SGT) - created_at).total_seconds() > PENDING_EXPIRY_SECONDS
+    except Exception:
+        return False
+
+
 @router.post("/webhook")
 async def webhook(request: Request):
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -42,7 +51,7 @@ async def webhook(request: Request):
 
     data = await request.json()
 
-    # Handle callback_query (category button tap)
+    # Handle callback_query (button tap)
     if "callback_query" in data:
         callback = data["callback_query"]
         chat_id = callback["message"]["chat"]["id"]
@@ -56,11 +65,13 @@ async def webhook(request: Request):
         if callback_data.startswith("cat:"):
             category = callback_data[4:]
             await handle_category_selection(chat_id, category, callback_query_id)
+
         elif callback_data.startswith("del:"):
             doc_id = callback_data[4:]
             delete_transaction(doc_id)
             await telegram.answer_callback_query(callback_query_id, "Deleted!")
             await telegram.send_message(chat_id, "🗑️ Transaction deleted.")
+
         elif callback_data.startswith("rmcat:"):
             category_name = callback_data[6:]
             removed = remove_category_from_list(category_name)
@@ -75,20 +86,19 @@ async def webhook(request: Request):
             else:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 await telegram.send_message(chat_id, f"⚠️ Category <b>{category_name}</b> not found.")
+
         elif callback_data.startswith("chgcat:"):
             # chgcat:<tx_id>:<item_key>
             parts = callback_data[7:].split(":", 1)
             if len(parts) == 2:
                 tx_id, item_key = parts
-                # Store tx_id and item_key so category selection can update them
-                from services.firestore import save_pending_change
                 save_pending_change(chat_id, tx_id, item_key)
                 await telegram.answer_callback_query(callback_query_id, "")
                 await telegram.send_category_keyboard(chat_id, item_key, 0)
 
         return {"ok": True}
 
-    # Handle message (new expense text)
+    # Handle message
     if "message" in data:
         message = data["message"]
         chat_id = message["chat"]["id"]
@@ -98,7 +108,6 @@ async def webhook(request: Request):
 
         text = message.get("text", "")
 
-        # Ignore bot commands
         if text.startswith("/"):
             if text == "/start":
                 await telegram.send_message(
@@ -191,7 +200,7 @@ async def webhook(request: Request):
                     await telegram.send_remove_category_keyboard(chat_id, removable)
             return {"ok": True}
 
-        # Check user state for standalone and inline new-category flows
+        # Check user state for multi-step flows
         user_state = get_user_state(chat_id)
 
         # /new_category step 1: name
@@ -205,42 +214,63 @@ async def webhook(request: Request):
             set_user_state(chat_id, f"awaiting_new_cat_emoji:{name}")
             await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
             return {"ok": True}
+
         # /new_category step 2: emoji
         elif user_state and user_state.startswith("awaiting_new_cat_emoji:"):
             name = user_state[len("awaiting_new_cat_emoji:"):]
             emoji = text.strip()
             add_category_to_list(name, emoji)
             clear_user_state(chat_id)
-            await telegram.send_message(chat_id, f"✅ Category {emoji} <b>{name}</b> added! It will now appear in the category keyboard.")
+            await telegram.send_message(chat_id, f"✅ Category {emoji} <b>{name}</b> added!")
             return {"ok": True}
+
         # Inline ✏️ new category (new expense) step 1: name
         elif user_state == "awaiting_inline_cat_name":
+            pending = get_pending(chat_id)
+            if pending and _is_expired(pending.get("timestamp", "")):
+                from services.firestore import delete_pending
+                delete_pending(chat_id)
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⏰ This flow has expired. Please resend the expense to try again.")
+                return {"ok": True}
             name = text.strip().title()
             existing = [c["name"] for c in get_category_list()]
             if name in existing:
-                # Category exists — use it directly without asking for emoji
                 clear_user_state(chat_id)
                 await handle_custom_category_input(chat_id, name, next(c["emoji"] for c in get_category_list() if c["name"] == name))
                 return {"ok": True}
             set_user_state(chat_id, f"awaiting_inline_cat_emoji:{name}")
             await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
             return {"ok": True}
+
         # Inline ✏️ new category (new expense) step 2: emoji
         elif user_state and user_state.startswith("awaiting_inline_cat_emoji:"):
+            pending = get_pending(chat_id)
+            if pending and _is_expired(pending.get("timestamp", "")):
+                from services.firestore import delete_pending
+                delete_pending(chat_id)
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⏰ This flow has expired. Please resend the expense to try again.")
+                return {"ok": True}
             name = user_state[len("awaiting_inline_cat_emoji:"):]
             emoji = text.strip()
             clear_user_state(chat_id)
             await handle_custom_category_input(chat_id, name, emoji)
             return {"ok": True}
+
         # Change category ✏️ new category step 1: name
         elif user_state and user_state.startswith("awaiting_change_new_name:"):
+            pending_change = get_pending_change(chat_id)
+            if pending_change and _is_expired(pending_change.get("timestamp", "")):
+                delete_pending_change(chat_id)
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⏰ The change category option has expired. Tap 🔄 Change category again to retry.")
+                return {"ok": True}
             remainder = user_state[len("awaiting_change_new_name:"):]
             tx_id, item_key = remainder.split(":", 1)
             name = text.strip().title()
             existing = [c["name"] for c in get_category_list()]
             if name in existing:
-                # Category exists — apply it directly
-                from services.firestore import update_transaction_category, delete_pending_change, save_category
                 update_transaction_category(tx_id, name)
                 save_category(item_key, name, confirmed_by_user=True)
                 delete_pending_change(chat_id)
@@ -250,12 +280,18 @@ async def webhook(request: Request):
             set_user_state(chat_id, f"awaiting_change_new_emoji:{name}:{tx_id}:{item_key}")
             await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
             return {"ok": True}
+
         # Change category ✏️ new category step 2: emoji
         elif user_state and user_state.startswith("awaiting_change_new_emoji:"):
+            pending_change = get_pending_change(chat_id)
+            if pending_change and _is_expired(pending_change.get("timestamp", "")):
+                delete_pending_change(chat_id)
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⏰ The change category option has expired. Tap 🔄 Change category again to retry.")
+                return {"ok": True}
             remainder = user_state[len("awaiting_change_new_emoji:"):]
             name, tx_id, item_key = remainder.split(":", 2)
             emoji = text.strip()
-            from services.firestore import update_transaction_category, delete_pending_change, save_category
             update_transaction_category(tx_id, name)
             save_category(item_key, name, confirmed_by_user=True)
             add_category_to_list(name, emoji)

@@ -173,6 +173,7 @@ def save_pending_change(chat_id: int, tx_id: str, item_key: str) -> None:
     get_db().collection("pending_change").document(str(chat_id)).set({
         "tx_id": tx_id,
         "item_key": item_key,
+        "timestamp": datetime.now(SGT).isoformat(),
     })
 
 
