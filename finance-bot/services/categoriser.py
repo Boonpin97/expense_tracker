@@ -5,7 +5,7 @@ from models.transaction import Transaction
 from services import firestore, telegram
 
 SGT = timezone(timedelta(hours=8))
-PENDING_EXPIRY_SECONDS = 20
+PENDING_EXPIRY_SECONDS = 180  # 3 minutes
 
 
 def _normalise(item: str) -> str:
@@ -51,6 +51,13 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
     # Check if this is a category change (not a new transaction)
     pending_change = firestore.get_pending_change(chat_id)
     if pending_change:
+        change_ts = pending_change.get("timestamp")
+        if change_ts and (datetime.now(SGT) - datetime.fromisoformat(change_ts)).total_seconds() > PENDING_EXPIRY_SECONDS:
+            firestore.delete_pending_change(chat_id)
+            firestore.clear_user_state(chat_id)
+            await telegram.answer_callback_query(callback_query_id, "⏰ This selection has expired.")
+            await telegram.send_message(chat_id, "⏰ The change category option has expired. Tap 🔄 Change category again to retry.")
+            return
         tx_id = pending_change["tx_id"]
         item_key = pending_change["item_key"]
         firestore.update_transaction_category(tx_id, category)
