@@ -177,9 +177,13 @@ async def webhook(request: Request):
                 tx = get_last_transaction(chat_id)
                 if tx:
                     delete_transaction(tx["_doc_id"])
+                    ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
+                    date_str = ts.strftime("%d %b %Y, %I:%M %p")
                     await telegram.send_message(
                         chat_id,
-                        f"🗑️ Deleted: <b>{tx['item']}</b> — ${tx['amount']:.2f} ({tx['category']})",
+                        f"🗑️ Deleted: <b>{tx['item']}</b>\n"
+                        f"💰 ${tx['amount']:.2f} · 🏷️ {tx['category']}\n"
+                        f"🕐 {date_str}",
                     )
                 else:
                     await telegram.send_message(chat_id, "No transactions found.")
