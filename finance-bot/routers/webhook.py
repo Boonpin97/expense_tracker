@@ -147,17 +147,22 @@ async def webhook(request: Request):
                 )
             elif text.startswith("/report"):
                 parts = text.split()
-                period = parts[1] if len(parts) > 1 else "daily"
-                if period not in ("daily", "weekly", "monthly"):
-                    await telegram.send_message(
-                        chat_id,
-                        "Usage: <code>/report daily</code>, <code>/report weekly</code>, or <code>/report monthly</code>",
-                    )
+                if len(parts) < 2:
+                    await telegram.send_message(chat_id, "Usage: <code>/report 2026-04-01</code>")
                 else:
-                    start, end, label = _get_period_window(period)
-                    transactions = get_transactions(chat_id, start, end)
-                    report = _format_report(label, transactions)
-                    await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+                    arg = parts[1]
+                    if not re.match(r"^\d{4}-\d{2}-\d{2}$", arg):
+                        await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
+                    else:
+                        try:
+                            day_start = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=SGT)
+                            day_end = day_start + timedelta(days=1)
+                            label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
+                            transactions = get_transactions(chat_id, day_start, day_end)
+                            report = _format_report(label, transactions)
+                            await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+                        except ValueError:
+                            await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
             elif text.startswith("/daily"):
                 start, end, label = _get_period_window("daily")
                 transactions = get_transactions(chat_id, start, end)
