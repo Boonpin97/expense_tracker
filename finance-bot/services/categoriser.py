@@ -38,11 +38,30 @@ async def handle_expense(chat_id: int, item: str, amount: float) -> None:
 
 async def handle_category_selection(chat_id: int, category: str, callback_query_id: str) -> None:
     if category == "__new__":
-        # Check if this is a change-category flow or new-expense flow
         pending_change = firestore.get_pending_change(chat_id)
         if pending_change:
+            # Change-category flow: check pending_change expiry
+            change_ts = pending_change.get("timestamp")
+            if change_ts and (datetime.now(SGT) - datetime.fromisoformat(change_ts)).total_seconds() > PENDING_EXPIRY_SECONDS:
+                firestore.delete_pending_change(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "⏰ This selection has expired.")
+                await telegram.send_message(chat_id, "⏰ The change category option has expired. Tap 🔄 Change category again to retry.")
+                return
             firestore.set_user_state(chat_id, f"awaiting_change_new_name:{pending_change['tx_id']}:{pending_change['item_key']}")
         else:
+            # New expense flow: check pending expiry before entering name input
+            pending = firestore.get_pending(chat_id)
+            if not pending:
+                await telegram.answer_callback_query(callback_query_id, "No pending expense found.")
+                return
+            if (datetime.now(SGT) - datetime.fromisoformat(pending["timestamp"])).total_seconds() > PENDING_EXPIRY_SECONDS:
+                firestore.delete_pending(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "⏰ This selection has expired.")
+                await telegram.send_message(
+                    chat_id,
+                    f"⏰ The category buttons for <b>{pending['item']}</b> have expired. Please resend the expense to try again.",
+                )
+                return
             firestore.set_user_state(chat_id, "awaiting_inline_cat_name")
         await telegram.answer_callback_query(callback_query_id, "")
         await telegram.send_message(chat_id, "✏️ Type the name of the new category:")

@@ -12,7 +12,7 @@ from services.firestore import (
     get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction,
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
     get_category_list, add_category_to_list, remove_category_from_list, delete_category,
-    reassign_transactions_category, get_pending, get_pending_change, delete_pending_change,
+    reassign_transactions_category, get_pending, delete_pending, get_pending_change, delete_pending_change,
     save_pending_change, update_transaction_category, save_category,
 )
 
@@ -228,7 +228,6 @@ async def webhook(request: Request):
         elif user_state == "awaiting_inline_cat_name":
             pending = get_pending(chat_id)
             if pending and _is_expired(pending.get("timestamp", "")):
-                from services.firestore import delete_pending
                 delete_pending(chat_id)
                 clear_user_state(chat_id)
                 await telegram.send_message(chat_id, "⏰ This flow has expired. Please resend the expense to try again.")
@@ -247,7 +246,6 @@ async def webhook(request: Request):
         elif user_state and user_state.startswith("awaiting_inline_cat_emoji:"):
             pending = get_pending(chat_id)
             if pending and _is_expired(pending.get("timestamp", "")):
-                from services.firestore import delete_pending
                 delete_pending(chat_id)
                 clear_user_state(chat_id)
                 await telegram.send_message(chat_id, "⏰ This flow has expired. Please resend the expense to try again.")
