@@ -104,7 +104,7 @@ async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) ->
     keyboard = []
     for cat in categories:
         label = f"❌ {cat['emoji']} {cat['name']}"
-        keyboard.append([{"text": label, "callback_data": f"rmcat:{cat['name']}:{ts}"}])
+        keyboard.append([{"text": label, "callback_data": f"rmcat:{cat['name']}|{ts}"}])
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(

@@ -85,19 +85,13 @@ async def webhook(request: Request):
 
         elif callback_data.startswith("rmcat:"):
             remainder = callback_data[6:]
-            # Format: rmcat:<name>:<timestamp> (timestamp optional for backward compat)
-            colon_pos = remainder.rfind(":")
-            if colon_pos != -1:
-                potential_ts = remainder[colon_pos + 1:]
-                # A timestamp starts with a 4-digit year
-                if potential_ts[:4].isdigit():
-                    category_name = remainder[:colon_pos]
-                    if _is_expired(potential_ts):
-                        await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
-                        await telegram.send_message(chat_id, "⏰ These options have expired. Please send /remove_category again.")
-                        return {"ok": True}
-                else:
-                    category_name = remainder
+            # Format: rmcat:<name>|<timestamp> (timestamp optional for backward compat)
+            if "|" in remainder:
+                category_name, ts = remainder.split("|", 1)
+                if _is_expired(ts):
+                    await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                    await telegram.send_message(chat_id, "⏰ These options have expired. Please send /remove_category again.")
+                    return {"ok": True}
             else:
                 category_name = remainder
             removed = remove_category_from_list(category_name)
