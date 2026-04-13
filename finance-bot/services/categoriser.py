@@ -5,6 +5,7 @@ from models.transaction import Transaction
 from services import firestore, telegram
 
 SGT = timezone(timedelta(hours=8))
+PENDING_EXPIRY_SECONDS = 180  # 3 minutes
 
 
 def _normalise(item: str) -> str:
@@ -67,6 +68,17 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
     item = pending["item"]
     amount = pending["amount"]
     timestamp = pending["timestamp"]
+
+    created_at = datetime.fromisoformat(timestamp)
+    if (datetime.now(SGT) - created_at).total_seconds() > PENDING_EXPIRY_SECONDS:
+        firestore.delete_pending(chat_id)
+        await telegram.answer_callback_query(callback_query_id, "⏰ This selection has expired.")
+        await telegram.send_message(
+            chat_id,
+            f"⏰ The category buttons for <b>{item}</b> have expired. Please resend the expense to try again.",
+        )
+        return
+
     item_key = _normalise(item)
 
     tx = Transaction(
@@ -96,6 +108,16 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
     item = pending["item"]
     amount = pending["amount"]
     timestamp = pending["timestamp"]
+
+    created_at = datetime.fromisoformat(timestamp)
+    if (datetime.now(SGT) - created_at).total_seconds() > PENDING_EXPIRY_SECONDS:
+        firestore.delete_pending(chat_id)
+        await telegram.send_message(
+            chat_id,
+            f"⏰ The category buttons for <b>{item}</b> have expired. Please resend the expense to try again.",
+        )
+        return
+
     item_key = _normalise(item)
     category = category_name.strip().title()
 
