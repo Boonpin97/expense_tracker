@@ -9,7 +9,7 @@ from services.categoriser import handle_expense, handle_category_selection, hand
 from services import telegram
 from routers.reports import _get_period_window, _format_report
 from services.firestore import (
-    get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction,
+    get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction, get_transaction_by_id,
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
     get_category_list, add_category_to_list, remove_category_from_list, delete_category,
     reassign_transactions_category, get_pending, delete_pending, get_pending_change, delete_pending_change,
@@ -79,9 +79,20 @@ async def webhook(request: Request):
                     return {"ok": True}
             else:
                 doc_id = remainder
+            tx = get_transaction_by_id(doc_id)
             delete_transaction(doc_id)
             await telegram.answer_callback_query(callback_query_id, "Deleted!")
-            await telegram.send_message(chat_id, "🗑️ Transaction deleted.")
+            if tx:
+                ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
+                date_str = ts.strftime("%d %b %Y, %I:%M %p")
+                await telegram.send_message(
+                    chat_id,
+                    f"🗑️ Deleted: <b>{tx['item']}</b>\n"
+                    f"💰 ${tx['amount']:.2f} · 🏷️ {tx['category']}\n"
+                    f"🕐 {date_str}",
+                )
+            else:
+                await telegram.send_message(chat_id, "🗑️ Transaction deleted.")
 
         elif callback_data.startswith("rmcat:"):
             remainder = callback_data[6:]

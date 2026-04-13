@@ -123,6 +123,15 @@ def get_last_transaction(chat_id: int) -> Optional[dict]:
     return None
 
 
+def get_transaction_by_id(doc_id: str) -> Optional[dict]:
+    doc = get_db().collection("transactions").document(doc_id).get()
+    if doc.exists:
+        d = doc.to_dict()
+        d["_doc_id"] = doc.id
+        return d
+    return None
+
+
 def delete_transaction(doc_id: str) -> None:
     get_db().collection("transactions").document(doc_id).delete()
 
