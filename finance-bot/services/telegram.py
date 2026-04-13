@@ -1,5 +1,8 @@
 import os
+from datetime import datetime, timedelta, timezone
 import httpx
+
+SGT = timezone(timedelta(hours=8))
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}"
 
@@ -75,10 +78,11 @@ async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict
 
 async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prompt: str) -> dict:
     """Send an inline keyboard where each button is a transaction to delete."""
+    ts = datetime.now(SGT).isoformat()
     keyboard = []
     for tx in transactions:
         label = f"❌ {tx['item']} — ${tx['amount']:.2f} ({tx['category']})"
-        callback_data = f"del:{tx['_doc_id']}"
+        callback_data = f"del:{tx['_doc_id']}:{ts}"
         keyboard.append([{"text": label, "callback_data": callback_data}])
 
     async with httpx.AsyncClient() as client:
@@ -96,10 +100,11 @@ async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prom
 
 async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) -> dict:
     """Send an inline keyboard for removing a category."""
+    ts = datetime.now(SGT).isoformat()
     keyboard = []
     for cat in categories:
         label = f"❌ {cat['emoji']} {cat['name']}"
-        keyboard.append([{"text": label, "callback_data": f"rmcat:{cat['name']}"}])
+        keyboard.append([{"text": label, "callback_data": f"rmcat:{cat['name']}:{ts}"}])
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -146,8 +151,8 @@ async def set_my_commands() -> dict:
         {"command": "weekly", "description": "This week's spending summary"},
         {"command": "monthly", "description": "This month's spending summary"},
         {"command": "delete_last", "description": "Delete the last recorded transaction"},
-        {"command": "delete_today", "description": "Delete all transactions from today"},
-        {"command": "delete_past", "description": "Delete transactions in a date range"},
+        {"command": "delete_today", "description": "Delete a transactions from today"},
+        {"command": "delete_past", "description": "Delete a transactions in a specific date"},
         {"command": "new_category", "description": "Add a new spending category"},
         {"command": "remove_category", "description": "Remove a spending category"},
     ]
