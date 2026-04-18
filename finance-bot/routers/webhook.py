@@ -13,24 +13,13 @@ from services.firestore import (
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
     get_category_list, add_category_to_list, remove_category_from_list, delete_category,
     reassign_transactions_category, get_pending, delete_pending, get_pending_change, delete_pending_change,
-    save_pending_change, update_transaction_category, save_category,
+    save_pending_change, update_transaction_category, update_transaction_timestamp, save_category,
+    get_allowed_chat_ids,
 )
 
 router = APIRouter()
 
 SGT = timezone(timedelta(hours=8))
-
-ALLOWED_CHAT_IDS: set[int] | None = None
-
-
-def _get_allowed_chat_ids() -> set[int]:
-    global ALLOWED_CHAT_IDS
-    if ALLOWED_CHAT_IDS is None:
-        raw = os.getenv("TELEGRAM_CHAT_IDS", "")
-        ALLOWED_CHAT_IDS = {
-            int(cid.strip()) for cid in raw.split(",") if cid.strip().lstrip("-").isdigit()
-        }
-    return ALLOWED_CHAT_IDS
 
 
 def _is_expired(timestamp_iso: str) -> bool:
@@ -56,7 +45,7 @@ async def webhook(request: Request):
         callback = data["callback_query"]
         chat_id = callback["message"]["chat"]["id"]
 
-        if chat_id not in _get_allowed_chat_ids():
+        if chat_id not in get_allowed_chat_ids():
             return {"ok": True}
 
         callback_data = callback.get("data", "")
@@ -127,6 +116,19 @@ async def webhook(request: Request):
                 await telegram.answer_callback_query(callback_query_id, "")
                 await telegram.send_category_keyboard(chat_id, item_key, 0)
 
+        elif callback_data.startswith("chgdate:"):
+            tx_id = callback_data[8:]
+            tx = get_transaction_by_id(tx_id)
+            if not tx:
+                await telegram.answer_callback_query(callback_query_id, "Transaction not found.")
+                return {"ok": True}
+            set_user_state(chat_id, f"awaiting_date_change:{tx_id}|{datetime.now(SGT).isoformat()}")
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_message(
+                chat_id,
+                "📅 Send the new date in <code>YYYY-MM-DD</code> format (e.g. <code>2026-04-15</code>):",
+            )
+
         return {"ok": True}
 
     # Handle message
@@ -134,7 +136,7 @@ async def webhook(request: Request):
         message = data["message"]
         chat_id = message["chat"]["id"]
 
-        if chat_id not in _get_allowed_chat_ids():
+        if chat_id not in get_allowed_chat_ids():
             return {"ok": True}
 
         text = message.get("text", "")
@@ -307,6 +309,41 @@ async def webhook(request: Request):
             emoji = text.strip()
             clear_user_state(chat_id)
             await handle_custom_category_input(chat_id, name, emoji)
+            return {"ok": True}
+
+        # Edit date: user sends new date
+        elif user_state and user_state.startswith("awaiting_date_change:"):
+            remainder = user_state[len("awaiting_date_change:"):]
+            if "|" in remainder:
+                tx_id, ts = remainder.rsplit("|", 1)
+                if _is_expired(ts):
+                    clear_user_state(chat_id)
+                    await telegram.send_message(chat_id, "⏰ The edit date option has expired. Tap 📅 Edit date again to retry.")
+                    return {"ok": True}
+            else:
+                tx_id = remainder
+            date_str = text.strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+                await telegram.send_message(chat_id, "❌ Invalid format. Please send the date as <code>YYYY-MM-DD</code>.")
+                return {"ok": True}
+            try:
+                new_date = datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                await telegram.send_message(chat_id, "❌ Invalid date. Please try again with <code>YYYY-MM-DD</code>.")
+                return {"ok": True}
+            tx = get_transaction_by_id(tx_id)
+            if not tx:
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ Transaction not found.")
+                return {"ok": True}
+            old_ts = datetime.fromisoformat(tx["timestamp"])
+            new_ts = new_date.replace(hour=old_ts.hour, minute=old_ts.minute, second=old_ts.second, tzinfo=old_ts.tzinfo)
+            update_transaction_timestamp(tx_id, new_ts.isoformat())
+            clear_user_state(chat_id)
+            await telegram.send_message(
+                chat_id,
+                f"📅 Date updated for <b>{tx['item']}</b> → {new_date.strftime('%d %b %Y')}",
+            )
             return {"ok": True}
 
         # Change category ✏️ new category step 1: name

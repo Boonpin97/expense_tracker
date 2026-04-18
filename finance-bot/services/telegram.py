@@ -27,7 +27,10 @@ async def send_message(chat_id: int, text: str, parse_mode: str = "HTML") -> dic
 
 
 async def send_message_with_change_category(chat_id: int, text: str, tx_id: str, item_key: str) -> dict:
-    keyboard = [[{"text": "🔄 Change category", "callback_data": f"chgcat:{tx_id}:{item_key}"}]]
+    keyboard = [
+        [{"text": "🔄 Change category", "callback_data": f"chgcat:{tx_id}:{item_key}"}],
+        [{"text": "📅 Edit date", "callback_data": f"chgdate:{tx_id}"}],
+    ]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             _api_url("sendMessage"),

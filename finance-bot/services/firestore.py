@@ -140,6 +140,10 @@ def update_transaction_category(doc_id: str, category: str) -> None:
     get_db().collection("transactions").document(doc_id).update({"category": category})
 
 
+def update_transaction_timestamp(doc_id: str, new_timestamp: str) -> None:
+    get_db().collection("transactions").document(doc_id).update({"timestamp": new_timestamp})
+
+
 def reassign_transactions_category(old_category: str, new_category: str) -> int:
     docs = (
         get_db()
@@ -256,3 +260,39 @@ def delete_category(category_name: str) -> int:
         doc.reference.delete()
         count += 1
     return count
+
+
+# ── Authorized Chat IDs ───────────────────────────────────────
+
+_allowed_chat_ids: set[int] = set()
+_chat_ids_listener = None
+
+
+def _on_authorized_chats_snapshot(col_snapshot, changes, read_time):
+    global _allowed_chat_ids
+    _allowed_chat_ids = set()
+    for doc in col_snapshot:
+        data = doc.to_dict()
+        chat_id = data.get("chat_id")
+        if chat_id is not None:
+            _allowed_chat_ids.add(int(chat_id))
+
+
+def start_authorized_chats_listener() -> None:
+    global _chat_ids_listener
+    if _chat_ids_listener is not None:
+        return
+    col_ref = get_db().collection("authorized_chats")
+    _chat_ids_listener = col_ref.on_snapshot(_on_authorized_chats_snapshot)
+
+
+def get_allowed_chat_ids() -> set[int]:
+    return _allowed_chat_ids
+
+
+def add_authorized_chat(chat_id: int) -> None:
+    get_db().collection("authorized_chats").document(str(chat_id)).set({"chat_id": chat_id})
+
+
+def remove_authorized_chat(chat_id: int) -> None:
+    get_db().collection("authorized_chats").document(str(chat_id)).delete()

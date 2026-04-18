@@ -10,12 +10,14 @@ load_dotenv()
 from fastapi import FastAPI, Request
 from routers import webhook, reports
 from services import telegram
+from services.firestore import start_authorized_chats_listener
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    start_authorized_chats_listener()
     cloud_run_url = os.getenv("CLOUD_RUN_URL")
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
     try:
@@ -48,11 +50,8 @@ async def crash_report_middleware(request: Request, call_next):
                 f"<code>{request.method} {request.url.path}</code>\n\n"
                 f"<pre>{tb_truncated}</pre>"
             )
-            raw_ids = os.getenv("TELEGRAM_CHAT_IDS", "")
-            chat_ids = [
-                int(cid.strip()) for cid in raw_ids.split(",")
-                if cid.strip().lstrip("-").isdigit()
-            ]
+            from services.firestore import get_allowed_chat_ids
+            chat_ids = get_allowed_chat_ids()
             for chat_id in chat_ids:
                 try:
                     await telegram.send_message(chat_id, msg)

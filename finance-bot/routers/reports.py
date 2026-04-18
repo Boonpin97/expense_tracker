@@ -80,12 +80,10 @@ async def trigger_report(
     if not expected_secret or x_scheduler_token != expected_secret:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    raw = os.getenv("TELEGRAM_CHAT_IDS", "")
-    chat_ids = [
-        int(cid.strip()) for cid in raw.split(",") if cid.strip().lstrip("-").isdigit()
-    ]
+    from services.firestore import get_allowed_chat_ids
+    chat_ids = list(get_allowed_chat_ids())
     if not chat_ids:
-        raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_IDS not configured")
+        raise HTTPException(status_code=500, detail="No authorized chat IDs configured")
 
     start, end, label = _get_period_window(period)
     total_tx = 0
