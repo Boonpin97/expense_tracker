@@ -114,14 +114,16 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
         timestamp=timestamp,
         chat_id=chat_id,
     )
-    firestore.save_transaction(tx)
+    tx_id = firestore.save_transaction(tx)
     firestore.save_category(item_key, category, confirmed_by_user=True)
     firestore.delete_pending(chat_id)
 
     await telegram.answer_callback_query(callback_query_id, f"Saved as {category}")
-    await telegram.send_message(
+    await telegram.send_message_with_change_category(
         chat_id,
         f"✅ <b>{item}</b> — ${amount:.2f} → {category}",
+        tx_id,
+        item_key,
     )
 
 
@@ -154,12 +156,14 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
         timestamp=timestamp,
         chat_id=chat_id,
     )
-    firestore.save_transaction(tx)
+    tx_id = firestore.save_transaction(tx)
     firestore.save_category(item_key, category, confirmed_by_user=True)
     firestore.add_category_to_list(category, emoji)
     firestore.delete_pending(chat_id)
 
-    await telegram.send_message(
+    await telegram.send_message_with_change_category(
         chat_id,
         f"✅ <b>{item}</b> — ${amount:.2f} → {category} (new category saved)",
+        tx_id,
+        item_key,
     )
