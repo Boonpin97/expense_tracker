@@ -272,10 +272,10 @@ def _on_authorized_chats_snapshot(col_snapshot, changes, read_time):
     global _allowed_chat_ids
     _allowed_chat_ids = set()
     for doc in col_snapshot:
-        data = doc.to_dict()
-        chat_id = data.get("chat_id")
-        if chat_id is not None:
-            _allowed_chat_ids.add(int(chat_id))
+        try:
+            _allowed_chat_ids.add(int(doc.id))
+        except ValueError:
+            pass
 
 
 def start_authorized_chats_listener() -> None:
@@ -291,7 +291,7 @@ def get_allowed_chat_ids() -> set[int]:
 
 
 def add_authorized_chat(chat_id: int) -> None:
-    get_db().collection("authorized_chats").document(str(chat_id)).set({"chat_id": chat_id})
+    get_db().collection("authorized_chats").document(str(chat_id)).set({})
 
 
 def remove_authorized_chat(chat_id: int) -> None:
