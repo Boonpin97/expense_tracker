@@ -1,4 +1,6 @@
+import calendar
 import re
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from models.transaction import Transaction
@@ -6,6 +8,30 @@ from services import firestore, telegram
 
 SGT = timezone(timedelta(hours=8))
 PENDING_EXPIRY_SECONDS = 180
+
+
+async def _check_budget_exceeded(chat_id: int, category: str) -> None:
+    """Warn the user if spending in *category* has exceeded the pro-rated budget."""
+    budgets = firestore.get_budgets(chat_id)
+    monthly_limit = budgets.get(category)
+    if monthly_limit is None:
+        return
+
+    now = datetime.now(SGT)
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    prorated = monthly_limit / days_in_month * now.day
+
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    txs = firestore.get_transactions(chat_id, month_start, month_end + timedelta(seconds=1))
+
+    spent = sum(tx["amount"] for tx in txs if tx.get("category") == category)
+    if spent > prorated:
+        await telegram.send_message(
+            chat_id,
+            f"❗️ <b>{category}</b> budget exceeded! "
+            f"${spent:.2f} spent vs ${prorated:.2f} budget so far this month.",
+        )
 
 
 def _normalise(item: str) -> str:
@@ -31,6 +57,7 @@ async def handle_expense(chat_id: int, item: str, amount: float) -> None:
             tx_id,
             item_key,
         )
+        await _check_budget_exceeded(chat_id, category)
     else:
         firestore.save_pending(chat_id, item, amount)
         await telegram.send_category_keyboard(chat_id, item, amount)
@@ -125,6 +152,7 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
         tx_id,
         item_key,
     )
+    await _check_budget_exceeded(chat_id, category)
 
 
 async def handle_custom_category_input(chat_id: int, category_name: str, emoji: str = "🏷️") -> None:
@@ -167,3 +195,4 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
         tx_id,
         item_key,
     )
+    await _check_budget_exceeded(chat_id, category)
