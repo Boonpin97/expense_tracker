@@ -73,7 +73,7 @@ async def webhook(request: Request):
             await telegram.answer_callback_query(callback_query_id, "Deleted!")
             if tx:
                 ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
-                date_str = ts.strftime("%d %b %Y, %I:%M %p")
+                date_str = ts.strftime("%d/%m/%y, %I:%M %p")
                 await telegram.send_message(
                     chat_id,
                     f"🗑️ Deleted: <b>{tx['item']}</b>\n"
@@ -126,7 +126,7 @@ async def webhook(request: Request):
             await telegram.answer_callback_query(callback_query_id, "")
             await telegram.send_message(
                 chat_id,
-                "📅 Send the new date in <code>YYYY-MM-DD</code> format (e.g. <code>2026-04-15</code>):",
+                "📅 Send the new date in <code>DD/MM/YY</code> format (e.g. <code>15/04/26</code>):",
             )
 
         elif callback_data.startswith("setbudget:"):
@@ -164,21 +164,21 @@ async def webhook(request: Request):
             elif text.startswith("/report"):
                 parts = text.split()
                 if len(parts) < 2:
-                    await telegram.send_message(chat_id, "Usage: <code>/report 2026-04-01</code>")
+                    await telegram.send_message(chat_id, "Usage: <code>/report 20/04/26</code>")
                 else:
                     arg = parts[1]
-                    if not re.match(r"^\d{4}-\d{2}-\d{2}$", arg):
-                        await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
+                    if not re.match(r"^\d{2}/\d{2}/\d{2}$", arg):
+                        await telegram.send_message(chat_id, "Invalid date. Use <code>DD/MM/YY</code>, e.g. <code>/report 20/04/26</code>")
                     else:
                         try:
-                            day_start = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=SGT)
+                            day_start = datetime.strptime(arg, "%d/%m/%y").replace(tzinfo=SGT)
                             day_end = day_start + timedelta(days=1)
-                            label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
+                            label = f"Daily Report ({day_start.strftime('%d/%m/%y')})"
                             transactions = get_transactions(chat_id, day_start, day_end)
                             report = _format_daily_report(label, transactions)
                             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
                         except ValueError:
-                            await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
+                            await telegram.send_message(chat_id, "Invalid date. Use <code>DD/MM/YY</code>, e.g. <code>/report 20/04/26</code>")
             elif text.startswith("/daily"):
                 start, end, label = _get_period_window("daily")
                 transactions = get_transactions(chat_id, start, end)
@@ -199,7 +199,7 @@ async def webhook(request: Request):
                 if tx:
                     delete_transaction(tx["_doc_id"])
                     ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
-                    date_str = ts.strftime("%d %b %Y, %I:%M %p")
+                    date_str = ts.strftime("%d/%m/%y, %I:%M %p")
                     await telegram.send_message(
                         chat_id,
                         f"🗑️ Deleted: <b>{tx['item']}</b>\n"
@@ -224,18 +224,18 @@ async def webhook(request: Request):
                 if len(parts) < 2:
                     await telegram.send_message(
                         chat_id,
-                        "Please provide a date.\nUsage: <code>/delete_past 2026-04-01</code>",
+                        "Please provide a date.\nUsage: <code>/delete_past 20/04/26</code>",
                     )
                 else:
                     date_str = parts[1]
-                    match = re.match(r"^\d{4}-\d{2}-\d{2}$", date_str)
+                    match = re.match(r"^\d{2}/\d{2}/\d{2}$", date_str)
                     if not match:
                         await telegram.send_message(
                             chat_id,
-                            "Invalid date format. Use <code>YYYY-MM-DD</code>, e.g. <code>/delete_past 2026-04-01</code>",
+                            "Invalid date format. Use <code>DD/MM/YY</code>, e.g. <code>/delete_past 20/04/26</code>",
                         )
                     else:
-                        start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=SGT)
+                        start = datetime.strptime(date_str, "%d/%m/%y").replace(tzinfo=SGT)
                         end = start + timedelta(days=1)
                         txs = get_transactions_with_ids(chat_id, start, end)
                         if txs:
@@ -373,13 +373,13 @@ async def webhook(request: Request):
             else:
                 tx_id = remainder
             date_str = text.strip()
-            if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
-                await telegram.send_message(chat_id, "❌ Invalid format. Please send the date as <code>YYYY-MM-DD</code>.")
+            if not re.match(r"^\d{2}/\d{2}/\d{2}$", date_str):
+                await telegram.send_message(chat_id, "❌ Invalid format. Please send the date as <code>DD/MM/YY</code>.")
                 return {"ok": True}
             try:
-                new_date = datetime.strptime(date_str, "%Y-%m-%d")
+                new_date = datetime.strptime(date_str, "%d/%m/%y")
             except ValueError:
-                await telegram.send_message(chat_id, "❌ Invalid date. Please try again with <code>YYYY-MM-DD</code>.")
+                await telegram.send_message(chat_id, "❌ Invalid date. Please try again with <code>DD/MM/YY</code>.")
                 return {"ok": True}
             tx = get_transaction_by_id(tx_id)
             if not tx:
@@ -392,7 +392,7 @@ async def webhook(request: Request):
             clear_user_state(chat_id)
             await telegram.send_message(
                 chat_id,
-                f"📅 Date updated for <b>{tx['item']}</b> → {new_date.strftime('%d %b %Y')}",
+                f"📅 Date updated for <b>{tx['item']}</b> → {new_date.strftime('%d/%m/%y')}",
             )
             return {"ok": True}
 
