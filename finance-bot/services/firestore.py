@@ -296,3 +296,20 @@ def add_authorized_chat(chat_id: int) -> None:
 
 def remove_authorized_chat(chat_id: int) -> None:
     get_db().collection("authorized_chats").document(str(chat_id)).delete()
+
+
+# ── Budgets ───────────────────────────────────────────────────
+
+def get_budgets(chat_id: int) -> dict[str, float]:
+    """Return {category_name: monthly_amount} for a chat, or empty dict."""
+    doc = get_db().collection("budgets").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict() or {}
+    return {}
+
+
+def set_budget(chat_id: int, category: str, amount: float) -> None:
+    """Set (or update) the monthly budget for a single category."""
+    get_db().collection("budgets").document(str(chat_id)).set(
+        {category: amount}, merge=True
+    )
