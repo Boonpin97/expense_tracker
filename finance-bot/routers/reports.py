@@ -19,13 +19,13 @@ def _get_period_window(period: str) -> tuple[datetime, datetime, str]:
     if period == "daily":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=1)
-        label = f"Daily Report ({start.strftime('%d %b')})"
+        label = f"Daily Report ({start.strftime('%d/%m/%y')})"
     elif period == "weekly":
         start = now - timedelta(days=now.weekday())
         start = start.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=7)
         end_display = (end - timedelta(days=1))
-        label = f"Weekly Report ({start.strftime('%d')}–{end_display.strftime('%d %b')})"
+        label = f"Weekly Report ({start.strftime('%d/%m/%y')}–{end_display.strftime('%d/%m/%y')})"
     elif period == "monthly":
         first_of_current = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         # If triggered on the 1st, report the previous month
@@ -144,7 +144,7 @@ def _format_budget_report(chat_id: int) -> str:
     category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
 
     lines = [
-        f"📋 Budget Report ({now.strftime('%d %b %Y')})",
+        f"📋 Budget Report ({now.strftime('%d/%m/%y')})",
         f"Day {current_day} of {days_in_month}",
         "─────────────────────────────────",
     ]
@@ -154,7 +154,7 @@ def _format_budget_report(chat_id: int) -> str:
         spent = by_category.get(cat, 0.0)
         prorated = monthly_amount / days_in_month * current_day
         status = "❗️" if spent > prorated else "😊"
-        lines.append(f"{emoji} {cat:<16} ${spent:>8.2f} /{prorated:>5.2f} {status}")
+        lines.append(f"{emoji} {cat:<16} ${spent:>8.2f} / {prorated:>5.2f} {status}")
 
     lines.append("─────────────────────────────────")
     total_spent = sum(by_category.get(cat, 0.0) for cat in budgets)
