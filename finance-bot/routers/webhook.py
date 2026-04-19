@@ -131,12 +131,17 @@ async def webhook(request: Request):
 
         elif callback_data.startswith("setbudget:"):
             category = callback_data[10:]
-            set_user_state(chat_id, f"awaiting_budget_amount:{category}|{datetime.now(SGT).isoformat()}")
-            await telegram.answer_callback_query(callback_query_id, "")
-            await telegram.send_message(
-                chat_id,
-                f"💰 Enter the monthly budget amount for <b>{category}</b>:",
-            )
+            if category == "__done__":
+                clear_user_state(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "Done!")
+                await telegram.send_message(chat_id, "✅ Budget setup complete.")
+            else:
+                set_user_state(chat_id, f"awaiting_budget_amount:{category}|{datetime.now(SGT).isoformat()}")
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_message(
+                    chat_id,
+                    f"💰 Enter the monthly budget amount for <b>{category}</b>:",
+                )
 
         return {"ok": True}
 
@@ -321,6 +326,7 @@ async def webhook(request: Request):
             set_budget(chat_id, category, amount)
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>")
+            await telegram.send_budget_category_keyboard(chat_id)
             return {"ok": True}
 
         # Inline ✏️ new category (new expense) step 1: name
