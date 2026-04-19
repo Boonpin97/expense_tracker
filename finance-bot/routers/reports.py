@@ -72,6 +72,31 @@ def _format_report(label: str, transactions: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_daily_report(label: str, transactions: list[dict]) -> str:
+    if not transactions:
+        return f"📊 {label}\n─────────────────────────\nNo expenses recorded.\n─────────────────────────"
+
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+
+    sorted_txs = sorted(transactions, key=lambda t: t.get("timestamp", ""))
+
+    lines = [f"📊 {label}", "─────────────────────────"]
+
+    for tx in sorted_txs:
+        emoji = category_emoji.get(tx.get("category", ""), "📦")
+        item = tx.get("item", "")
+        amount = tx.get("amount", 0.0)
+        ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
+        time_str = ts.strftime("%I:%M %p")
+        lines.append(f"{emoji} {item:<16} ${amount:>8.2f}  {time_str}")
+
+    grand_total = sum(tx.get("amount", 0.0) for tx in transactions)
+    lines.append("─────────────────────────")
+    lines.append(f"💰 Total{' ' * 12}${grand_total:>8.2f}")
+
+    return "\n".join(lines)
+
+
 @router.post("/trigger-report")
 async def trigger_report(
     period: str = Query(...),
@@ -90,7 +115,8 @@ async def trigger_report(
     total_tx = 0
     for chat_id in chat_ids:
         transactions = get_transactions(chat_id, start, end)
-        report = _format_report(label, transactions)
+        formatter = _format_daily_report if period == "daily" else _format_report
+        report = formatter(label, transactions)
         await send_message(chat_id, f"<pre>{report}</pre>")
         total_tx += len(transactions)
 
