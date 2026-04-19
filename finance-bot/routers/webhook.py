@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, HTTPException
 from services.parser import parse_expense
 from services.categoriser import handle_expense, handle_category_selection, handle_custom_category_input, PENDING_EXPIRY_SECONDS
 from services import telegram
-from routers.reports import _get_period_window, _format_report, _format_budget_report
+from routers.reports import _get_period_window, _format_report, _format_daily_report, _format_budget_report
 from services.firestore import (
     get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction, get_transaction_by_id,
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
@@ -175,14 +175,14 @@ async def webhook(request: Request):
                             day_end = day_start + timedelta(days=1)
                             label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
                             transactions = get_transactions(chat_id, day_start, day_end)
-                            report = _format_report(label, transactions)
+                            report = _format_daily_report(label, transactions)
                             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
                         except ValueError:
                             await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
             elif text.startswith("/daily"):
                 start, end, label = _get_period_window("daily")
                 transactions = get_transactions(chat_id, start, end)
-                report = _format_report(label, transactions)
+                report = _format_daily_report(label, transactions)
                 await telegram.send_message(chat_id, f"<pre>{report}</pre>")
             elif text.startswith("/weekly"):
                 start, end, label = _get_period_window("weekly")
