@@ -120,7 +120,7 @@ def _format_budget_report(chat_id: int) -> str:
     lines = [
         f"📋 Budget Report ({now.strftime('%d %b %Y')})",
         f"Day {current_day} of {days_in_month}",
-        "─────────────────────────",
+        "─────────────────────────────────",
     ]
 
     for cat, monthly_amount in sorted(budgets.items()):
@@ -128,12 +128,12 @@ def _format_budget_report(chat_id: int) -> str:
         spent = by_category.get(cat, 0.0)
         prorated = monthly_amount / days_in_month * current_day
         marker = " ⚠️" if spent > prorated else ""
-        lines.append(f"{emoji} {cat}: ${spent:.2f} / ${prorated:.2f}{marker}")
+        lines.append(f"{emoji} {cat:<16} ${spent:>8.2f} / ${prorated:>8.2f}{marker}")
 
-    lines.append("─────────────────────────")
+    lines.append("─────────────────────────────────")
     total_spent = sum(by_category.get(cat, 0.0) for cat in budgets)
     total_prorated = sum(amt / days_in_month * current_day for amt in budgets.values())
-    lines.append(f"💰 Total: ${total_spent:.2f} / ${total_prorated:.2f}")
+    lines.append(f"💰 Total{' ' * 12}${total_spent:>8.2f} / ${total_prorated:>8.2f}")
 
     return "\n".join(lines)
 
