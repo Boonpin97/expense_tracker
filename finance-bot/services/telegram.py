@@ -135,6 +135,36 @@ async def set_webhook(url: str, secret_token: str) -> dict:
         return resp.json()
 
 
+async def send_budget_category_keyboard(chat_id: int) -> dict:
+    """Show category buttons for /set_budget."""
+    from services.firestore import get_category_list
+
+    categories = get_category_list()
+    keyboard = []
+    row = []
+    for cat in categories:
+        emoji = cat.get("emoji", "🏷️")
+        name = cat["name"]
+        row.append({"text": f"{emoji} {name}", "callback_data": f"setbudget:{name}"})
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "💰 Select a category to set its monthly budget:",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -154,6 +184,8 @@ async def set_my_commands() -> dict:
         {"command": "daily", "description": "Today's spending summary"},
         {"command": "weekly", "description": "This week's spending summary"},
         {"command": "monthly", "description": "This month's spending summary"},
+        {"command": "budget_report", "description": "Budget vs spending report"},
+        {"command": "set_budget", "description": "Set monthly budget for a category"},
         {"command": "delete_last", "description": "Delete the last recorded transaction"},
         {"command": "delete_today", "description": "Delete a transactions from today"},
         {"command": "delete_past", "description": "Delete a transactions in a specific date"},

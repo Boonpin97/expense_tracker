@@ -1,10 +1,11 @@
+import calendar
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
-from services.firestore import get_category_list, get_transactions
+from services.firestore import get_category_list, get_transactions, get_budgets
 from services.telegram import send_message
 
 router = APIRouter()
@@ -94,3 +95,70 @@ async def trigger_report(
         total_tx += len(transactions)
 
     return {"ok": True, "period": period, "transactions_count": total_tx}
+
+
+def _format_budget_report(chat_id: int) -> str:
+    """Build a budget report comparing month-to-date spending vs pro-rated budget."""
+    budgets = get_budgets(chat_id)
+    if not budgets:
+        return ""
+
+    now = datetime.now(SGT)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    current_day = now.day
+
+    transactions = get_transactions(chat_id, month_start, month_end + timedelta(seconds=1))
+
+    by_category: dict[str, float] = defaultdict(float)
+    for tx in transactions:
+        by_category[tx["category"]] += tx["amount"]
+
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+
+    lines = [
+        f"📋 Budget Report ({now.strftime('%d %b %Y')})",
+        f"Day {current_day} of {days_in_month}",
+        "─────────────────────────",
+    ]
+
+    for cat, monthly_amount in sorted(budgets.items()):
+        emoji = category_emoji.get(cat, "📦")
+        spent = by_category.get(cat, 0.0)
+        prorated = monthly_amount / days_in_month * current_day
+        marker = " ⚠️" if spent > prorated else ""
+        lines.append(f"{emoji} {cat}: ${spent:.2f} / ${prorated:.2f}{marker}")
+
+    lines.append("─────────────────────────")
+    total_spent = sum(by_category.get(cat, 0.0) for cat in budgets)
+    total_prorated = sum(amt / days_in_month * current_day for amt in budgets.values())
+    lines.append(f"💰 Total: ${total_spent:.2f} / ${total_prorated:.2f}")
+
+    return "\n".join(lines)
+
+
+@router.post("/trigger-budget-report")
+async def trigger_budget_report(
+    x_scheduler_token: str = Header(None, alias="X-Scheduler-Token"),
+):
+    expected_secret = os.getenv("SCHEDULER_SECRET", "")
+    if not expected_secret or x_scheduler_token != expected_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from services.firestore import get_allowed_chat_ids
+    chat_ids = list(get_allowed_chat_ids())
+    if not chat_ids:
+        raise HTTPException(status_code=500, detail="No authorized chat IDs configured")
+
+    for chat_id in chat_ids:
+        report = _format_budget_report(chat_id)
+        if not report:
+            await send_message(
+                chat_id,
+                "No monthly budget found yet. You can set a monthly budget via the command /set_budget",
+            )
+        else:
+            await send_message(chat_id, f"<pre>{report}</pre>")
+
+    return {"ok": True}

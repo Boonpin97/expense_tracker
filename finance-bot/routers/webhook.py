@@ -7,14 +7,14 @@ from fastapi import APIRouter, Request, HTTPException
 from services.parser import parse_expense
 from services.categoriser import handle_expense, handle_category_selection, handle_custom_category_input, PENDING_EXPIRY_SECONDS
 from services import telegram
-from routers.reports import _get_period_window, _format_report
+from routers.reports import _get_period_window, _format_report, _format_budget_report
 from services.firestore import (
     get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction, get_transaction_by_id,
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
     get_category_list, add_category_to_list, remove_category_from_list, delete_category,
     reassign_transactions_category, get_pending, delete_pending, get_pending_change, delete_pending_change,
     save_pending_change, update_transaction_category, update_transaction_timestamp, save_category,
-    get_allowed_chat_ids,
+    get_allowed_chat_ids, set_budget,
 )
 
 router = APIRouter()
@@ -129,6 +129,15 @@ async def webhook(request: Request):
                 "📅 Send the new date in <code>YYYY-MM-DD</code> format (e.g. <code>2026-04-15</code>):",
             )
 
+        elif callback_data.startswith("setbudget:"):
+            category = callback_data[10:]
+            set_user_state(chat_id, f"awaiting_budget_amount:{category}|{datetime.now(SGT).isoformat()}")
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_message(
+                chat_id,
+                f"💰 Enter the monthly budget amount for <b>{category}</b>:",
+            )
+
         return {"ok": True}
 
     # Handle message
@@ -240,6 +249,17 @@ async def webhook(request: Request):
                     await telegram.send_message(chat_id, "No categories to remove.")
                 else:
                     await telegram.send_remove_category_keyboard(chat_id, removable)
+            elif text == "/budget_report":
+                report = _format_budget_report(chat_id)
+                if not report:
+                    await telegram.send_message(
+                        chat_id,
+                        "No monthly budget found yet. You can set a monthly budget via the command /set_budget",
+                    )
+                else:
+                    await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+            elif text == "/set_budget":
+                await telegram.send_budget_category_keyboard(chat_id)
             return {"ok": True}
 
         # Check user state for multi-step flows
@@ -277,6 +297,30 @@ async def webhook(request: Request):
             add_category_to_list(name, emoji)
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"✅ Category {emoji} <b>{name}</b> added!")
+            return {"ok": True}
+
+        # /set_budget: user sends the amount
+        elif user_state and user_state.startswith("awaiting_budget_amount:"):
+            remainder = user_state[len("awaiting_budget_amount:"):]
+            if "|" in remainder:
+                category, ts = remainder.rsplit("|", 1)
+                if _is_expired(ts):
+                    clear_user_state(chat_id)
+                    await telegram.send_message(chat_id, "⏰ The /set_budget request has expired. Please send /set_budget again.")
+                    return {"ok": True}
+            else:
+                category = remainder
+            raw = text.strip().lstrip("$")
+            try:
+                amount = float(raw)
+                if amount <= 0:
+                    raise ValueError
+            except ValueError:
+                await telegram.send_message(chat_id, "❌ Please enter a valid positive number (e.g. <code>500</code> or <code>1200.50</code>).")
+                return {"ok": True}
+            set_budget(chat_id, category, amount)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>")
             return {"ok": True}
 
         # Inline ✏️ new category (new expense) step 1: name
