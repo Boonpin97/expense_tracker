@@ -128,7 +128,7 @@ def _format_budget_report(chat_id: int) -> str:
         spent = by_category.get(cat, 0.0)
         prorated = monthly_amount / days_in_month * current_day
         status = "❗️" if spent > prorated else "😊"
-        lines.append(f"{emoji} {cat:<16} ${spent:>8.2f} / ${prorated:>8.2f} {status}")
+        lines.append(f"{emoji} {cat:<16} ${spent:>8.2f} /{prorated:>5.2f} {status}")
 
     lines.append("─────────────────────────────────")
     total_spent = sum(by_category.get(cat, 0.0) for cat in budgets)

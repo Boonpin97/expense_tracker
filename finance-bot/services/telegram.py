@@ -151,6 +151,7 @@ async def send_budget_category_keyboard(chat_id: int) -> dict:
             row = []
     if row:
         keyboard.append(row)
+    keyboard.append([{"text": "✅ Done", "callback_data": "setbudget:__done__"}])
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
