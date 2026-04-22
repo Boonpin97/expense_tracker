@@ -8,6 +8,7 @@ on:
       - '.github/workflows/deploy.yml'
 
 env:
+  # Default region; overridden per-branch in the steps below.
   GCP_REGION: asia-southeast1
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -24,6 +25,7 @@ jobs:
       - name: Set environment variables (dev)
         if: github.ref == 'refs/heads/dev'
         run: |
+          echo "GCP_REGION=asia-southeast1" >> $GITHUB_ENV
           echo "SERVICE_NAME=finance-bot-dev" >> $GITHUB_ENV
           echo "FIRESTORE_DATABASE=developer" >> $GITHUB_ENV
           echo "TELEGRAM_BOT_TOKEN=${{ secrets.DEV_TELEGRAM_BOT_TOKEN }}" >> $GITHUB_ENV
@@ -33,6 +35,7 @@ jobs:
       - name: Set environment variables (prod)
         if: github.ref == 'refs/heads/main'
         run: |
+          echo "GCP_REGION=asia-southeast3" >> $GITHUB_ENV
           echo "SERVICE_NAME=finance-bot" >> $GITHUB_ENV
           echo "FIRESTORE_DATABASE=(default)" >> $GITHUB_ENV
           echo "TELEGRAM_BOT_TOKEN=${{ secrets.PROD_TELEGRAM_BOT_TOKEN }}" >> $GITHUB_ENV
