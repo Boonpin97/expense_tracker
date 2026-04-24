@@ -262,6 +262,73 @@ def delete_category(category_name: str) -> int:
     return count
 
 
+def update_category_emoji(name: str, emoji: str) -> bool:
+    doc_ref = get_db().collection("category_list").document(name)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return False
+    doc_ref.update({"emoji": emoji})
+    return True
+
+
+def update_category_order(name: str, order: int) -> bool:
+    """Move *name* to position *order*, shifting only the categories between the
+    old and new position. "Other" stays at 9999 and is never shifted."""
+    db = get_db()
+    target_ref = db.collection("category_list").document(name)
+    target_doc = target_ref.get()
+    if not target_doc.exists:
+        return False
+    old_order = target_doc.to_dict().get("order", 9998)
+    if old_order == order:
+        return True
+
+    batch = db.batch()
+    for doc in db.collection("category_list").stream():
+        data = doc.to_dict()
+        if data.get("name") == "Other" or data.get("name") == name:
+            continue
+        current = data.get("order", 9998)
+        if order < old_order and order <= current < old_order:
+            # Moving target up: bump categories in [order, old_order-1] down by 1
+            batch.update(doc.reference, {"order": current + 1})
+        elif order > old_order and old_order < current <= order:
+            # Moving target down: pull categories in [old_order+1, order] up by 1
+            batch.update(doc.reference, {"order": current - 1})
+    batch.update(target_ref, {"order": order})
+    batch.commit()
+    return True
+
+
+def rename_category(old_name: str, new_name: str) -> tuple[bool, int, int]:
+    """Rename a category. Doc ID in category_list is the name, so delete+recreate.
+    Also updates transactions and category_map entries. Returns (ok, tx_count, map_count)."""
+    db = get_db()
+    old_ref = db.collection("category_list").document(old_name)
+    old_doc = old_ref.get()
+    if not old_doc.exists:
+        return False, 0, 0
+    new_ref = db.collection("category_list").document(new_name)
+    if new_ref.get().exists:
+        return False, 0, 0
+    data = old_doc.to_dict()
+    data["name"] = new_name
+    new_ref.set(data)
+    old_ref.delete()
+
+    tx_count = 0
+    for doc in db.collection("transactions").where("category", "==", old_name).stream():
+        doc.reference.update({"category": new_name})
+        tx_count += 1
+
+    map_count = 0
+    for doc in db.collection("category_map").where("category", "==", old_name).stream():
+        doc.reference.update({"category": new_name})
+        map_count += 1
+
+    return True, tx_count, map_count
+
+
 # ── Authorized Chat IDs ───────────────────────────────────────
 
 _allowed_chat_ids: set[int] = set()
