@@ -169,7 +169,12 @@ async def webhook(request: Request):
             elif field == "name":
                 prompt = f"Send the new name for <b>{category_name}</b>:"
             else:
-                prompt = f"Send the new order number (lower = shown first) for <b>{category_name}</b>:"
+                max_order = len([c for c in get_category_list() if c["name"] != "Other"])
+                prompt = (
+                    f"Send the new order number for <b>{category_name}</b> "
+                    f"(1 = top, max {max_order}). Existing categories at or below this "
+                    f"number will shift down by 1."
+                )
             await telegram.send_message(chat_id, prompt)
 
         return {"ok": True}
@@ -473,12 +478,25 @@ async def webhook(request: Request):
                     return {"ok": True}
             else:
                 category_name = remainder
+            if category_name == "Other":
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ The <b>Other</b> category's order cannot be changed.")
+                return {"ok": True}
             raw = text.strip()
             try:
                 order = int(raw)
             except ValueError:
                 clear_user_state(chat_id)
                 await telegram.send_message(chat_id, "⚠️ Order must be an integer. Try /edit_category again.")
+                return {"ok": True}
+            non_other = [c for c in get_category_list() if c["name"] != "Other"]
+            max_order = len(non_other)
+            if order < 1 or order > max_order:
+                clear_user_state(chat_id)
+                await telegram.send_message(
+                    chat_id,
+                    f"⚠️ Order must be between <b>1</b> and <b>{max_order}</b>. Try /edit_category again.",
+                )
                 return {"ok": True}
             ok = update_category_order(category_name, order)
             clear_user_state(chat_id)
