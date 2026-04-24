@@ -140,6 +140,10 @@ def update_transaction_category(doc_id: str, category: str) -> None:
     get_db().collection("transactions").document(doc_id).update({"category": category})
 
 
+def update_transaction_timestamp(doc_id: str, new_timestamp: str) -> None:
+    get_db().collection("transactions").document(doc_id).update({"timestamp": new_timestamp})
+
+
 def reassign_transactions_category(old_category: str, new_category: str) -> int:
     docs = (
         get_db()
@@ -303,3 +307,56 @@ def rename_category(old_name: str, new_name: str) -> tuple[bool, int, int]:
         map_count += 1
 
     return True, tx_count, map_count
+
+
+# ── Authorized Chat IDs ───────────────────────────────────────
+
+_allowed_chat_ids: set[int] = set()
+_chat_ids_listener = None
+
+
+def _on_authorized_chats_snapshot(col_snapshot, changes, read_time):
+    global _allowed_chat_ids
+    _allowed_chat_ids = set()
+    for doc in col_snapshot:
+        try:
+            _allowed_chat_ids.add(int(doc.id))
+        except ValueError:
+            pass
+
+
+def start_authorized_chats_listener() -> None:
+    global _chat_ids_listener
+    if _chat_ids_listener is not None:
+        return
+    col_ref = get_db().collection("authorized_chats")
+    _chat_ids_listener = col_ref.on_snapshot(_on_authorized_chats_snapshot)
+
+
+def get_allowed_chat_ids() -> set[int]:
+    return _allowed_chat_ids
+
+
+def add_authorized_chat(chat_id: int) -> None:
+    get_db().collection("authorized_chats").document(str(chat_id)).set({})
+
+
+def remove_authorized_chat(chat_id: int) -> None:
+    get_db().collection("authorized_chats").document(str(chat_id)).delete()
+
+
+# ── Budgets ───────────────────────────────────────────────────
+
+def get_budgets(chat_id: int) -> dict[str, float]:
+    """Return {category_name: monthly_amount} for a chat, or empty dict."""
+    doc = get_db().collection("budgets").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict() or {}
+    return {}
+
+
+def set_budget(chat_id: int, category: str, amount: float) -> None:
+    """Set (or update) the monthly budget for a single category."""
+    get_db().collection("budgets").document(str(chat_id)).set(
+        {category: amount}, merge=True
+    )
