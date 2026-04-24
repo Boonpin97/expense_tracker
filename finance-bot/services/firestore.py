@@ -140,10 +140,6 @@ def update_transaction_category(doc_id: str, category: str) -> None:
     get_db().collection("transactions").document(doc_id).update({"category": category})
 
 
-def update_transaction_timestamp(doc_id: str, new_timestamp: str) -> None:
-    get_db().collection("transactions").document(doc_id).update({"timestamp": new_timestamp})
-
-
 def reassign_transactions_category(old_category: str, new_category: str) -> int:
     docs = (
         get_db()
@@ -262,54 +258,48 @@ def delete_category(category_name: str) -> int:
     return count
 
 
-# ── Authorized Chat IDs ───────────────────────────────────────
-
-_allowed_chat_ids: set[int] = set()
-_chat_ids_listener = None
-
-
-def _on_authorized_chats_snapshot(col_snapshot, changes, read_time):
-    global _allowed_chat_ids
-    _allowed_chat_ids = set()
-    for doc in col_snapshot:
-        try:
-            _allowed_chat_ids.add(int(doc.id))
-        except ValueError:
-            pass
+def update_category_emoji(name: str, emoji: str) -> bool:
+    doc_ref = get_db().collection("category_list").document(name)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return False
+    doc_ref.update({"emoji": emoji})
+    return True
 
 
-def start_authorized_chats_listener() -> None:
-    global _chat_ids_listener
-    if _chat_ids_listener is not None:
-        return
-    col_ref = get_db().collection("authorized_chats")
-    _chat_ids_listener = col_ref.on_snapshot(_on_authorized_chats_snapshot)
+def update_category_order(name: str, order: int) -> bool:
+    doc_ref = get_db().collection("category_list").document(name)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return False
+    doc_ref.update({"order": order})
+    return True
 
 
-def get_allowed_chat_ids() -> set[int]:
-    return _allowed_chat_ids
+def rename_category(old_name: str, new_name: str) -> tuple[bool, int, int]:
+    """Rename a category. Doc ID in category_list is the name, so delete+recreate.
+    Also updates transactions and category_map entries. Returns (ok, tx_count, map_count)."""
+    db = get_db()
+    old_ref = db.collection("category_list").document(old_name)
+    old_doc = old_ref.get()
+    if not old_doc.exists:
+        return False, 0, 0
+    new_ref = db.collection("category_list").document(new_name)
+    if new_ref.get().exists:
+        return False, 0, 0
+    data = old_doc.to_dict()
+    data["name"] = new_name
+    new_ref.set(data)
+    old_ref.delete()
 
+    tx_count = 0
+    for doc in db.collection("transactions").where("category", "==", old_name).stream():
+        doc.reference.update({"category": new_name})
+        tx_count += 1
 
-def add_authorized_chat(chat_id: int) -> None:
-    get_db().collection("authorized_chats").document(str(chat_id)).set({})
+    map_count = 0
+    for doc in db.collection("category_map").where("category", "==", old_name).stream():
+        doc.reference.update({"category": new_name})
+        map_count += 1
 
-
-def remove_authorized_chat(chat_id: int) -> None:
-    get_db().collection("authorized_chats").document(str(chat_id)).delete()
-
-
-# ── Budgets ───────────────────────────────────────────────────
-
-def get_budgets(chat_id: int) -> dict[str, float]:
-    """Return {category_name: monthly_amount} for a chat, or empty dict."""
-    doc = get_db().collection("budgets").document(str(chat_id)).get()
-    if doc.exists:
-        return doc.to_dict() or {}
-    return {}
-
-
-def set_budget(chat_id: int, category: str, amount: float) -> None:
-    """Set (or update) the monthly budget for a single category."""
-    get_db().collection("budgets").document(str(chat_id)).set(
-        {category: amount}, merge=True
-    )
+    return True, tx_count, map_count
