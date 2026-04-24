@@ -27,10 +27,7 @@ async def send_message(chat_id: int, text: str, parse_mode: str = "HTML") -> dic
 
 
 async def send_message_with_change_category(chat_id: int, text: str, tx_id: str, item_key: str) -> dict:
-    keyboard = [
-        [{"text": "🔄 Change category", "callback_data": f"chgcat:{tx_id}:{item_key}"}],
-        [{"text": "📅 Edit date", "callback_data": f"chgdate:{tx_id}"}],
-    ]
+    keyboard = [[{"text": "🔄 Change category", "callback_data": f"chgcat:{tx_id}:{item_key}"}]]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             _api_url("sendMessage"),
@@ -123,6 +120,54 @@ async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) ->
         return resp.json()
 
 
+async def send_edit_category_keyboard(chat_id: int, categories: list[dict]) -> dict:
+    """Send an inline keyboard for picking which category to edit."""
+    ts = datetime.now(SGT).isoformat()
+    keyboard = []
+    row = []
+    for cat in categories:
+        label = f"{cat['emoji']} {cat['name']}"
+        row.append({"text": label, "callback_data": f"editcat:{cat['name']}|{ts}"})
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "✏️ Tap a category to edit:",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_edit_category_field_keyboard(chat_id: int, category_name: str, emoji: str) -> dict:
+    """Send an inline keyboard with 3 fields: emoji, name, order."""
+    ts = datetime.now(SGT).isoformat()
+    keyboard = [[
+        {"text": "😀 Emoji", "callback_data": f"editfield:emoji:{category_name}|{ts}"},
+        {"text": "📝 Name", "callback_data": f"editfield:name:{category_name}|{ts}"},
+        {"text": "🔢 Order", "callback_data": f"editfield:order:{category_name}|{ts}"},
+    ]]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Editing {emoji} <b>{category_name}</b> — what do you want to change?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def set_webhook(url: str, secret_token: str) -> dict:
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -130,37 +175,6 @@ async def set_webhook(url: str, secret_token: str) -> dict:
             json={
                 "url": url,
                 "secret_token": secret_token,
-            },
-        )
-        return resp.json()
-
-
-async def send_budget_category_keyboard(chat_id: int) -> dict:
-    """Show category buttons for /set_budget."""
-    from services.firestore import get_category_list
-
-    categories = get_category_list()
-    keyboard = []
-    row = []
-    for cat in categories:
-        emoji = cat.get("emoji", "🏷️")
-        name = cat["name"]
-        row.append({"text": f"{emoji} {name}", "callback_data": f"setbudget:{name}"})
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([{"text": "✅ Done", "callback_data": "setbudget:__done__"}])
-
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
-            _api_url("sendMessage"),
-            json={
-                "chat_id": chat_id,
-                "text": "💰 Select a category to set its monthly budget:",
-                "parse_mode": "HTML",
-                "reply_markup": {"inline_keyboard": keyboard},
             },
         )
         return resp.json()
@@ -181,17 +195,16 @@ async def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
 async def set_my_commands() -> dict:
     commands = [
         {"command": "start", "description": "Welcome message"},
-        {"command": "report", "description": "Daily report for a specific date (DD/MM/YY)"},
+        {"command": "report", "description": "Daily report for a specific date (YYYY-MM-DD)"},
         {"command": "daily", "description": "Today's spending summary"},
         {"command": "weekly", "description": "This week's spending summary"},
         {"command": "monthly", "description": "This month's spending summary"},
-        {"command": "budget_report", "description": "Budget vs spending report"},
-        {"command": "set_budget", "description": "Set monthly budget for a category"},
         {"command": "delete_last", "description": "Delete the last recorded transaction"},
         {"command": "delete_today", "description": "Delete a transactions from today"},
         {"command": "delete_past", "description": "Delete a transactions in a specific date"},
         {"command": "new_category", "description": "Add a new spending category"},
         {"command": "remove_category", "description": "Remove a spending category"},
+        {"command": "edit_category", "description": "Edit a category's emoji, name, or order"},
     ]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(

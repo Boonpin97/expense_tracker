@@ -7,19 +7,31 @@ from fastapi import APIRouter, Request, HTTPException
 from services.parser import parse_expense
 from services.categoriser import handle_expense, handle_category_selection, handle_custom_category_input, PENDING_EXPIRY_SECONDS
 from services import telegram
-from routers.reports import _get_period_window, _format_report, _format_daily_report, _format_budget_report
+from routers.reports import _get_period_window, _format_report
 from services.firestore import (
     get_transactions, get_transactions_with_ids, get_last_transaction, delete_transaction, get_transaction_by_id,
     is_awaiting_custom_category, set_user_state, get_user_state, clear_user_state,
     get_category_list, add_category_to_list, remove_category_from_list, delete_category,
     reassign_transactions_category, get_pending, delete_pending, get_pending_change, delete_pending_change,
-    save_pending_change, update_transaction_category, update_transaction_timestamp, save_category,
-    get_allowed_chat_ids, set_budget,
+    save_pending_change, update_transaction_category, save_category,
+    update_category_emoji, update_category_order, rename_category,
 )
 
 router = APIRouter()
 
 SGT = timezone(timedelta(hours=8))
+
+ALLOWED_CHAT_IDS: set[int] | None = None
+
+
+def _get_allowed_chat_ids() -> set[int]:
+    global ALLOWED_CHAT_IDS
+    if ALLOWED_CHAT_IDS is None:
+        raw = os.getenv("TELEGRAM_CHAT_IDS", "")
+        ALLOWED_CHAT_IDS = {
+            int(cid.strip()) for cid in raw.split(",") if cid.strip().lstrip("-").isdigit()
+        }
+    return ALLOWED_CHAT_IDS
 
 
 def _is_expired(timestamp_iso: str) -> bool:
@@ -45,7 +57,7 @@ async def webhook(request: Request):
         callback = data["callback_query"]
         chat_id = callback["message"]["chat"]["id"]
 
-        if chat_id not in get_allowed_chat_ids():
+        if chat_id not in _get_allowed_chat_ids():
             return {"ok": True}
 
         callback_data = callback.get("data", "")
@@ -73,7 +85,7 @@ async def webhook(request: Request):
             await telegram.answer_callback_query(callback_query_id, "Deleted!")
             if tx:
                 ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
-                date_str = ts.strftime("%d/%m/%y, %I:%M %p")
+                date_str = ts.strftime("%d %b %Y, %I:%M %p")
                 await telegram.send_message(
                     chat_id,
                     f"🗑️ Deleted: <b>{tx['item']}</b>\n"
@@ -116,32 +128,53 @@ async def webhook(request: Request):
                 await telegram.answer_callback_query(callback_query_id, "")
                 await telegram.send_category_keyboard(chat_id, item_key, 0)
 
-        elif callback_data.startswith("chgdate:"):
-            tx_id = callback_data[8:]
-            tx = get_transaction_by_id(tx_id)
-            if not tx:
-                await telegram.answer_callback_query(callback_query_id, "Transaction not found.")
-                return {"ok": True}
-            set_user_state(chat_id, f"awaiting_date_change:{tx_id}|{datetime.now(SGT).isoformat()}")
-            await telegram.answer_callback_query(callback_query_id, "")
-            await telegram.send_message(
-                chat_id,
-                "📅 Send the new date in <code>DD/MM/YY</code> format (e.g. <code>15/04/26</code>):",
-            )
-
-        elif callback_data.startswith("setbudget:"):
-            category = callback_data[10:]
-            if category == "__done__":
-                clear_user_state(chat_id)
-                await telegram.answer_callback_query(callback_query_id, "Done!")
-                await telegram.send_message(chat_id, "✅ Budget setup complete.")
+        elif callback_data.startswith("editcat:"):
+            remainder = callback_data[8:]
+            if "|" in remainder:
+                category_name, ts = remainder.split("|", 1)
+                if _is_expired(ts):
+                    await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                    await telegram.send_message(chat_id, "⏰ These options have expired. Please send /edit_category again.")
+                    return {"ok": True}
             else:
-                set_user_state(chat_id, f"awaiting_budget_amount:{category}|{datetime.now(SGT).isoformat()}")
-                await telegram.answer_callback_query(callback_query_id, "")
-                await telegram.send_message(
-                    chat_id,
-                    f"💰 Enter the monthly budget amount for <b>{category}</b>:",
+                category_name = remainder
+            cat = next((c for c in get_category_list() if c["name"] == category_name), None)
+            if not cat:
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, f"⚠️ Category <b>{category_name}</b> not found.")
+                return {"ok": True}
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_edit_category_field_keyboard(chat_id, category_name, cat.get("emoji", "🏷️"))
+
+        elif callback_data.startswith("editfield:"):
+            remainder = callback_data[10:]
+            # editfield:<field>:<name>|<ts>
+            if "|" in remainder:
+                body, ts = remainder.split("|", 1)
+                if _is_expired(ts):
+                    await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                    await telegram.send_message(chat_id, "⏰ These options have expired. Please send /edit_category again.")
+                    return {"ok": True}
+            else:
+                body = remainder
+            field, _, category_name = body.partition(":")
+            if field not in ("emoji", "name", "order") or not category_name:
+                await telegram.answer_callback_query(callback_query_id, "Invalid")
+                return {"ok": True}
+            now_iso = datetime.now(SGT).isoformat()
+            set_user_state(chat_id, f"awaiting_edit_cat_{field}:{category_name}|{now_iso}")
+            await telegram.answer_callback_query(callback_query_id, "")
+            if field == "emoji":
+                prompt = f"Send the new emoji for <b>{category_name}</b>:"
+            elif field == "name":
+                prompt = f"Send the new name for <b>{category_name}</b>:"
+            else:
+                max_order = len([c for c in get_category_list() if c["name"] != "Other"])
+                prompt = (
+                    f"Send the new order number for <b>{category_name}</b> "
+                    f"(1 = first item, {max_order} = last item)"
                 )
+            await telegram.send_message(chat_id, prompt)
 
         return {"ok": True}
 
@@ -150,7 +183,7 @@ async def webhook(request: Request):
         message = data["message"]
         chat_id = message["chat"]["id"]
 
-        if chat_id not in get_allowed_chat_ids():
+        if chat_id not in _get_allowed_chat_ids():
             return {"ok": True}
 
         text = message.get("text", "")
@@ -164,25 +197,25 @@ async def webhook(request: Request):
             elif text.startswith("/report"):
                 parts = text.split()
                 if len(parts) < 2:
-                    await telegram.send_message(chat_id, "Usage: <code>/report 20/04/26</code>")
+                    await telegram.send_message(chat_id, "Usage: <code>/report 2026-04-01</code>")
                 else:
                     arg = parts[1]
-                    if not re.match(r"^\d{2}/\d{2}/\d{2}$", arg):
-                        await telegram.send_message(chat_id, "Invalid date. Use <code>DD/MM/YY</code>, e.g. <code>/report 20/04/26</code>")
+                    if not re.match(r"^\d{4}-\d{2}-\d{2}$", arg):
+                        await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
                     else:
                         try:
-                            day_start = datetime.strptime(arg, "%d/%m/%y").replace(tzinfo=SGT)
+                            day_start = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=SGT)
                             day_end = day_start + timedelta(days=1)
-                            label = f"Daily Report ({day_start.strftime('%d/%m/%y')})"
+                            label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
                             transactions = get_transactions(chat_id, day_start, day_end)
-                            report = _format_daily_report(label, transactions)
+                            report = _format_report(label, transactions)
                             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
                         except ValueError:
-                            await telegram.send_message(chat_id, "Invalid date. Use <code>DD/MM/YY</code>, e.g. <code>/report 20/04/26</code>")
+                            await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
             elif text.startswith("/daily"):
                 start, end, label = _get_period_window("daily")
                 transactions = get_transactions(chat_id, start, end)
-                report = _format_daily_report(label, transactions)
+                report = _format_report(label, transactions)
                 await telegram.send_message(chat_id, f"<pre>{report}</pre>")
             elif text.startswith("/weekly"):
                 start, end, label = _get_period_window("weekly")
@@ -199,7 +232,7 @@ async def webhook(request: Request):
                 if tx:
                     delete_transaction(tx["_doc_id"])
                     ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
-                    date_str = ts.strftime("%d/%m/%y, %I:%M %p")
+                    date_str = ts.strftime("%d %b %Y, %I:%M %p")
                     await telegram.send_message(
                         chat_id,
                         f"🗑️ Deleted: <b>{tx['item']}</b>\n"
@@ -224,18 +257,18 @@ async def webhook(request: Request):
                 if len(parts) < 2:
                     await telegram.send_message(
                         chat_id,
-                        "Please provide a date.\nUsage: <code>/delete_past 20/04/26</code>",
+                        "Please provide a date.\nUsage: <code>/delete_past 2026-04-01</code>",
                     )
                 else:
                     date_str = parts[1]
-                    match = re.match(r"^\d{2}/\d{2}/\d{2}$", date_str)
+                    match = re.match(r"^\d{4}-\d{2}-\d{2}$", date_str)
                     if not match:
                         await telegram.send_message(
                             chat_id,
-                            "Invalid date format. Use <code>DD/MM/YY</code>, e.g. <code>/delete_past 20/04/26</code>",
+                            "Invalid date format. Use <code>YYYY-MM-DD</code>, e.g. <code>/delete_past 2026-04-01</code>",
                         )
                     else:
-                        start = datetime.strptime(date_str, "%d/%m/%y").replace(tzinfo=SGT)
+                        start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=SGT)
                         end = start + timedelta(days=1)
                         txs = get_transactions_with_ids(chat_id, start, end)
                         if txs:
@@ -254,17 +287,12 @@ async def webhook(request: Request):
                     await telegram.send_message(chat_id, "No categories to remove.")
                 else:
                     await telegram.send_remove_category_keyboard(chat_id, removable)
-            elif text == "/budget_report":
-                report = _format_budget_report(chat_id)
-                if not report:
-                    await telegram.send_message(
-                        chat_id,
-                        "No monthly budget found yet. You can set a monthly budget via the command /set_budget",
-                    )
+            elif text == "/edit_category":
+                categories = get_category_list()
+                if not categories:
+                    await telegram.send_message(chat_id, "No categories to edit.")
                 else:
-                    await telegram.send_message(chat_id, f"<pre>{report}</pre>")
-            elif text == "/set_budget":
-                await telegram.send_budget_category_keyboard(chat_id)
+                    await telegram.send_edit_category_keyboard(chat_id, categories)
             return {"ok": True}
 
         # Check user state for multi-step flows
@@ -304,31 +332,6 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, f"✅ Category {emoji} <b>{name}</b> added!")
             return {"ok": True}
 
-        # /set_budget: user sends the amount
-        elif user_state and user_state.startswith("awaiting_budget_amount:"):
-            remainder = user_state[len("awaiting_budget_amount:"):]
-            if "|" in remainder:
-                category, ts = remainder.rsplit("|", 1)
-                if _is_expired(ts):
-                    clear_user_state(chat_id)
-                    await telegram.send_message(chat_id, "⏰ The /set_budget request has expired. Please send /set_budget again.")
-                    return {"ok": True}
-            else:
-                category = remainder
-            raw = text.strip().lstrip("$")
-            try:
-                amount = float(raw)
-                if amount <= 0:
-                    raise ValueError
-            except ValueError:
-                await telegram.send_message(chat_id, "❌ Please enter a valid positive number (e.g. <code>500</code> or <code>1200.50</code>).")
-                return {"ok": True}
-            set_budget(chat_id, category, amount)
-            clear_user_state(chat_id)
-            await telegram.send_message(chat_id, f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>")
-            await telegram.send_budget_category_keyboard(chat_id)
-            return {"ok": True}
-
         # Inline ✏️ new category (new expense) step 1: name
         elif user_state == "awaiting_inline_cat_name":
             pending = get_pending(chat_id)
@@ -359,41 +362,6 @@ async def webhook(request: Request):
             emoji = text.strip()
             clear_user_state(chat_id)
             await handle_custom_category_input(chat_id, name, emoji)
-            return {"ok": True}
-
-        # Edit date: user sends new date
-        elif user_state and user_state.startswith("awaiting_date_change:"):
-            remainder = user_state[len("awaiting_date_change:"):]
-            if "|" in remainder:
-                tx_id, ts = remainder.rsplit("|", 1)
-                if _is_expired(ts):
-                    clear_user_state(chat_id)
-                    await telegram.send_message(chat_id, "⏰ The edit date option has expired. Tap 📅 Edit date again to retry.")
-                    return {"ok": True}
-            else:
-                tx_id = remainder
-            date_str = text.strip()
-            if not re.match(r"^\d{2}/\d{2}/\d{2}$", date_str):
-                await telegram.send_message(chat_id, "❌ Invalid format. Please send the date as <code>DD/MM/YY</code>.")
-                return {"ok": True}
-            try:
-                new_date = datetime.strptime(date_str, "%d/%m/%y")
-            except ValueError:
-                await telegram.send_message(chat_id, "❌ Invalid date. Please try again with <code>DD/MM/YY</code>.")
-                return {"ok": True}
-            tx = get_transaction_by_id(tx_id)
-            if not tx:
-                clear_user_state(chat_id)
-                await telegram.send_message(chat_id, "⚠️ Transaction not found.")
-                return {"ok": True}
-            old_ts = datetime.fromisoformat(tx["timestamp"])
-            new_ts = new_date.replace(hour=old_ts.hour, minute=old_ts.minute, second=old_ts.second, tzinfo=old_ts.tzinfo)
-            update_transaction_timestamp(tx_id, new_ts.isoformat())
-            clear_user_state(chat_id)
-            await telegram.send_message(
-                chat_id,
-                f"📅 Date updated for <b>{tx['item']}</b> → {new_date.strftime('%d/%m/%y')}",
-            )
             return {"ok": True}
 
         # Change category ✏️ new category step 1: name
@@ -436,6 +404,105 @@ async def webhook(request: Request):
             delete_pending_change(chat_id)
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to {emoji} <b>{name}</b> (new category saved)")
+            return {"ok": True}
+
+        # /edit_category — emoji
+        elif user_state and user_state.startswith("awaiting_edit_cat_emoji:"):
+            remainder = user_state[len("awaiting_edit_cat_emoji:"):]
+            if "|" in remainder:
+                category_name, ts = remainder.rsplit("|", 1)
+                if _is_expired(ts):
+                    clear_user_state(chat_id)
+                    await telegram.send_message(chat_id, "⏰ The /edit_category request has expired. Please send /edit_category again.")
+                    return {"ok": True}
+            else:
+                category_name = remainder
+            emoji = text.strip()
+            ok = update_category_emoji(category_name, emoji)
+            clear_user_state(chat_id)
+            if ok:
+                await telegram.send_message(chat_id, f"✅ Updated emoji for <b>{category_name}</b> → {emoji}")
+            else:
+                await telegram.send_message(chat_id, f"⚠️ Category <b>{category_name}</b> not found.")
+            return {"ok": True}
+
+        # /edit_category — name
+        elif user_state and user_state.startswith("awaiting_edit_cat_name:"):
+            remainder = user_state[len("awaiting_edit_cat_name:"):]
+            if "|" in remainder:
+                category_name, ts = remainder.rsplit("|", 1)
+                if _is_expired(ts):
+                    clear_user_state(chat_id)
+                    await telegram.send_message(chat_id, "⏰ The /edit_category request has expired. Please send /edit_category again.")
+                    return {"ok": True}
+            else:
+                category_name = remainder
+            new_name = text.strip().title()
+            if category_name == "Other":
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ The <b>Other</b> category cannot be renamed.")
+                return {"ok": True}
+            if not new_name:
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ Name cannot be empty.")
+                return {"ok": True}
+            if new_name == category_name:
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "ℹ️ Name unchanged.")
+                return {"ok": True}
+            existing = [c["name"] for c in get_category_list()]
+            if new_name in existing:
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, f"⚠️ Category <b>{new_name}</b> already exists.")
+                return {"ok": True}
+            ok, tx_count, map_count = rename_category(category_name, new_name)
+            clear_user_state(chat_id)
+            if ok:
+                msg = f"✅ Renamed <b>{category_name}</b> → <b>{new_name}</b>"
+                if tx_count or map_count:
+                    msg += f"\n🔄 Updated {tx_count} transaction(s) and {map_count} item mapping(s)."
+                await telegram.send_message(chat_id, msg)
+            else:
+                await telegram.send_message(chat_id, f"⚠️ Could not rename <b>{category_name}</b>.")
+            return {"ok": True}
+
+        # /edit_category — order
+        elif user_state and user_state.startswith("awaiting_edit_cat_order:"):
+            remainder = user_state[len("awaiting_edit_cat_order:"):]
+            if "|" in remainder:
+                category_name, ts = remainder.rsplit("|", 1)
+                if _is_expired(ts):
+                    clear_user_state(chat_id)
+                    await telegram.send_message(chat_id, "⏰ The /edit_category request has expired. Please send /edit_category again.")
+                    return {"ok": True}
+            else:
+                category_name = remainder
+            if category_name == "Other":
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ The <b>Other</b> category's order cannot be changed.")
+                return {"ok": True}
+            raw = text.strip()
+            try:
+                order = int(raw)
+            except ValueError:
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ Order must be an integer. Try /edit_category again.")
+                return {"ok": True}
+            non_other = [c for c in get_category_list() if c["name"] != "Other"]
+            max_order = len(non_other)
+            if order < 1 or order > max_order:
+                clear_user_state(chat_id)
+                await telegram.send_message(
+                    chat_id,
+                    f"⚠️ Order must be between <b>1</b> and <b>{max_order}</b>. Try /edit_category again.",
+                )
+                return {"ok": True}
+            ok = update_category_order(category_name, order)
+            clear_user_state(chat_id)
+            if ok:
+                await telegram.send_message(chat_id, f"✅ Updated order for <b>{category_name}</b> → {order}")
+            else:
+                await telegram.send_message(chat_id, f"⚠️ Category <b>{category_name}</b> not found.")
             return {"ok": True}
 
         parsed = parse_expense(text)
