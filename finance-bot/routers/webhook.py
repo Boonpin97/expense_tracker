@@ -172,8 +172,7 @@ async def webhook(request: Request):
                 max_order = len([c for c in get_category_list() if c["name"] != "Other"])
                 prompt = (
                     f"Send the new order number for <b>{category_name}</b> "
-                    f"(1 = top, max {max_order}). Existing categories at or below this "
-                    f"number will shift down by 1."
+                    f"(1 = first item, {max_order} = last item)"
                 )
             await telegram.send_message(chat_id, prompt)
 
