@@ -272,24 +272,29 @@ def update_category_emoji(name: str, emoji: str) -> bool:
 
 
 def update_category_order(name: str, order: int) -> bool:
-    """Move *name* to position *order*. All non-"Other" categories at position >=
-    order (except *name* itself) are shifted up by 1. "Other" stays at 9999."""
+    """Move *name* to position *order*, shifting only the categories between the
+    old and new position. "Other" stays at 9999 and is never shifted."""
     db = get_db()
     target_ref = db.collection("category_list").document(name)
     target_doc = target_ref.get()
     if not target_doc.exists:
         return False
+    old_order = target_doc.to_dict().get("order", 9998)
+    if old_order == order:
+        return True
 
     batch = db.batch()
     for doc in db.collection("category_list").stream():
         data = doc.to_dict()
-        if data.get("name") == "Other":
-            continue
-        if data.get("name") == name:
+        if data.get("name") == "Other" or data.get("name") == name:
             continue
         current = data.get("order", 9998)
-        if current >= order:
+        if order < old_order and order <= current < old_order:
+            # Moving target up: bump categories in [order, old_order-1] down by 1
             batch.update(doc.reference, {"order": current + 1})
+        elif order > old_order and old_order < current <= order:
+            # Moving target down: pull categories in [old_order+1, order] up by 1
+            batch.update(doc.reference, {"order": current - 1})
     batch.update(target_ref, {"order": order})
     batch.commit()
     return True
