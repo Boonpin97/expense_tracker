@@ -204,7 +204,7 @@ async def send_plan_keyboard(chat_id: int, plans: list[dict], action: str, promp
         return resp.json()
 
 
-async def send_plan_edit_field_keyboard(chat_id: int, plan_id: str) -> dict:
+async def send_plan_edit_field_keyboard(chat_id: int, plan_id: str, plan_type: str) -> dict:
     keyboard = [
         [
             {"text": "Name", "callback_data": f"editplanfield:item:{plan_id}"},
@@ -214,16 +214,35 @@ async def send_plan_edit_field_keyboard(chat_id: int, plan_id: str) -> dict:
             {"text": "Amount", "callback_data": f"editplanfield:amount:{plan_id}"},
             {"text": "Day", "callback_data": f"editplanfield:day:{plan_id}"},
         ],
-        [
-            {"text": "Months", "callback_data": f"editplanfield:months:{plan_id}"},
-        ],
     ]
+    if plan_type == "split_payment":
+        keyboard.append([
+            {"text": "Months", "callback_data": f"editplanfield:months:{plan_id}"},
+        ])
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             _api_url("sendMessage"),
             json={
                 "chat_id": chat_id,
                 "text": "Choose what to edit:",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_plan_delete_mode_keyboard(chat_id: int, plan_id: str, prompt: str) -> dict:
+    keyboard = [[
+        {"text": "Stop future only", "callback_data": f"plandelmode:future:{plan_id}"},
+        {"text": "Stop future + remove past", "callback_data": f"plandelmode:all:{plan_id}"},
+    ]]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
             },
@@ -292,7 +311,6 @@ async def set_my_commands() -> dict:
         {"command": "delete_recurring", "description": "Delete a recurring payment plan"},
         {"command": "split_payment", "description": "Split one payment across monthly charges"},
         {"command": "list_split_payment", "description": "List split payment plans"},
-        {"command": "edit_split_payment", "description": "Edit a split payment plan"},
         {"command": "delete_split_payment", "description": "Delete a split payment plan"},
     ]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
