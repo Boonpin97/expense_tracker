@@ -41,6 +41,23 @@ async def send_message_with_change_category(chat_id: int, text: str, tx_id: str,
         return resp.json()
 
 
+async def send_transaction_confirmation(
+    chat_id: int,
+    item: str,
+    amount: float,
+    category: str,
+    tx_id: str | None = None,
+    item_key: str | None = None,
+    note: str | None = None,
+) -> dict:
+    text = f"✅ <b>{item}</b> — ${amount:.2f} → {category}"
+    if note:
+        text += f"\n<i>{note}</i>"
+    if tx_id and item_key:
+        return await send_message_with_change_category(chat_id, text, tx_id, item_key)
+    return await send_message(chat_id, text)
+
+
 async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict:
     from services.firestore import get_category_list
 
@@ -168,6 +185,70 @@ async def send_edit_category_field_keyboard(chat_id: int, category_name: str, em
         return resp.json()
 
 
+async def send_plan_keyboard(chat_id: int, plans: list[dict], action: str, prompt: str) -> dict:
+    keyboard = []
+    for plan in plans:
+        plan_type = "Recurring" if plan["plan_type"] == "recurring" else "Split"
+        label = f"{plan_type}: {plan['item']}"
+        keyboard.append([{"text": label, "callback_data": f"{action}:{plan['id']}"}])
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_plan_edit_field_keyboard(chat_id: int, plan_id: str) -> dict:
+    keyboard = [
+        [
+            {"text": "Name", "callback_data": f"editplanfield:item:{plan_id}"},
+            {"text": "Category", "callback_data": f"editplanfield:category:{plan_id}"},
+        ],
+        [
+            {"text": "Amount", "callback_data": f"editplanfield:amount:{plan_id}"},
+            {"text": "Day", "callback_data": f"editplanfield:day:{plan_id}"},
+        ],
+        [
+            {"text": "Months", "callback_data": f"editplanfield:months:{plan_id}"},
+        ],
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "Choose what to edit:",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_plan_rewrite_keyboard(chat_id: int) -> dict:
+    keyboard = [[
+        {"text": "Future only", "callback_data": "planrewrite:future"},
+        {"text": "Rewrite past auto charges", "callback_data": "planrewrite:rewrite"},
+    ]]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "Should this edit affect only future charges, or also rewrite past auto-generated charges for this plan?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def set_webhook(url: str, secret_token: str) -> dict:
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -205,6 +286,14 @@ async def set_my_commands() -> dict:
         {"command": "new_category", "description": "Add a new spending category"},
         {"command": "remove_category", "description": "Remove a spending category"},
         {"command": "edit_category", "description": "Edit a category's emoji, name, or order"},
+        {"command": "set_recurring", "description": "Create a monthly recurring payment"},
+        {"command": "list_recurring", "description": "List recurring payment plans"},
+        {"command": "edit_recurring", "description": "Edit a recurring payment plan"},
+        {"command": "delete_recurring", "description": "Delete a recurring payment plan"},
+        {"command": "split_payment", "description": "Split one payment across monthly charges"},
+        {"command": "list_split_payment", "description": "List split payment plans"},
+        {"command": "edit_split_payment", "description": "Edit a split payment plan"},
+        {"command": "delete_split_payment", "description": "Delete a split payment plan"},
     ]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
