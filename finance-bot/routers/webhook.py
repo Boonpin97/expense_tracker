@@ -45,7 +45,12 @@ from services.firestore import (
     update_transaction_category,
 )
 from services.parser import parse_expense
-from services.payment_plans import compute_next_due_date, compute_split_amounts, plan_display_line
+from services.payment_plans import (
+    compute_next_due_date,
+    compute_split_amounts,
+    plan_display_line,
+    plan_occurrence_for_index,
+)
 from services.plan_manager import (
     create_plan_and_post_first_charge,
     pending_plan_expired,
@@ -141,6 +146,117 @@ def _format_split_edit_result(plan: dict, updates: dict, rewrite_mode: str) -> s
         lines.append("Past auto-generated charges for this plan were rebuilt to match the new schedule.")
 
     return "\n".join(lines)
+
+
+def _format_split_rewrite_projection(plan: dict, pending: dict) -> str:
+    field = pending.get("edit_field")
+    raw_value = pending.get("edit_value")
+    old_total = float(plan["total_amount"])
+    old_months = int(plan["installment_count"])
+    posted = int(plan.get("current_installment_number", 0))
+    old_base, old_final = compute_split_amounts(old_total, old_months)
+
+    new_total = old_total
+    new_months = old_months
+    if field == "amount" and raw_value is not None:
+        new_total = float(raw_value)
+    elif field == "months" and raw_value is not None:
+        new_months = int(raw_value)
+
+    new_base, new_final = compute_split_amounts(new_total, new_months)
+    old_posted_labels = [
+        plan_occurrence_for_index(plan, idx).due_date.strftime("%b %Y")
+        for idx in range(posted)
+    ]
+
+    projected_plan = {
+        **plan,
+        "total_amount": new_total,
+        "installment_count": new_months,
+        "base_installment_amount": new_base,
+        "final_installment_amount": new_final,
+    }
+    future_labels = [
+        plan_occurrence_for_index(projected_plan, idx).due_date.strftime("%b %Y")
+        for idx in range(posted, new_months)
+    ]
+    rewritten_labels = [
+        plan_occurrence_for_index(projected_plan, idx).due_date.strftime("%b %Y")
+        for idx in range(new_months)
+    ]
+
+    lines = [
+        "Should this edit affect only future charges, or also rewrite past auto-generated charges for this plan?",
+        "",
+        "<b>Projection</b>",
+        f"Current plan: <b>${old_total:.2f}</b> over <b>{old_months}</b> months.",
+    ]
+
+    if posted > 0:
+        lines.append(
+            f"Past posted installments now: <b>{', '.join(old_posted_labels)}</b> are currently "
+            f"<b>${old_base:.2f}</b>{f' to ${old_final:.2f} on the last month' if old_final != old_base else ''}."
+        )
+    else:
+        lines.append("No past installments have posted yet.")
+
+    lines.append(
+        f"Future schedule after this edit: <b>${new_base:.2f}</b> per month"
+        + (f", with the last month at <b>${new_final:.2f}</b>." if new_final != new_base else ".")
+    )
+    if future_labels:
+        lines.append(
+            f"Projected future months: <b>{', '.join(future_labels)}</b>."
+        )
+
+    if posted > 0:
+        lines.append("")
+        lines.append("<b>If you choose Future only</b>")
+        lines.append(
+            f"Past <b>{', '.join(old_posted_labels)}</b> stay unchanged at the old amount(s). "
+            f"Future <b>{', '.join(future_labels) if future_labels else 'months'}</b> use the new schedule."
+        )
+        if field == "months":
+            lines.append(
+                f"Example: posted charges remain at <b>${old_base:.2f}</b>; remaining charges follow the new {new_months}-month setup."
+            )
+        elif field == "amount":
+            lines.append(
+                f"Example: posted charges remain at <b>${old_base:.2f}</b>; remaining charges are recalculated from the new total <b>${new_total:.2f}</b>."
+            )
+
+        lines.append("")
+        lines.append("<b>If you choose Rewrite past auto charges</b>")
+        lines.append(
+            f"Past and future plan months <b>{', '.join(rewritten_labels)}</b> are all rebuilt to match the new schedule "
+            f"of <b>${new_base:.2f}</b>{f' and last month ${new_final:.2f}' if new_final != new_base else ''}."
+        )
+    else:
+        lines.append("")
+        lines.append("Since no installments have posted yet, both options will produce the same future schedule.")
+
+    return "\n".join(lines)
+
+
+async def _send_plan_rewrite_prompt(chat_id: int) -> None:
+    pending = get_pending_plan(chat_id)
+    if not pending or pending_plan_expired(pending):
+        delete_pending_plan(chat_id)
+        clear_user_state(chat_id)
+        await telegram.send_message(chat_id, "⏰ This plan edit has expired. Start the edit command again.")
+        return
+
+    plan = get_payment_plan(pending["selected_plan_id"])
+    if not plan:
+        delete_pending_plan(chat_id)
+        clear_user_state(chat_id)
+        await telegram.send_message(chat_id, "⚠️ That plan no longer exists.")
+        return
+
+    prompt = "Should this edit affect only future charges, or also rewrite past auto-generated charges for this plan?"
+    if plan["plan_type"] == "split_payment":
+        prompt = _format_split_rewrite_projection(plan, pending)
+    await telegram.send_plan_rewrite_keyboard(chat_id, prompt)
 
 
 async def _prompt_after_plan_category(chat_id: int, pending: dict) -> None:
@@ -250,7 +366,7 @@ async def _handle_plan_category_selection(chat_id: int, category: str, callback_
     if user_state == "awaiting_plan_edit_category":
         update_pending_plan(chat_id, edit_value=category)
         set_user_state(chat_id, "awaiting_plan_edit_rewrite")
-        await telegram.send_plan_rewrite_keyboard(chat_id)
+        await _send_plan_rewrite_prompt(chat_id)
         return
 
     await _prompt_after_plan_category(chat_id, {**pending, "category": category})
@@ -849,7 +965,7 @@ async def webhook(request: Request):
             if pending.get("edit_field") == "category":
                 update_pending_plan(chat_id, edit_value=name)
                 set_user_state(chat_id, "awaiting_plan_edit_rewrite")
-                await telegram.send_plan_rewrite_keyboard(chat_id)
+                await _send_plan_rewrite_prompt(chat_id)
             else:
                 await _prompt_after_plan_category(chat_id, {**pending, "category": name})
             return {"ok": True}
@@ -871,7 +987,7 @@ async def webhook(request: Request):
         if pending.get("edit_field") == "category":
             update_pending_plan(chat_id, edit_value=name)
             set_user_state(chat_id, "awaiting_plan_edit_rewrite")
-            await telegram.send_plan_rewrite_keyboard(chat_id)
+            await _send_plan_rewrite_prompt(chat_id)
         else:
             await _prompt_after_plan_category(chat_id, {**pending, "category": name})
         return {"ok": True}
@@ -904,7 +1020,7 @@ async def webhook(request: Request):
             raw_value = str(months)
         update_pending_plan(chat_id, edit_value=raw_value)
         set_user_state(chat_id, "awaiting_plan_edit_rewrite")
-        await telegram.send_plan_rewrite_keyboard(chat_id)
+        await _send_plan_rewrite_prompt(chat_id)
         return {"ok": True}
 
     parsed = parse_expense(text)

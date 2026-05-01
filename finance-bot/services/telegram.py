@@ -231,7 +231,7 @@ async def send_plan_edit_field_keyboard(chat_id: int, plan_id: str) -> dict:
         return resp.json()
 
 
-async def send_plan_rewrite_keyboard(chat_id: int) -> dict:
+async def send_plan_rewrite_keyboard(chat_id: int, prompt: str | None = None) -> dict:
     keyboard = [[
         {"text": "Future only", "callback_data": "planrewrite:future"},
         {"text": "Rewrite past auto charges", "callback_data": "planrewrite:rewrite"},
@@ -241,7 +241,7 @@ async def send_plan_rewrite_keyboard(chat_id: int) -> dict:
             _api_url("sendMessage"),
             json={
                 "chat_id": chat_id,
-                "text": "Should this edit affect only future charges, or also rewrite past auto-generated charges for this plan?",
+                "text": prompt or "Should this edit affect only future charges, or also rewrite past auto-generated charges for this plan?",
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
             },
