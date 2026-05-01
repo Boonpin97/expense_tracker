@@ -4,7 +4,14 @@ from typing import Optional
 
 from google.cloud import firestore
 
-from models.transaction import Transaction, PendingTransaction, CategoryMapping
+from models.transaction import (
+    Transaction,
+    PendingTransaction,
+    CategoryMapping,
+    PaymentPlan,
+    PendingPlan,
+)
+from services.payment_plans import compute_next_due_date
 
 SGT = timezone(timedelta(hours=8))
 
@@ -49,6 +56,36 @@ def save_transaction(tx: Transaction) -> str:
     return doc_ref.id
 
 
+def delete_transactions_for_plan(plan_id: str) -> int:
+    docs = (
+        get_db()
+        .collection("transactions")
+        .where("source_plan_id", "==", plan_id)
+        .stream()
+    )
+    count = 0
+    for doc in docs:
+        doc.reference.delete()
+        count += 1
+    return count
+
+
+def find_transaction_by_plan_occurrence(plan_id: str, occurrence_key: str) -> Optional[dict]:
+    docs = (
+        get_db()
+        .collection("transactions")
+        .where("source_plan_id", "==", plan_id)
+        .where("occurrence_key", "==", occurrence_key)
+        .limit(1)
+        .stream()
+    )
+    for doc in docs:
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        return data
+    return None
+
+
 def get_transactions(chat_id: int, start: datetime, end: datetime) -> list[dict]:
     start_iso = start.isoformat()
     end_iso = end.isoformat()
@@ -86,6 +123,25 @@ def get_pending(chat_id: int) -> Optional[dict]:
 
 def delete_pending(chat_id: int) -> None:
     get_db().collection("pending").document(str(chat_id)).delete()
+
+
+def save_pending_plan(data: PendingPlan) -> None:
+    get_db().collection("pending_plans").document(str(data.chat_id)).set(data.model_dump(exclude_none=True))
+
+
+def get_pending_plan(chat_id: int) -> Optional[dict]:
+    doc = get_db().collection("pending_plans").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def update_pending_plan(chat_id: int, **fields) -> None:
+    get_db().collection("pending_plans").document(str(chat_id)).set(fields, merge=True)
+
+
+def delete_pending_plan(chat_id: int) -> None:
+    get_db().collection("pending_plans").document(str(chat_id)).delete()
 
 
 # ── Transactions (extended) ───────────────────────────────────
@@ -380,3 +436,77 @@ def set_budget(chat_id: int, category: str, amount: float) -> None:
     get_db().collection("budgets").document(str(chat_id)).set(
         {category: amount}, merge=True
     )
+
+
+# —— Payment Plans ———————————————————————————————————————————————————————————————
+
+def save_payment_plan(plan: PaymentPlan) -> str:
+    doc_ref = get_db().collection("payment_plans").document()
+    plan.id = doc_ref.id
+    doc_ref.set(plan.model_dump())
+    return doc_ref.id
+
+
+def update_payment_plan(plan_id: str, **fields) -> None:
+    get_db().collection("payment_plans").document(plan_id).update(fields)
+
+
+def get_payment_plan(plan_id: str) -> Optional[dict]:
+    doc = get_db().collection("payment_plans").document(plan_id).get()
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        return data
+    return None
+
+
+def list_payment_plans(chat_id: int, plan_type: Optional[str] = None, statuses: Optional[list[str]] = None) -> list[dict]:
+    query = get_db().collection("payment_plans").where("chat_id", "==", chat_id)
+    docs = query.stream()
+    plans = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        if plan_type and data.get("plan_type") != plan_type:
+            continue
+        if statuses and data.get("status") not in statuses:
+            continue
+        plans.append(data)
+    plans.sort(key=lambda p: (p.get("status") != "active", p.get("next_due_date", "")))
+    return plans
+
+
+def list_due_payment_plans(today: datetime) -> list[dict]:
+    docs = (
+        get_db()
+        .collection("payment_plans")
+        .where("status", "==", "active")
+        .stream()
+    )
+    due_plans = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        next_due = datetime.fromisoformat(data["next_due_date"]).astimezone(SGT)
+        if next_due.date() == today.date():
+            due_plans.append(data)
+    return due_plans
+
+
+def cancel_payment_plan(plan_id: str) -> None:
+    update_payment_plan(plan_id, status="cancelled")
+
+
+def recalculate_payment_plan_next_due(plan_id: str) -> Optional[str]:
+    plan = get_payment_plan(plan_id)
+    if not plan:
+        return None
+    next_due = compute_next_due_date(plan)
+    status = "completed" if next_due is None and plan["plan_type"] == "split_payment" else plan.get("status", "active")
+    payload = {"status": status}
+    if next_due is not None:
+        payload["next_due_date"] = next_due.isoformat()
+    else:
+        payload["next_due_date"] = ""
+    update_payment_plan(plan_id, **payload)
+    return payload["next_due_date"]
