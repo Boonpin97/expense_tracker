@@ -51,11 +51,13 @@ async def handle_expense(chat_id: int, item: str, amount: float) -> None:
             chat_id=chat_id,
         )
         tx_id = firestore.save_transaction(tx)
-        await telegram.send_message_with_change_category(
+        await telegram.send_transaction_confirmation(
             chat_id,
-            f"✅ <b>{item}</b> — ${amount:.2f} → {category}",
-            tx_id,
-            item_key,
+            item,
+            amount,
+            category,
+            tx_id=tx_id,
+            item_key=item_key,
         )
         await _check_budget_exceeded(chat_id, category)
     else:
@@ -146,11 +148,8 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
     firestore.delete_pending(chat_id)
 
     await telegram.answer_callback_query(callback_query_id, f"Saved as {category}")
-    await telegram.send_message_with_change_category(
-        chat_id,
-        f"✅ <b>{item}</b> — ${amount:.2f} → {category}",
-        tx_id,
-        item_key,
+    await telegram.send_transaction_confirmation(
+        chat_id, item, amount, category, tx_id=tx_id, item_key=item_key
     )
     await _check_budget_exceeded(chat_id, category)
 
@@ -189,10 +188,13 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
     firestore.add_category_to_list(category, emoji)
     firestore.delete_pending(chat_id)
 
-    await telegram.send_message_with_change_category(
+    await telegram.send_transaction_confirmation(
         chat_id,
-        f"✅ <b>{item}</b> — ${amount:.2f} → {category} (new category saved)",
-        tx_id,
-        item_key,
+        item,
+        amount,
+        category,
+        tx_id=tx_id,
+        item_key=item_key,
+        note="New category saved",
     )
     await _check_budget_exceeded(chat_id, category)

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from services.firestore import get_category_list, get_transactions, get_budgets
+from services.plan_manager import process_due_plans
 from services.telegram import send_message
 
 router = APIRouter()
@@ -188,3 +189,15 @@ async def trigger_budget_report(
             await send_message(chat_id, f"<pre>{report}</pre>")
 
     return {"ok": True}
+
+
+@router.post("/trigger-recurring-payments")
+async def trigger_recurring_payments(
+    x_scheduler_token: str = Header(None, alias="X-Scheduler-Token"),
+):
+    expected_secret = os.getenv("SCHEDULER_SECRET", "")
+    if not expected_secret or x_scheduler_token != expected_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    processed = await process_due_plans()
+    return {"ok": True, "processed": processed}
