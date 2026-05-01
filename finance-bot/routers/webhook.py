@@ -20,6 +20,7 @@ from services.firestore import (
     delete_pending,
     delete_pending_change,
     delete_pending_plan,
+    delete_transactions_for_plan,
     delete_transaction,
     get_category_list,
     get_last_transaction,
@@ -395,6 +396,14 @@ async def _start_plan_delete(chat_id: int, plan_type: str) -> None:
     await telegram.send_plan_keyboard(chat_id, plans, action, f"Select a {label} plan to stop:")
 
 
+def _plan_delete_prompt(plan: dict) -> str:
+    return (
+        f"What do you want to do with this plan?\n\n{plan_display_line(plan)}\n\n"
+        "- <b>Stop future only</b>: keep past charges on record.\n"
+        "- <b>Stop future + remove past</b>: keep no auto-generated charges from this plan."
+    )
+
+
 @router.post("/webhook")
 async def webhook(request: Request):
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -525,7 +534,7 @@ async def webhook(request: Request):
                 prompt = f"Send the new order number for <b>{category_name}</b> (1 = first item, {max_order} = last item)"
             await telegram.send_message(chat_id, prompt)
 
-        elif callback_data.startswith("editrecurring:") or callback_data.startswith("editsplit:"):
+        elif callback_data.startswith("editrecurring:"):
             plan_id = callback_data.split(":", 1)[1]
             plan = get_payment_plan(plan_id)
             if not plan:
@@ -534,7 +543,7 @@ async def webhook(request: Request):
             start_pending_plan(chat_id, plan["plan_type"])
             update_pending_plan(chat_id, selected_plan_id=plan_id)
             await telegram.answer_callback_query(callback_query_id, "")
-            await telegram.send_plan_edit_field_keyboard(chat_id, plan_id)
+            await telegram.send_plan_edit_field_keyboard(chat_id, plan_id, plan["plan_type"])
 
         elif callback_data.startswith("delrecurring:") or callback_data.startswith("delsplit:"):
             plan_id = callback_data.split(":", 1)[1]
@@ -542,9 +551,30 @@ async def webhook(request: Request):
             if not plan:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 return {"ok": True}
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_plan_delete_mode_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
+
+        elif callback_data.startswith("plandelmode:"):
+            _, mode, plan_id = callback_data.split(":", 2)
+            plan = get_payment_plan(plan_id)
+            if not plan:
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                return {"ok": True}
             cancel_payment_plan(plan_id)
-            await telegram.answer_callback_query(callback_query_id, "Stopped")
-            await telegram.send_message(chat_id, f"🛑 Stopped future charges for:\n{plan_display_line(plan)}\nThe previous charges from this recurring payment is still on the record. Use the /delete commands to remove past records")
+            removed = 0
+            if mode == "all":
+                removed = delete_transactions_for_plan(plan_id)
+                await telegram.answer_callback_query(callback_query_id, "Stopped and removed")
+                await telegram.send_message(
+                    chat_id,
+                    f"🛑 Stopped future charges and removed <b>{removed}</b> past auto-generated charge(s) for:\n{plan_display_line(plan)}",
+                )
+            else:
+                await telegram.answer_callback_query(callback_query_id, "Stopped")
+                await telegram.send_message(
+                    chat_id,
+                    f"🛑 Stopped future charges for:\n{plan_display_line(plan)}\nPast charges from this plan are still on record.",
+                )
 
         elif callback_data.startswith("editplanfield:"):
             _, field, plan_id = callback_data.split(":", 2)
@@ -703,8 +733,6 @@ async def webhook(request: Request):
             await send_plan_list(chat_id, "split_payment")
         elif text == "/edit_recurring":
             await _start_plan_edit(chat_id, "recurring")
-        elif text == "/edit_split_payment":
-            await _start_plan_edit(chat_id, "split_payment")
         elif text == "/delete_recurring":
             await _start_plan_delete(chat_id, "recurring")
         elif text == "/delete_split_payment":
