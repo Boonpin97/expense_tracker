@@ -102,6 +102,47 @@ def _valid_months(text: str) -> int | None:
     return months if months > 0 else None
 
 
+def _split_plan_edit_notice() -> str:
+    return (
+        "Editing a split payment changes how the total is spread.\n"
+        "- <b>Future only</b>: past auto-generated charges stay as they are, and only future charges change.\n"
+        "- <b>Rewrite past auto charges</b>: past auto-generated charges for this plan are rebuilt so the whole plan stays consistent."
+    )
+
+
+def _format_split_edit_result(plan: dict, updates: dict, rewrite_mode: str) -> str:
+    old_total = float(plan["total_amount"])
+    old_months = int(plan["installment_count"])
+    posted = int(plan.get("current_installment_number", 0))
+    new_total = float(updates.get("total_amount", old_total))
+    new_months = int(updates.get("installment_count", old_months))
+    base, final_amount = compute_split_amounts(new_total, new_months)
+
+    lines = []
+    if "installment_count" in updates:
+        lines.append(
+            f"Months changed from <b>{old_months}</b> to <b>{new_months}</b>. "
+            f"The rebuilt schedule is <b>${base:.2f}</b> per month"
+            + (f", with the last month at <b>${final_amount:.2f}</b>." if final_amount != base else ".")
+        )
+    if "total_amount" in updates:
+        lines.append(
+            f"Total cost changed from <b>${old_total:.2f}</b> to <b>${new_total:.2f}</b>. "
+            f"The rebuilt schedule is <b>${base:.2f}</b> per month"
+            + (f", with the last month at <b>${final_amount:.2f}</b>." if final_amount != base else ".")
+        )
+
+    if rewrite_mode == "future":
+        lines.append(
+            f"Past auto-generated charges are unchanged. "
+            f"{posted} installment(s) already posted stay on record; only future installments use the new values."
+        )
+    else:
+        lines.append("Past auto-generated charges for this plan were rebuilt to match the new schedule.")
+
+    return "\n".join(lines)
+
+
 async def _prompt_after_plan_category(chat_id: int, pending: dict) -> None:
     if pending["plan_type"] == "recurring":
         set_user_state(chat_id, "awaiting_recurring_amount")
@@ -169,11 +210,18 @@ async def _apply_plan_edit(chat_id: int, rewrite_mode: str) -> None:
 
     update_payment_plan(plan["id"], **updates)
 
+    detail = ""
+    if merged["plan_type"] == "split_payment":
+        detail = _format_split_edit_result(plan, updates, rewrite_mode)
+
     if rewrite_mode == "rewrite":
         rewritten = await rewrite_plan_history(plan["id"])
         msg = f"✅ Plan updated and rewrote {rewritten} auto-generated charge(s)."
     else:
         msg = "✅ Plan updated for future charges."
+
+    if detail:
+        msg = f"{msg}\n{detail}"
 
     delete_pending_plan(chat_id)
     clear_user_state(chat_id)
@@ -215,7 +263,10 @@ async def _start_plan_edit(chat_id: int, plan_type: str) -> None:
         return
     action = "editrecurring" if plan_type == "recurring" else "editsplit"
     label = "recurring" if plan_type == "recurring" else "split payment"
-    await telegram.send_plan_keyboard(chat_id, plans, action, f"Select a {label} plan to edit:")
+    prompt = f"Select a {label} plan to edit:"
+    if plan_type == "split_payment":
+        prompt = f"{prompt}\n\n{_split_plan_edit_notice()}"
+    await telegram.send_plan_keyboard(chat_id, plans, action, prompt)
 
 
 async def _start_plan_delete(chat_id: int, plan_type: str) -> None:
@@ -377,7 +428,7 @@ async def webhook(request: Request):
                 return {"ok": True}
             cancel_payment_plan(plan_id)
             await telegram.answer_callback_query(callback_query_id, "Stopped")
-            await telegram.send_message(chat_id, f"🛑 Stopped future charges for:\n{plan_display_line(plan)}")
+            await telegram.send_message(chat_id, f"🛑 Stopped future charges for:\n{plan_display_line(plan)}\nThe previous charges from this recurring payment is still on the record. Use the /delete commands to remove past records")
 
         elif callback_data.startswith("editplanfield:"):
             _, field, plan_id = callback_data.split(":", 2)
@@ -403,9 +454,17 @@ async def webhook(request: Request):
                 set_user_state(chat_id, state)
                 prompts = {
                     "item": "Send the new transaction name:",
-                    "amount": "Send the new amount:",
+                    "amount": (
+                        "Send the new total amount.\n"
+                        "Example: changing $100 over 4 months to $50 will recalculate the schedule.\n"
+                        f"{_split_plan_edit_notice()}" if plan["plan_type"] == "split_payment" else "Send the new amount:"
+                    ),
                     "day": "Send the new charge day (1-31):",
-                    "months": "Send the new number of months:",
+                    "months": (
+                        "Send the new number of months.\n"
+                        "Example: changing $100 over 4 months to 2 months rebuilds the plan as $50 + $50.\n"
+                        f"{_split_plan_edit_notice()}"
+                    ),
                 }
                 await telegram.send_message(chat_id, prompts[field])
 
@@ -733,7 +792,7 @@ async def webhook(request: Request):
             return {"ok": True}
         update_pending_plan(chat_id, amount=amount)
         set_user_state(chat_id, "awaiting_recurring_day")
-        await telegram.send_message(chat_id, "Which day of the month should it charge? Send a number from 1 to 31.")
+        await telegram.send_message(chat_id, "Great, I will add it to the expense this month. Additionally, which day of the month should it charge from the next month onwards? Send a number from 1 to 31.")
         return {"ok": True}
 
     if user_state == "awaiting_recurring_day":
