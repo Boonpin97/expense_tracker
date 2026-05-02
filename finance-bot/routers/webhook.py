@@ -8,6 +8,7 @@ from routers.reports import _format_report, _get_period_window
 from services import telegram
 from services.categoriser import (
     PENDING_EXPIRY_SECONDS,
+    build_transaction_timestamp,
     handle_category_selection,
     handle_custom_category_input,
     handle_expense,
@@ -44,8 +45,9 @@ from services.firestore import (
     update_payment_plan,
     update_pending_plan,
     update_transaction_category,
+    update_transaction_timestamp,
 )
-from services.parser import parse_expense
+from services.parser import parse_expense, parse_transaction_date
 from services.payment_plans import (
     compute_next_due_date,
     compute_split_amounts,
@@ -106,6 +108,17 @@ def _valid_months(text: str) -> int | None:
     except ValueError:
         return None
     return months if months > 0 else None
+
+
+def _valid_transaction_date(text: str) -> str | None:
+    return parse_transaction_date(text)
+
+
+def _parse_user_date_or_none(text: str) -> datetime | None:
+    parsed = parse_transaction_date(text)
+    if parsed is None:
+        return None
+    return datetime.strptime(parsed, "%Y-%m-%d").replace(tzinfo=SGT)
 
 
 def _split_plan_edit_notice() -> str:
@@ -490,6 +503,20 @@ async def webhook(request: Request):
                 await telegram.answer_callback_query(callback_query_id, "")
                 await telegram.send_category_keyboard(chat_id, item_key, 0)
 
+        elif callback_data.startswith("chgdate:"):
+            tx_id = callback_data.split(":", 1)[1]
+            tx = get_transaction_by_id(tx_id)
+            if not tx:
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, "⚠️ That transaction no longer exists.")
+                return {"ok": True}
+
+            item_key = tx.get("item", "transaction")
+            save_pending_change(chat_id, tx_id, item_key)
+            set_user_state(chat_id, f"awaiting_change_date:{tx_id}")
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_message(chat_id, "Send the new transaction date in <code>DDMMYY</code> format, for example <code>130126</code>.")
+
         elif callback_data.startswith("editcat:"):
             remainder = callback_data[8:]
             if "|" in remainder:
@@ -638,21 +665,18 @@ async def webhook(request: Request):
         elif text.startswith("/report"):
             parts = text.split()
             if len(parts) < 2:
-                await telegram.send_message(chat_id, "Usage: <code>/report 2026-04-01</code>")
+                await telegram.send_message(chat_id, "Usage: <code>/report 130126</code>")
             else:
                 arg = parts[1]
-                if not re.match(r"^\d{4}-\d{2}-\d{2}$", arg):
-                    await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
+                day_start = _parse_user_date_or_none(arg)
+                if day_start is None:
+                    await telegram.send_message(chat_id, "Invalid date. Use <code>DDMMYY</code>, e.g. <code>/report 130126</code>")
                 else:
-                    try:
-                        day_start = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=SGT)
-                        day_end = day_start + timedelta(days=1)
-                        label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
-                        transactions = get_transactions(chat_id, day_start, day_end)
-                        report = _format_report(label, transactions)
-                        await telegram.send_message(chat_id, f"<pre>{report}</pre>")
-                    except ValueError:
-                        await telegram.send_message(chat_id, "Invalid date. Use <code>YYYY-MM-DD</code>, e.g. <code>/report 2026-04-01</code>")
+                    day_end = day_start + timedelta(days=1)
+                    label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
+                    transactions = get_transactions(chat_id, day_start, day_end)
+                    report = _format_report(label, transactions)
+                    await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         elif text.startswith("/daily"):
             start, end, label = _get_period_window("daily")
             transactions = get_transactions(chat_id, start, end)
@@ -689,14 +713,14 @@ async def webhook(request: Request):
         elif text.startswith("/delete_past"):
             parts = text.split()
             if len(parts) < 2:
-                await telegram.send_message(chat_id, "Please provide a date.\nUsage: <code>/delete_past 2026-04-01</code>")
+                await telegram.send_message(chat_id, "Please provide a date.\nUsage: <code>/delete_past 130126</code>")
             else:
                 date_str = parts[1]
-                match = re.match(r"^\d{4}-\d{2}-\d{2}$", date_str)
-                if not match:
-                    await telegram.send_message(chat_id, "Invalid date format. Use <code>YYYY-MM-DD</code>, e.g. <code>/delete_past 2026-04-01</code>")
+                start = _parse_user_date_or_none(date_str)
+                if start is None:
+                    await telegram.send_message(chat_id, "Invalid date format. Use <code>DDMMYY</code>, e.g. <code>/delete_past 130126</code>")
                 else:
-                    start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=SGT)
+                    date_str = start.strftime("%d/%m/%Y")
                     end = start + timedelta(days=1)
                     txs = get_transactions_with_ids(chat_id, start, end)
                     if txs:
@@ -821,6 +845,34 @@ async def webhook(request: Request):
             return {"ok": True}
         set_user_state(chat_id, f"awaiting_change_new_emoji:{name}:{tx_id}:{item_key}")
         await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
+        return {"ok": True}
+
+    if user_state and user_state.startswith("awaiting_change_date:"):
+        pending_change = get_pending_change(chat_id)
+        if pending_change and _is_expired(pending_change.get("timestamp", "")):
+            delete_pending_change(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, "⏰ The change date option has expired. Tap 🗓 Change date again to retry.")
+            return {"ok": True}
+
+        tx_id = user_state[len("awaiting_change_date:"):]
+        tx = get_transaction_by_id(tx_id)
+        if not tx:
+            delete_pending_change(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, "⚠️ That transaction no longer exists.")
+            return {"ok": True}
+
+        parsed_date = _valid_transaction_date(text)
+        if parsed_date is None:
+            await telegram.send_message(chat_id, "⚠️ Invalid date format. Use <code>DDMMYY</code>, for example <code>130126</code>.")
+            return {"ok": True}
+
+        new_timestamp = build_transaction_timestamp(parsed_date, tx["timestamp"])
+        update_transaction_timestamp(tx_id, new_timestamp)
+        delete_pending_change(chat_id)
+        clear_user_state(chat_id)
+        await telegram.send_message(chat_id, f"🗓 Updated <b>{tx['item']}</b> to <b>{parsed_date}</b>.")
         return {"ok": True}
 
     if user_state and user_state.startswith("awaiting_change_new_emoji:"):
@@ -1053,8 +1105,13 @@ async def webhook(request: Request):
 
     parsed = parse_expense(text)
     if parsed is None:
-        await telegram.send_message(chat_id, "🤔 I couldn't understand that. Try something like:\n<code>Coffee $10</code>\n<code>Grab 15.50</code>")
+        await telegram.send_message(chat_id, "🤔 I couldn't understand that. Try something like:\n<code>Coffee $10</code>\n<code>Grab 15.50</code>\n<code>Coffee $10 130126</code>")
         return {"ok": True}
 
-    await handle_expense(chat_id, parsed.item, parsed.amount)
+    await handle_expense(
+        chat_id,
+        parsed.item,
+        parsed.amount,
+        transaction_date=parsed.transaction_date,
+    )
     return {"ok": True}

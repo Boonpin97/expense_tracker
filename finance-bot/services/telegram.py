@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
+
 import httpx
 
 SGT = timezone(timedelta(hours=8))
@@ -26,8 +27,17 @@ async def send_message(chat_id: int, text: str, parse_mode: str = "HTML") -> dic
         return resp.json()
 
 
-async def send_message_with_change_category(chat_id: int, text: str, tx_id: str, item_key: str) -> dict:
+async def send_message_with_transaction_actions(
+    chat_id: int,
+    text: str,
+    tx_id: str,
+    item_key: str,
+    include_change_date: bool = False,
+) -> dict:
     keyboard = [[{"text": "🔄 Change category", "callback_data": f"chgcat:{tx_id}:{item_key}"}]]
+    if include_change_date:
+        keyboard[0].append({"text": "🗓 Change date", "callback_data": f"chgdate:{tx_id}"})
+
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             _api_url("sendMessage"),
@@ -49,26 +59,31 @@ async def send_transaction_confirmation(
     tx_id: str | None = None,
     item_key: str | None = None,
     note: str | None = None,
+    include_change_date: bool = False,
 ) -> dict:
     text = f"✅ <b>{item}</b> — ${amount:.2f} → {category}"
     if note:
         text += f"\n<i>{note}</i>"
     if tx_id and item_key:
-        return await send_message_with_change_category(chat_id, text, tx_id, item_key)
+        return await send_message_with_transaction_actions(
+            chat_id,
+            text,
+            tx_id,
+            item_key,
+            include_change_date=include_change_date,
+        )
     return await send_message(chat_id, text)
 
 
 async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict:
     from services.firestore import get_category_list
 
-    # Build buttons from category_list (already ordered, "Other" last)
     categories = []
     for cat in get_category_list():
         emoji = cat.get("emoji", "🏷️")
         name = cat["name"]
         categories.append((f"{emoji} {name}", f"cat:{name}"))
 
-    # Always add "New category" at the very end
     categories.append(("✏️ New category", "cat:__new__"))
 
     keyboard = []
@@ -295,7 +310,7 @@ async def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
 async def set_my_commands() -> dict:
     commands = [
         {"command": "start", "description": "Welcome message"},
-        {"command": "report", "description": "Daily report for a specific date (YYYY-MM-DD)"},
+        {"command": "report", "description": "Daily report for a specific date (DDMMYY)"},
         {"command": "daily", "description": "Today's spending summary"},
         {"command": "weekly", "description": "This week's spending summary"},
         {"command": "monthly", "description": "This month's spending summary"},
@@ -319,4 +334,3 @@ async def set_my_commands() -> dict:
             json={"commands": commands},
         )
         return resp.json()
-

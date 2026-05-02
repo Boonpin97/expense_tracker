@@ -103,13 +103,20 @@ def get_transactions(chat_id: int, start: datetime, end: datetime) -> list[dict]
 
 # ── Pending Transactions (temp storage for category selection) ─
 
-def save_pending(chat_id: int, item: str, amount: float) -> None:
-    now = datetime.now(SGT).isoformat()
+def save_pending(
+    chat_id: int,
+    item: str,
+    amount: float,
+    timestamp: str | None = None,
+    date_was_explicit: bool = False,
+) -> None:
+    now = timestamp or datetime.now(SGT).isoformat()
     pending = PendingTransaction(
         item=item,
         amount=amount,
         chat_id=chat_id,
         timestamp=now,
+        date_was_explicit=date_was_explicit,
     )
     get_db().collection("pending").document(str(chat_id)).set(pending.model_dump())
 
