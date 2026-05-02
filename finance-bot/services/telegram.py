@@ -344,6 +344,7 @@ async def set_my_commands() -> dict:
         {"command": "new_category", "description": "Add a new spending category"},
         {"command": "remove_category", "description": "Remove a spending category"},
         {"command": "edit_category", "description": "Edit a category's emoji, name, or order"},
+        {"command": "dashboard_account", "description": "Create or update dashboard username and password"},
         {"command": "set_recurring", "description": "Create a monthly recurring payment"},
         {"command": "list_recurring", "description": "List recurring payment plans"},
         {"command": "edit_recurring", "description": "Edit a recurring payment plan"},
