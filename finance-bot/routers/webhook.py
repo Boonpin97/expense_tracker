@@ -121,6 +121,40 @@ def _parse_user_date_or_none(text: str) -> datetime | None:
     return datetime.strptime(parsed, "%Y-%m-%d").replace(tzinfo=SGT)
 
 
+def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    absolute = year * 12 + (month - 1) + delta
+    return absolute // 12, absolute % 12 + 1
+
+
+def _get_month_window(year: int, month: int) -> tuple[datetime, datetime, str]:
+    start = datetime(year, month, 1, tzinfo=SGT)
+    next_year, next_month = _shift_month(year, month, 1)
+    end = datetime(next_year, next_month, 1, tzinfo=SGT)
+    label = f"Monthly Report ({start.strftime('%b %Y')})"
+    return start, end, label
+
+
+def _parse_month_input_or_none(text: str) -> tuple[int, int] | None:
+    cleaned = text.strip()
+    if not re.fullmatch(r"\d{4}", cleaned):
+        return None
+    month = int(cleaned[:2])
+    year = 2000 + int(cleaned[2:])
+    if not 1 <= month <= 12:
+        return None
+    return year, month
+
+
+def _build_monthly_report_buttons(now: datetime) -> list[tuple[str, str]]:
+    buttons = [("Current month", f"monthrep:{now.year}{now.month:02d}")]
+    for delta in range(-1, -4, -1):
+        year, month = _shift_month(now.year, now.month, delta)
+        label = datetime(year, month, 1, tzinfo=SGT).strftime("%B")
+        buttons.append((label, f"monthrep:{year}{month:02d}"))
+    buttons.append(("Earlier months", "monthrep:earlier"))
+    return buttons
+
+
 def _split_plan_edit_notice() -> str:
     return (
         "Editing a split payment changes how the total is spread.\n"
@@ -517,6 +551,29 @@ async def webhook(request: Request):
             await telegram.answer_callback_query(callback_query_id, "")
             await telegram.send_message(chat_id, "Send the new transaction date in <code>DDMMYY</code> format, for example <code>130126</code>.")
 
+        elif callback_data.startswith("monthrep:"):
+            target = callback_data.split(":", 1)[1]
+            await telegram.answer_callback_query(callback_query_id, "")
+            if target == "earlier":
+                set_user_state(chat_id, "awaiting_monthly_report_month")
+                await telegram.send_message(chat_id, "Enter the month in <code>MMYY</code> format, for example <code>0126</code>.")
+                return {"ok": True}
+
+            if not re.fullmatch(r"\d{6}", target):
+                await telegram.send_message(chat_id, "⚠️ Invalid month selection.")
+                return {"ok": True}
+
+            year = int(target[:4])
+            month = int(target[4:])
+            if not 1 <= month <= 12:
+                await telegram.send_message(chat_id, "⚠️ Invalid month selection.")
+                return {"ok": True}
+
+            start, end, label = _get_month_window(year, month)
+            transactions = get_transactions(chat_id, start, end)
+            report = _format_report(label, transactions)
+            await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+
         elif callback_data.startswith("editcat:"):
             remainder = callback_data[8:]
             if "|" in remainder:
@@ -688,10 +745,13 @@ async def webhook(request: Request):
             report = _format_report(label, transactions)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         elif text.startswith("/monthly"):
-            start, end, label = _get_period_window("monthly")
-            transactions = get_transactions(chat_id, start, end)
-            report = _format_report(label, transactions)
-            await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+            now = datetime.now(SGT)
+            buttons = _build_monthly_report_buttons(now)
+            await telegram.send_monthly_report_keyboard(
+                chat_id,
+                buttons,
+                "Choose a month for the report:",
+            )
         elif text.startswith("/delete_last"):
             tx = get_last_transaction(chat_id)
             if tx:
@@ -873,6 +933,20 @@ async def webhook(request: Request):
         delete_pending_change(chat_id)
         clear_user_state(chat_id)
         await telegram.send_message(chat_id, f"🗓 Updated <b>{tx['item']}</b> to <b>{parsed_date}</b>.")
+        return {"ok": True}
+
+    if user_state == "awaiting_monthly_report_month":
+        parsed_month = _parse_month_input_or_none(text)
+        if parsed_month is None:
+            await telegram.send_message(chat_id, "⚠️ Invalid month format. Use <code>MMYY</code>, for example <code>0126</code>.")
+            return {"ok": True}
+
+        year, month = parsed_month
+        clear_user_state(chat_id)
+        start, end, label = _get_month_window(year, month)
+        transactions = get_transactions(chat_id, start, end)
+        report = _format_report(label, transactions)
+        await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         return {"ok": True}
 
     if user_state and user_state.startswith("awaiting_change_new_emoji:"):

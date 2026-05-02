@@ -131,6 +131,30 @@ async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prom
         return resp.json()
 
 
+async def send_monthly_report_keyboard(chat_id: int, buttons: list[tuple[str, str]], prompt: str) -> dict:
+    keyboard = []
+    row = []
+    for label, callback_data in buttons:
+        row.append({"text": label, "callback_data": callback_data})
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) -> dict:
     """Send an inline keyboard for removing a category."""
     ts = datetime.now(SGT).isoformat()
