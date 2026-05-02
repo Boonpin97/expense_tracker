@@ -1,4 +1,5 @@
 import os
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -103,13 +104,20 @@ def get_transactions(chat_id: int, start: datetime, end: datetime) -> list[dict]
 
 # ── Pending Transactions (temp storage for category selection) ─
 
-def save_pending(chat_id: int, item: str, amount: float) -> None:
-    now = datetime.now(SGT).isoformat()
+def save_pending(
+    chat_id: int,
+    item: str,
+    amount: float,
+    timestamp: str | None = None,
+    date_was_explicit: bool = False,
+) -> None:
+    now = timestamp or datetime.now(SGT).isoformat()
     pending = PendingTransaction(
         item=item,
         amount=amount,
         chat_id=chat_id,
         timestamp=now,
+        date_was_explicit=date_was_explicit,
     )
     get_db().collection("pending").document(str(chat_id)).set(pending.model_dump())
 
@@ -419,6 +427,137 @@ def add_authorized_chat(chat_id: int) -> None:
 
 def remove_authorized_chat(chat_id: int) -> None:
     get_db().collection("authorized_chats").document(str(chat_id)).delete()
+
+
+# ── Dashboard Web Accounts ─────────────────────────────────────
+
+def save_pending_dashboard_account(chat_id: int, username: str | None = None) -> None:
+    payload = {
+        "timestamp": datetime.now(SGT).isoformat(),
+    }
+    if username is not None:
+        payload["username"] = username
+    get_db().collection("pending_dashboard_accounts").document(str(chat_id)).set(payload, merge=True)
+
+
+def get_pending_dashboard_account(chat_id: int) -> Optional[dict]:
+    doc = get_db().collection("pending_dashboard_accounts").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def delete_pending_dashboard_account(chat_id: int) -> None:
+    get_db().collection("pending_dashboard_accounts").document(str(chat_id)).delete()
+
+
+def get_web_account_by_chat_id(chat_id: int) -> Optional[dict]:
+    doc = get_db().collection("web_accounts").document(str(chat_id)).get()
+    if doc.exists:
+        data = doc.to_dict() or {}
+        data["chat_id"] = chat_id
+        return data
+    return None
+
+
+def get_account_by_username(username_normalized: str) -> Optional[dict]:
+    username_doc = get_db().collection("web_usernames").document(username_normalized).get()
+    if not username_doc.exists:
+        return None
+    chat_id = int((username_doc.to_dict() or {}).get("chat_id"))
+    return get_web_account_by_chat_id(chat_id)
+
+
+def upsert_web_account(chat_id: int, username: str, password_hash: str) -> None:
+    normalized = username.strip().lower()
+    now = datetime.now(SGT).isoformat()
+    db = get_db()
+    account_ref = db.collection("web_accounts").document(str(chat_id))
+    username_ref = db.collection("web_usernames").document(normalized)
+
+    existing_username_doc = username_ref.get()
+    if existing_username_doc.exists:
+        existing_chat_id = int((existing_username_doc.to_dict() or {}).get("chat_id"))
+        if existing_chat_id != chat_id:
+            raise ValueError("That username is already taken.")
+
+    current_account_doc = account_ref.get()
+    current_account = current_account_doc.to_dict() if current_account_doc.exists else {}
+    old_username = (current_account or {}).get("username_normalized")
+
+    batch = db.batch()
+    batch.set(
+        account_ref,
+        {
+            "chat_id": chat_id,
+            "username": username.strip(),
+            "username_normalized": normalized,
+            "password_hash": password_hash,
+            "active": True,
+            "updated_at": now,
+        },
+        merge=True,
+    )
+    batch.set(
+        username_ref,
+        {
+            "chat_id": chat_id,
+            "username": username.strip(),
+            "updated_at": now,
+        },
+    )
+    if old_username and old_username != normalized:
+        batch.delete(db.collection("web_usernames").document(old_username))
+    batch.commit()
+
+
+def save_web_session(token: str, chat_id: int, username: str, expires_at: datetime) -> None:
+    now = datetime.now(SGT).isoformat()
+    doc_id = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    get_db().collection("web_sessions").document(doc_id).set(
+        {
+            "chat_id": chat_id,
+            "username": username,
+            "expires_at": expires_at.isoformat(),
+            "created_at": now,
+        }
+    )
+
+
+def get_web_session(token: str) -> Optional[dict]:
+    doc_id = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    doc = get_db().collection("web_sessions").document(doc_id).get()
+    if not doc.exists:
+        return None
+    data = doc.to_dict() or {}
+    expires_at = data.get("expires_at")
+    if not expires_at:
+        doc.reference.delete()
+        return None
+    expiry_dt = datetime.fromisoformat(expires_at).astimezone(SGT)
+    if expiry_dt <= datetime.now(SGT):
+        doc.reference.delete()
+        return None
+    return data
+
+
+def delete_web_session(token: str) -> None:
+    doc_id = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    get_db().collection("web_sessions").document(doc_id).delete()
+
+
+def delete_web_sessions_for_chat(chat_id: int) -> int:
+    docs = (
+        get_db()
+        .collection("web_sessions")
+        .where("chat_id", "==", chat_id)
+        .stream()
+    )
+    count = 0
+    for doc in docs:
+        doc.reference.delete()
+        count += 1
+    return count
 
 
 # ── Budgets ───────────────────────────────────────────────────

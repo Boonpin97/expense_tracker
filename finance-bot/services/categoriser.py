@@ -2,6 +2,7 @@ import calendar
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from models.transaction import Transaction
 from services import firestore, telegram
@@ -38,16 +39,40 @@ def _normalise(item: str) -> str:
     return re.sub(r"[^\w\s]", "", item).strip().lower()
 
 
-async def handle_expense(chat_id: int, item: str, amount: float) -> None:
+def build_transaction_timestamp(
+    transaction_date: Optional[str] = None,
+    base_timestamp: Optional[str] = None,
+) -> str:
+    if base_timestamp:
+        base_dt = datetime.fromisoformat(base_timestamp).astimezone(SGT)
+    else:
+        base_dt = datetime.now(SGT)
+
+    if not transaction_date:
+        return base_dt.isoformat()
+
+    date_part = datetime.strptime(transaction_date, "%Y-%m-%d").date()
+    resolved = datetime.combine(date_part, base_dt.time()).replace(tzinfo=SGT)
+    return resolved.isoformat()
+
+
+async def handle_expense(
+    chat_id: int,
+    item: str,
+    amount: float,
+    transaction_date: Optional[str] = None,
+) -> None:
     item_key = _normalise(item)
     category = firestore.get_category(item_key)
+    timestamp = build_transaction_timestamp(transaction_date)
+    date_was_explicit = transaction_date is not None
 
     if category:
         tx = Transaction(
             item=item,
             amount=amount,
             category=category,
-            timestamp=datetime.now(SGT).isoformat(),
+            timestamp=timestamp,
             chat_id=chat_id,
         )
         tx_id = firestore.save_transaction(tx)
@@ -58,10 +83,17 @@ async def handle_expense(chat_id: int, item: str, amount: float) -> None:
             category,
             tx_id=tx_id,
             item_key=item_key,
+            include_change_date=not date_was_explicit,
         )
         await _check_budget_exceeded(chat_id, category)
     else:
-        firestore.save_pending(chat_id, item, amount)
+        firestore.save_pending(
+            chat_id,
+            item,
+            amount,
+            timestamp=timestamp,
+            date_was_explicit=date_was_explicit,
+        )
         await telegram.send_category_keyboard(chat_id, item, amount)
 
 
@@ -123,6 +155,7 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
     item = pending["item"]
     amount = pending["amount"]
     timestamp = pending["timestamp"]
+    include_change_date = not pending.get("date_was_explicit", False)
 
     created_at = datetime.fromisoformat(timestamp)
     if (datetime.now(SGT) - created_at).total_seconds() > PENDING_EXPIRY_SECONDS:
@@ -149,7 +182,13 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
 
     await telegram.answer_callback_query(callback_query_id, f"Saved as {category}")
     await telegram.send_transaction_confirmation(
-        chat_id, item, amount, category, tx_id=tx_id, item_key=item_key
+        chat_id,
+        item,
+        amount,
+        category,
+        tx_id=tx_id,
+        item_key=item_key,
+        include_change_date=include_change_date,
     )
     await _check_budget_exceeded(chat_id, category)
 
@@ -163,6 +202,7 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
     item = pending["item"]
     amount = pending["amount"]
     timestamp = pending["timestamp"]
+    include_change_date = not pending.get("date_was_explicit", False)
 
     created_at = datetime.fromisoformat(timestamp)
     if (datetime.now(SGT) - created_at).total_seconds() > PENDING_EXPIRY_SECONDS:
@@ -196,5 +236,6 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
         tx_id=tx_id,
         item_key=item_key,
         note="New category saved",
+        include_change_date=include_change_date,
     )
     await _check_budget_exceeded(chat_id, category)
