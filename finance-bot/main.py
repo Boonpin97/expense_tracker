@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Request
-from routers import webhook, reports
+from fastapi.middleware.cors import CORSMiddleware
+from routers import webhook, reports, dashboard
 from services import telegram
 from services.firestore import start_authorized_chats_listener
 
@@ -31,8 +32,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Telegram Finance Bot", lifespan=lifespan)
 
+default_origins = [
+    "https://budget-bot-123.web.app",
+    "https://budget-bot-123.firebaseapp.com",
+    "http://localhost:3000",
+    "http://localhost:5000",
+]
+configured_origins = [
+    origin.strip()
+    for origin in os.getenv("DASHBOARD_WEB_ORIGINS", "").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=configured_origins or default_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(webhook.router)
 app.include_router(reports.router)
+app.include_router(dashboard.router)
 
 
 @app.middleware("http")

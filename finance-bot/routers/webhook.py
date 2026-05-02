@@ -13,17 +13,20 @@ from services.categoriser import (
     handle_custom_category_input,
     handle_expense,
 )
+from services.dashboard_auth import hash_password, is_valid_username, validate_password
 from services.firestore import (
     add_category_to_list,
     cancel_payment_plan,
     clear_user_state,
     delete_category,
+    delete_pending_dashboard_account,
     delete_pending,
     delete_pending_change,
     delete_pending_plan,
     delete_transactions_for_plan,
     delete_transaction,
     get_category_list,
+    get_pending_dashboard_account,
     get_last_transaction,
     get_payment_plan,
     get_pending,
@@ -38,8 +41,11 @@ from services.firestore import (
     remove_category_from_list,
     rename_category,
     save_category,
+    save_pending_dashboard_account,
     save_pending_change,
     set_user_state,
+    upsert_web_account,
+    delete_web_sessions_for_chat,
     update_category_emoji,
     update_category_order,
     update_payment_plan,
@@ -803,6 +809,13 @@ async def webhook(request: Request):
                 await telegram.send_message(chat_id, "No categories to edit.")
             else:
                 await telegram.send_edit_category_keyboard(chat_id, categories)
+        elif text == "/dashboard_account":
+            save_pending_dashboard_account(chat_id)
+            set_user_state(chat_id, "awaiting_dashboard_username")
+            await telegram.send_message(
+                chat_id,
+                "Choose a dashboard username using 3-32 letters, numbers, dots, underscores, or dashes.",
+            )
         elif text == "/set_recurring":
             start_pending_plan(chat_id, "recurring")
             set_user_state(chat_id, "awaiting_recurring_item")
@@ -824,6 +837,70 @@ async def webhook(request: Request):
         return {"ok": True}
 
     user_state = get_user_state(chat_id)
+
+    if user_state == "awaiting_dashboard_username":
+        pending = get_pending_dashboard_account(chat_id)
+        if pending and _is_expired(pending.get("timestamp", "")):
+            delete_pending_dashboard_account(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /dashboard_account again.")
+            return {"ok": True}
+
+        username = text.strip()
+        if not is_valid_username(username):
+            await telegram.send_message(
+                chat_id,
+                "⚠️ Username must be 3-32 characters using only letters, numbers, dots, underscores, or dashes.",
+            )
+            return {"ok": True}
+
+        save_pending_dashboard_account(chat_id, username=username)
+        set_user_state(chat_id, "awaiting_dashboard_password")
+        await telegram.send_message(
+            chat_id,
+            "Now send the dashboard password you want to use. It will be hashed before storing.",
+        )
+        return {"ok": True}
+
+    if user_state == "awaiting_dashboard_password":
+        pending = get_pending_dashboard_account(chat_id)
+        if not pending or _is_expired(pending.get("timestamp", "")):
+            delete_pending_dashboard_account(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /dashboard_account again.")
+            return {"ok": True}
+
+        username = pending.get("username", "").strip()
+        if not username:
+            delete_pending_dashboard_account(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, "⚠️ Username setup was lost. Send /dashboard_account again.")
+            return {"ok": True}
+
+        password_error = validate_password(text)
+        if password_error:
+            await telegram.send_message(chat_id, f"⚠️ {password_error}")
+            return {"ok": True}
+
+        try:
+            upsert_web_account(
+                chat_id=chat_id,
+                username=username,
+                password_hash=hash_password(text),
+            )
+        except ValueError as exc:
+            await telegram.send_message(chat_id, f"⚠️ {exc}")
+            return {"ok": True}
+
+        delete_web_sessions_for_chat(chat_id)
+        delete_pending_dashboard_account(chat_id)
+        clear_user_state(chat_id)
+        await telegram.send_message(
+            chat_id,
+            "✅ Dashboard login saved.\n"
+            "Use your username and password at <a href=\"https://budget-bot-123.web.app\">budget-bot-123.web.app</a>.",
+        )
+        return {"ok": True}
 
     if user_state and user_state.startswith("awaiting_new_cat_name|"):
         ts = user_state[len("awaiting_new_cat_name|"):]
