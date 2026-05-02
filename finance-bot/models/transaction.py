@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field
-from datetime import datetime
 from typing import Optional
 
 
@@ -21,6 +20,7 @@ class PendingTransaction(BaseModel):
     amount: float
     chat_id: int
     timestamp: str
+    date_was_explicit: bool = False
 
 
 class CategoryMapping(BaseModel):
@@ -33,6 +33,7 @@ class CategoryMapping(BaseModel):
 class ParsedExpense(BaseModel):
     item: str
     amount: float
+    transaction_date: Optional[str] = None
 
 
 class PaymentPlan(BaseModel):
