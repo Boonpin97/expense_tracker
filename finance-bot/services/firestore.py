@@ -482,11 +482,23 @@ def get_web_account_by_chat_id(chat_id: int) -> Optional[dict]:
     return None
 
 
+def _extract_chat_id(data: dict | None) -> Optional[int]:
+    if not data:
+        return None
+    raw_chat_id = data.get("chat_id")
+    try:
+        return int(raw_chat_id)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_account_by_username(username_normalized: str) -> Optional[dict]:
     username_doc = get_db().collection("web_usernames").document(username_normalized).get()
     if not username_doc.exists:
         return None
-    chat_id = int((username_doc.to_dict() or {}).get("chat_id"))
+    chat_id = _extract_chat_id(username_doc.to_dict())
+    if chat_id is None:
+        return None
     return get_web_account_by_chat_id(chat_id)
 
 
@@ -499,7 +511,9 @@ def upsert_web_account(chat_id: int, username: str, password_hash: str) -> None:
 
     existing_username_doc = username_ref.get()
     if existing_username_doc.exists:
-        existing_chat_id = int((existing_username_doc.to_dict() or {}).get("chat_id"))
+        existing_chat_id = _extract_chat_id(existing_username_doc.to_dict())
+        if existing_chat_id is None:
+            raise ValueError("That username is already taken.")
         if existing_chat_id != chat_id:
             raise ValueError("That username is already taken.")
 
