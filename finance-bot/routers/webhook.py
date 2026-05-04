@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
-from routers.reports import _format_report, _get_period_window
+from routers.reports import _format_daily_report, _format_report, _get_period_window
 from services import telegram
 from services.categoriser import (
     PENDING_EXPIRY_SECONDS,
@@ -12,6 +12,7 @@ from services.categoriser import (
     handle_category_selection,
     handle_custom_category_input,
     handle_expense,
+    pending_expired,
 )
 from services.dashboard_auth import hash_password, is_valid_username, validate_password
 from services.firestore import (
@@ -156,12 +157,12 @@ def _parse_month_input_or_none(text: str) -> tuple[int, int] | None:
 
 
 def _build_monthly_report_buttons(now: datetime) -> list[tuple[str, str]]:
-    buttons = [("Current month", f"monthrep:{now.year}{now.month:02d}")]
+    buttons = [("Earlier months", "monthrep:earlier")]
     for delta in range(-1, -4, -1):
         year, month = _shift_month(now.year, now.month, delta)
-        label = datetime(year, month, 1, tzinfo=SGT).strftime("%B")
+        label = datetime(year, month, 1, tzinfo=SGT).strftime("%b %Y")
         buttons.append((label, f"monthrep:{year}{month:02d}"))
-    buttons.append(("Earlier months", "monthrep:earlier"))
+    buttons.append(("Current month", f"monthrep:{now.year}{now.month:02d}"))
     return buttons
 
 
@@ -538,6 +539,31 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
     return True
 
 
+def _split_expiring_callback(value: str) -> tuple[str, str | None]:
+    if "|" not in value:
+        return value, None
+    body, ts = value.split("|", 1)
+    return body, ts
+
+
+async def _reject_expired_callback(chat_id: int, callback_query_id: str, ts: str | None, message: str) -> bool:
+    if ts and _is_expired(ts):
+        await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+        await telegram.send_message(chat_id, message)
+        return True
+    return False
+
+
+async def _get_pending_plan_or_expire(chat_id: int, message: str) -> dict | None:
+    pending = get_pending_plan(chat_id)
+    if pending_plan_expired(pending):
+        delete_pending_plan(chat_id)
+        clear_user_state(chat_id)
+        await telegram.send_message(chat_id, message)
+        return None
+    return pending
+
+
 @router.post("/webhook")
 async def webhook(request: Request):
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -639,10 +665,18 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, "Send the new transaction date in <code>DDMMYY</code> format, for example <code>130126</code>.")
 
         elif callback_data.startswith("monthrep:"):
-            target = callback_data.split(":", 1)[1]
+            remainder = callback_data.split(":", 1)[1]
+            if "|" in remainder:
+                target, ts = remainder.split("|", 1)
+                if _is_expired(ts):
+                    await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                    await telegram.send_message(chat_id, "⏰ These month options have expired. Please send /monthly again.")
+                    return {"ok": True}
+            else:
+                target = remainder
             await telegram.answer_callback_query(callback_query_id, "")
             if target == "earlier":
-                set_user_state(chat_id, "awaiting_monthly_report_month")
+                set_user_state(chat_id, f"awaiting_monthly_report_month|{datetime.now(SGT).isoformat()}")
                 await telegram.send_message(chat_id, "Enter the month in <code>MMYY</code> format, for example <code>0126</code>.")
                 return {"ok": True}
 
@@ -659,6 +693,32 @@ async def webhook(request: Request):
             start, end, label = _get_month_window(year, month)
             transactions = get_transactions(chat_id, start, end)
             report = _format_report(label, transactions)
+            await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+
+        elif callback_data.startswith("dailyrep:"):
+            remainder = callback_data.split(":", 1)[1]
+            if "|" in remainder:
+                target, ts = remainder.split("|", 1)
+                if _is_expired(ts):
+                    await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                    await telegram.send_message(chat_id, "⏰ These daily report options have expired. Please send /daily again.")
+                    return {"ok": True}
+            else:
+                target = remainder
+            await telegram.answer_callback_query(callback_query_id, "")
+
+            if target == "past":
+                set_user_state(chat_id, f"awaiting_daily_report_date|{datetime.now(SGT).isoformat()}")
+                await telegram.send_message(chat_id, "Enter the date in <code>DDMMYY</code> format, for example <code>130126</code>.")
+                return {"ok": True}
+
+            if target != "today":
+                await telegram.send_message(chat_id, "⚠️ Invalid daily report selection.")
+                return {"ok": True}
+
+            start, end, label = _get_period_window("daily")
+            transactions = get_transactions(chat_id, start, end)
+            report = _format_daily_report(label, transactions)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
 
         elif callback_data.startswith("editcat:"):
@@ -706,7 +766,9 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, prompt)
 
         elif callback_data.startswith("editrecurring:"):
-            plan_id = callback_data.split(":", 1)[1]
+            plan_id, ts = _split_expiring_callback(callback_data.split(":", 1)[1])
+            if await _reject_expired_callback(chat_id, callback_query_id, ts, "⏰ These plan edit options have expired. Please send /edit_recurring again."):
+                return {"ok": True}
             plan = get_payment_plan(plan_id)
             if not plan:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
@@ -717,7 +779,10 @@ async def webhook(request: Request):
             await telegram.send_plan_edit_field_keyboard(chat_id, plan_id, plan["plan_type"])
 
         elif callback_data.startswith("delrecurring:") or callback_data.startswith("delsplit:"):
-            plan_id = callback_data.split(":", 1)[1]
+            plan_id, ts = _split_expiring_callback(callback_data.split(":", 1)[1])
+            command = "/delete_recurring" if callback_data.startswith("delrecurring:") else "/delete_split_payment"
+            if await _reject_expired_callback(chat_id, callback_query_id, ts, f"⏰ These plan delete options have expired. Please send {command} again."):
+                return {"ok": True}
             plan = get_payment_plan(plan_id)
             if not plan:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
@@ -726,7 +791,10 @@ async def webhook(request: Request):
             await telegram.send_plan_delete_mode_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
 
         elif callback_data.startswith("plandelmode:"):
-            _, mode, plan_id = callback_data.split(":", 2)
+            _, mode, plan_id_raw = callback_data.split(":", 2)
+            plan_id, ts = _split_expiring_callback(plan_id_raw)
+            if await _reject_expired_callback(chat_id, callback_query_id, ts, "⏰ These plan delete options have expired. Please send the delete command again."):
+                return {"ok": True}
             plan = get_payment_plan(plan_id)
             if not plan:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
@@ -749,6 +817,13 @@ async def webhook(request: Request):
 
         elif callback_data.startswith("editplanfield:"):
             _, field, plan_id = callback_data.split(":", 2)
+            pending = get_pending_plan(chat_id)
+            if not pending or pending_plan_expired(pending):
+                delete_pending_plan(chat_id)
+                clear_user_state(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                await telegram.send_message(chat_id, "⏰ This plan edit has expired. Start the edit command again.")
+                return {"ok": True}
             plan = get_payment_plan(plan_id)
             if not plan:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
@@ -806,26 +881,8 @@ async def webhook(request: Request):
     if text.startswith("/"):
         if text == "/start":
             await telegram.send_message(chat_id, "👋 Welcome! Send me an expense like <b>Coffee $10</b> and I'll track it for you.")
-        elif text.startswith("/report"):
-            parts = text.split()
-            if len(parts) < 2:
-                await telegram.send_message(chat_id, "Usage: <code>/report 130126</code>")
-            else:
-                arg = parts[1]
-                day_start = _parse_user_date_or_none(arg)
-                if day_start is None:
-                    await telegram.send_message(chat_id, "Invalid date. Use <code>DDMMYY</code>, e.g. <code>/report 130126</code>")
-                else:
-                    day_end = day_start + timedelta(days=1)
-                    label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
-                    transactions = get_transactions(chat_id, day_start, day_end)
-                    report = _format_report(label, transactions)
-                    await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         elif text.startswith("/daily"):
-            start, end, label = _get_period_window("daily")
-            transactions = get_transactions(chat_id, start, end)
-            report = _format_report(label, transactions)
-            await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+            await telegram.send_daily_report_keyboard(chat_id, "Choose a daily report:")
         elif text.startswith("/weekly"):
             start, end, label = _get_period_window("weekly")
             transactions = get_transactions(chat_id, start, end)
@@ -955,7 +1012,7 @@ async def webhook(request: Request):
 
     if user_state == "awaiting_inline_cat_name":
         pending = get_pending(chat_id)
-        if pending and _is_expired(pending.get("timestamp", "")):
+        if pending and pending_expired(pending):
             delete_pending(chat_id)
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, "⏰ This flow has expired. Please resend the expense to try again.")
@@ -972,7 +1029,7 @@ async def webhook(request: Request):
 
     if user_state and user_state.startswith("awaiting_inline_cat_emoji:"):
         pending = get_pending(chat_id)
-        if pending and _is_expired(pending.get("timestamp", "")):
+        if pending and pending_expired(pending):
             delete_pending(chat_id)
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, "⏰ This flow has expired. Please resend the expense to try again.")
@@ -1032,7 +1089,13 @@ async def webhook(request: Request):
         await telegram.send_message(chat_id, f"🗓 Updated <b>{tx['item']}</b> to <b>{parsed_date}</b>.")
         return {"ok": True}
 
-    if user_state == "awaiting_monthly_report_month":
+    if user_state and user_state.startswith("awaiting_monthly_report_month"):
+        if "|" in user_state:
+            ts = user_state.split("|", 1)[1]
+            if _is_expired(ts):
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⏰ The /monthly request has expired. Please send /monthly again.")
+                return {"ok": True}
         parsed_month = _parse_month_input_or_none(text)
         if parsed_month is None:
             await telegram.send_message(chat_id, "⚠️ Invalid month format. Use <code>MMYY</code>, for example <code>0126</code>.")
@@ -1043,6 +1106,26 @@ async def webhook(request: Request):
         start, end, label = _get_month_window(year, month)
         transactions = get_transactions(chat_id, start, end)
         report = _format_report(label, transactions)
+        await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+        return {"ok": True}
+
+    if user_state and user_state.startswith("awaiting_daily_report_date"):
+        if "|" in user_state:
+            ts = user_state.split("|", 1)[1]
+            if _is_expired(ts):
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⏰ The /daily request has expired. Please send /daily again.")
+                return {"ok": True}
+        day_start = _parse_user_date_or_none(text)
+        if day_start is None:
+            await telegram.send_message(chat_id, "⚠️ Invalid date format. Use <code>DDMMYY</code>, for example <code>130126</code>.")
+            return {"ok": True}
+
+        day_end = day_start + timedelta(days=1)
+        label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
+        transactions = get_transactions(chat_id, day_start, day_end)
+        clear_user_state(chat_id)
+        report = _format_daily_report(label, transactions)
         await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         return {"ok": True}
 
@@ -1141,18 +1224,27 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if user_state == "awaiting_recurring_item":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
         update_pending_plan(chat_id, item=text.strip())
         set_user_state(chat_id, "awaiting_plan_category")
         await telegram.send_category_keyboard(chat_id, text.strip(), 0)
         return {"ok": True}
 
     if user_state == "awaiting_split_item":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
         update_pending_plan(chat_id, item=text.strip())
         set_user_state(chat_id, "awaiting_plan_category")
         await telegram.send_category_keyboard(chat_id, text.strip(), 0)
         return {"ok": True}
 
     if user_state == "awaiting_recurring_amount":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
         amount = _valid_amount(text)
         if amount is None:
             await telegram.send_message(chat_id, "⚠️ Amount must be a positive number.")
@@ -1163,6 +1255,9 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if user_state == "awaiting_recurring_day":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
         day = _valid_day(text)
         if day is None:
             await telegram.send_message(chat_id, "⚠️ Day must be a number from 1 to 31.")
@@ -1173,6 +1268,9 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if user_state == "awaiting_split_total":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
         amount = _valid_amount(text)
         if amount is None:
             await telegram.send_message(chat_id, "⚠️ Amount must be a positive number.")
@@ -1183,6 +1281,9 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if user_state == "awaiting_split_day":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
         day = _valid_day(text)
         if day is None:
             await telegram.send_message(chat_id, "⚠️ Day must be a number from 1 to 31.")
@@ -1193,6 +1294,9 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if user_state == "awaiting_split_count":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
         months = _valid_months(text)
         if months is None:
             await telegram.send_message(chat_id, "⚠️ Months must be a positive integer.")

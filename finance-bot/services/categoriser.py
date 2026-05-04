@@ -56,6 +56,11 @@ def build_transaction_timestamp(
     return resolved.isoformat()
 
 
+def pending_expired(pending: dict) -> bool:
+    created_at = pending.get("created_at") or pending.get("timestamp")
+    return (datetime.now(SGT) - datetime.fromisoformat(created_at)).total_seconds() > PENDING_EXPIRY_SECONDS
+
+
 async def handle_expense(
     chat_id: int,
     item: str,
@@ -115,7 +120,7 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
             if not pending:
                 await telegram.answer_callback_query(callback_query_id, "No pending expense found.")
                 return
-            if (datetime.now(SGT) - datetime.fromisoformat(pending["timestamp"])).total_seconds() > PENDING_EXPIRY_SECONDS:
+            if pending_expired(pending):
                 firestore.delete_pending(chat_id)
                 await telegram.answer_callback_query(callback_query_id, "⏰ This selection has expired.")
                 await telegram.send_message(
@@ -157,8 +162,7 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
     timestamp = pending["timestamp"]
     include_change_date = not pending.get("date_was_explicit", False)
 
-    created_at = datetime.fromisoformat(timestamp)
-    if (datetime.now(SGT) - created_at).total_seconds() > PENDING_EXPIRY_SECONDS:
+    if pending_expired(pending):
         firestore.delete_pending(chat_id)
         await telegram.answer_callback_query(callback_query_id, "⏰ This selection has expired.")
         await telegram.send_message(
@@ -204,8 +208,7 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
     timestamp = pending["timestamp"]
     include_change_date = not pending.get("date_was_explicit", False)
 
-    created_at = datetime.fromisoformat(timestamp)
-    if (datetime.now(SGT) - created_at).total_seconds() > PENDING_EXPIRY_SECONDS:
+    if pending_expired(pending):
         firestore.delete_pending(chat_id)
         await telegram.send_message(
             chat_id,

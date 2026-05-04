@@ -80,6 +80,7 @@ if "httpx" not in sys.modules:
 
 from services.payment_plans import clamp_day, compute_split_amounts, compute_next_due_date
 from services.plan_manager import process_due_plans
+from services import telegram
 
 SGT = timezone(timedelta(hours=8))
 
@@ -107,6 +108,50 @@ class PaymentPlanHelperTests(unittest.TestCase):
             "final_installment_amount": 25.0,
         }
         self.assertIsNone(compute_next_due_date(plan))
+
+    def test_plan_keyboards_add_expiry_timestamp(self):
+        captured = {}
+
+        class FakeResponse:
+            def json(self):
+                return {}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *_args, **kwargs):
+                captured.update(kwargs["json"])
+                return FakeResponse()
+
+        original_client = telegram.httpx.AsyncClient
+        telegram.httpx.AsyncClient = FakeAsyncClient
+        try:
+            import asyncio
+
+            asyncio.run(
+                telegram.send_plan_keyboard(
+                    123,
+                    [{"id": "plan-1", "plan_type": "recurring", "item": "Netflix"}],
+                    "editrecurring",
+                    "Select a plan:",
+                )
+            )
+            callback_data = captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+            self.assertRegex(callback_data, r"^editrecurring:plan-1\|")
+
+            asyncio.run(telegram.send_plan_delete_mode_keyboard(123, "plan-1", "Delete?"))
+            delete_buttons = captured["reply_markup"]["inline_keyboard"][0]
+            self.assertRegex(delete_buttons[0]["callback_data"], r"^plandelmode:future:plan-1\|")
+            self.assertRegex(delete_buttons[1]["callback_data"], r"^plandelmode:all:plan-1\|")
+        finally:
+            telegram.httpx.AsyncClient = original_client
 
 
 class ProcessDuePlansTests(unittest.IsolatedAsyncioTestCase):

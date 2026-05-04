@@ -112,12 +112,14 @@ def save_pending(
     timestamp: str | None = None,
     date_was_explicit: bool = False,
 ) -> None:
-    now = timestamp or datetime.now(SGT).isoformat()
+    created_at = datetime.now(SGT).isoformat()
+    tx_timestamp = timestamp or created_at
     pending = PendingTransaction(
         item=item,
         amount=amount,
         chat_id=chat_id,
-        timestamp=now,
+        timestamp=tx_timestamp,
+        created_at=created_at,
         date_was_explicit=date_was_explicit,
     )
     get_db().collection("pending").document(str(chat_id)).set(pending.model_dump())
