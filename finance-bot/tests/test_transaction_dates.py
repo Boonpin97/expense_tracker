@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,8 +81,11 @@ if "httpx" not in sys.modules:
     httpx_stub.AsyncClient = AsyncClient
     sys.modules["httpx"] = httpx_stub
 
-from services.categoriser import build_transaction_timestamp
+from services.categoriser import build_transaction_timestamp, pending_expired
 from services.parser import parse_expense, parse_transaction_date
+
+
+SGT = timezone(timedelta(hours=8))
 
 
 class TransactionDateParsingTests(unittest.TestCase):
@@ -112,6 +116,13 @@ class TransactionTimestampBuilderTests(unittest.TestCase):
         base_timestamp = "2026-05-03T14:15:16+08:00"
         new_timestamp = build_transaction_timestamp("2026-05-01", base_timestamp)
         self.assertEqual(new_timestamp, "2026-05-01T14:15:16+08:00")
+
+    def test_pending_expiry_uses_created_at_not_transaction_date(self):
+        pending = {
+            "timestamp": "2026-02-05T12:00:00+08:00",
+            "created_at": datetime.now(SGT).isoformat(),
+        }
+        self.assertFalse(pending_expired(pending))
 
 
 if __name__ == "__main__":

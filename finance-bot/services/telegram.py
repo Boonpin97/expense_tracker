@@ -132,15 +132,36 @@ async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prom
 
 
 async def send_monthly_report_keyboard(chat_id: int, buttons: list[tuple[str, str]], prompt: str) -> dict:
+    ts = datetime.now(SGT).isoformat()
     keyboard = []
     row = []
     for label, callback_data in buttons:
-        row.append({"text": label, "callback_data": callback_data})
+        row.append({"text": label, "callback_data": f"{callback_data}|{ts}"})
         if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_daily_report_keyboard(chat_id: int, prompt: str) -> dict:
+    ts = datetime.now(SGT).isoformat()
+    keyboard = [[
+        {"text": "Today", "callback_data": f"dailyrep:today|{ts}"},
+        {"text": "Past report", "callback_data": f"dailyrep:past|{ts}"},
+    ]]
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -225,11 +246,12 @@ async def send_edit_category_field_keyboard(chat_id: int, category_name: str, em
 
 
 async def send_plan_keyboard(chat_id: int, plans: list[dict], action: str, prompt: str) -> dict:
+    ts = datetime.now(SGT).isoformat()
     keyboard = []
     for plan in plans:
         plan_type = "Recurring" if plan["plan_type"] == "recurring" else "Split"
         label = f"{plan_type}: {plan['item']}"
-        keyboard.append([{"text": label, "callback_data": f"{action}:{plan['id']}"}])
+        keyboard.append([{"text": label, "callback_data": f"{action}:{plan['id']}|{ts}"}])
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             _api_url("sendMessage"),
@@ -272,9 +294,10 @@ async def send_plan_edit_field_keyboard(chat_id: int, plan_id: str, plan_type: s
 
 
 async def send_plan_delete_mode_keyboard(chat_id: int, plan_id: str, prompt: str) -> dict:
+    ts = datetime.now(SGT).isoformat()
     keyboard = [[
-        {"text": "Stop future only", "callback_data": f"plandelmode:future:{plan_id}"},
-        {"text": "Stop future + remove past", "callback_data": f"plandelmode:all:{plan_id}"},
+        {"text": "Stop future only", "callback_data": f"plandelmode:future:{plan_id}|{ts}"},
+        {"text": "Stop future + remove past", "callback_data": f"plandelmode:all:{plan_id}|{ts}"},
     ]]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -334,8 +357,7 @@ async def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
 async def set_my_commands() -> dict:
     commands = [
         {"command": "start", "description": "Welcome message"},
-        {"command": "report", "description": "Daily report for a specific date (DDMMYY)"},
-        {"command": "daily", "description": "Today's spending summary"},
+        {"command": "daily", "description": "Daily spending reports"},
         {"command": "weekly", "description": "This week's spending summary"},
         {"command": "monthly", "description": "This month's spending summary"},
         {"command": "delete_last", "description": "Delete the last recorded transaction"},

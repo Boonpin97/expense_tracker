@@ -113,6 +113,7 @@ if "fastapi" not in sys.modules:
     sys.modules["fastapi"] = fastapi_stub
 
 from routers.webhook import _build_monthly_report_buttons, _get_month_window, _parse_month_input_or_none
+from services import telegram
 
 SGT = timezone(timedelta(hours=8))
 
@@ -129,19 +130,93 @@ class MonthlyReportHelpersTests(unittest.TestCase):
         self.assertEqual(end, datetime(2026, 2, 1, tzinfo=SGT))
         self.assertEqual(label, "Monthly Report (Jan 2026)")
 
-    def test_build_monthly_report_buttons_uses_current_and_last_three_months(self):
+    def test_build_monthly_report_buttons_uses_earlier_then_past_three_then_current(self):
         now = datetime(2026, 5, 3, tzinfo=SGT)
         buttons = _build_monthly_report_buttons(now)
         self.assertEqual(
             buttons,
             [
-                ("Current month", "monthrep:202605"),
-                ("April", "monthrep:202604"),
-                ("March", "monthrep:202603"),
-                ("February", "monthrep:202602"),
                 ("Earlier months", "monthrep:earlier"),
+                ("Apr 2026", "monthrep:202604"),
+                ("Mar 2026", "monthrep:202603"),
+                ("Feb 2026", "monthrep:202602"),
+                ("Current month", "monthrep:202605"),
             ],
         )
+
+    def test_monthly_report_keyboard_adds_expiry_timestamp(self):
+        captured = {}
+
+        class FakeResponse:
+            def json(self):
+                return {}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *_args, **kwargs):
+                captured.update(kwargs["json"])
+                return FakeResponse()
+
+        original_client = telegram.httpx.AsyncClient
+        telegram.httpx.AsyncClient = FakeAsyncClient
+        try:
+            import asyncio
+
+            asyncio.run(
+                telegram.send_monthly_report_keyboard(
+                    123,
+                    [("Current month", "monthrep:202605"), ("Earlier months", "monthrep:earlier")],
+                    "Choose a month:",
+                )
+            )
+        finally:
+            telegram.httpx.AsyncClient = original_client
+
+        keyboard = captured["reply_markup"]["inline_keyboard"]
+        self.assertRegex(keyboard[0][0]["callback_data"], r"^monthrep:202605\|")
+        self.assertRegex(keyboard[0][1]["callback_data"], r"^monthrep:earlier\|")
+
+    def test_daily_report_keyboard_adds_expiry_timestamp(self):
+        captured = {}
+
+        class FakeResponse:
+            def json(self):
+                return {}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *_args, **kwargs):
+                captured.update(kwargs["json"])
+                return FakeResponse()
+
+        original_client = telegram.httpx.AsyncClient
+        telegram.httpx.AsyncClient = FakeAsyncClient
+        try:
+            import asyncio
+
+            asyncio.run(telegram.send_daily_report_keyboard(123, "Choose a daily report:"))
+        finally:
+            telegram.httpx.AsyncClient = original_client
+
+        keyboard = captured["reply_markup"]["inline_keyboard"][0]
+        self.assertRegex(keyboard[0]["callback_data"], r"^dailyrep:today\|")
+        self.assertRegex(keyboard[1]["callback_data"], r"^dailyrep:past\|")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ class PendingTransaction(BaseModel):
     amount: float
     chat_id: int
     timestamp: str
+    created_at: str
     date_was_explicit: bool = False
 
 
