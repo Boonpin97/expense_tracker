@@ -4,7 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
-from routers.reports import _format_daily_report, _format_report, _get_period_window
+from routers.reports import (
+    _format_budget_report,
+    _format_daily_report,
+    _format_report,
+    _get_period_window,
+)
 from services import telegram
 from services.categoriser import (
     PENDING_EXPIRY_SECONDS,
@@ -950,6 +955,15 @@ async def webhook(request: Request):
                     )
         elif text == "/list_budget":
             await telegram.send_message(chat_id, _format_budget_list(chat_id))
+        elif text == "/budget_report":
+            report = _format_budget_report(chat_id)
+            if not report:
+                await telegram.send_message(
+                    chat_id,
+                    "No monthly budget found yet. You can set a monthly budget via the command /set_budget",
+                )
+            else:
+                await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         elif text.startswith("/remove_budget"):
             category = _parse_remove_budget_command_or_none(text)
             if category is None:
