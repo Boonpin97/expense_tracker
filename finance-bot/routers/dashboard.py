@@ -79,7 +79,7 @@ def _set_session_cookie(response: Response, token: str, expires_at: datetime) ->
         secure=True,
         samesite="none",
         max_age=max_age,
-        expires=expires_at,
+        expires=expires_at.astimezone(timezone.utc),
         path="/",
     )
 

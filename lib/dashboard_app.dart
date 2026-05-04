@@ -127,8 +127,8 @@ class _SignInScreenState extends State<SignInScreen> {
       widget.onSignedIn();
     } on DashboardApiException catch (error) {
       setState(() => _error = error.message);
-    } catch (error) {
-      setState(() => _error = error.toString());
+    } catch (_) {
+      setState(() => _error = 'Something went wrong. Please try again.');
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -2852,8 +2852,8 @@ Future<void> showTransactionEditor(
                               const SnackBar(content: Text('Transaction updated.')),
                             );
                           }
-                        } catch (error) {
-                          setState(() => errorText = error.toString());
+                        } catch (_) {
+                          setState(() => errorText = 'Something went wrong. Please try again.');
                         } finally {
                           if (context.mounted) {
                             setState(() => saving = false);
@@ -2949,8 +2949,8 @@ Future<void> showCategoryDialog(
                             ),
                           );
                         }
-                      } catch (error) {
-                        setState(() => errorText = error.toString());
+                      } catch (_) {
+                        setState(() => errorText = 'Something went wrong. Please try again.');
                       } finally {
                         if (context.mounted) {
                           setState(() => saving = false);
@@ -2979,12 +2979,12 @@ Future<void> runWithSnackbar(
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(successMessage)),
     );
-  } catch (error) {
+  } catch (_) {
     if (!context.mounted) {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(error.toString())),
+      const SnackBar(content: Text('Something went wrong. Please try again.')),
     );
   }
 }
