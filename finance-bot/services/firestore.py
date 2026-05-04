@@ -599,6 +599,25 @@ def set_budget(chat_id: int, category: str, amount: float) -> None:
     )
 
 
+def remove_budget(chat_id: int, category: str) -> bool:
+    """Remove a single category budget. Returns False when it does not exist."""
+    doc_ref = get_db().collection("budgets").document(str(chat_id))
+    doc = doc_ref.get()
+    if not doc.exists:
+        return False
+
+    budgets = doc.to_dict() or {}
+    if category not in budgets:
+        return False
+
+    budgets.pop(category, None)
+    if budgets:
+        doc_ref.set(budgets)
+    else:
+        doc_ref.delete()
+    return True
+
+
 # —— Payment Plans ———————————————————————————————————————————————————————————————
 
 def save_payment_plan(plan: PaymentPlan) -> str:
