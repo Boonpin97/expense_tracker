@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcloud projects list *)",
+      "Bash(gcloud run services list *)",
+      "Bash(gcloud firestore databases list *)",
+      "Bash(gcloud firebase apps:list *)",
+      "Bash(gcloud alpha firebase apps *)",
+      "Bash(gcloud app services list *)",
+      "Bash(gcloud run services describe *)",
+      "Bash(gcloud builds triggers list *)",
+      "Bash(firebase hosting:sites:list --project=budget-bot-123)",
+      "Bash(gcloud beta *)",
+      "Bash(gcloud auth *)",
+      "Bash(curl -s -H \"Authorization: Bearer $\\(gcloud auth print-access-token\\)\" \"https://firebasehosting.googleapis.com/v1beta1/projects/budget-bot-123/sites\")",
+      "Bash(Get-ChildItem -Path C:\\\\Users\\\\pohbo\\\\Flutter\\\\expense_tracker -Recurse -Filter \"agents.md\")",
+      "Bash(Get-ChildItem -Path C:\\\\Users\\\\pohbo\\\\Flutter\\\\expense_tracker -Recurse -Filter \"AGENTS.md\")",
+      "Bash(firebase hosting:channel:list --project=budget-bot-123 --site=budget-bot-123)",
+      "Bash(firebase hosting:channel:list --project=budget-bot-123 --site=budget-bot-123-dev)",
+      "Bash(flutter build *)"
+    ]
+  }
+}
