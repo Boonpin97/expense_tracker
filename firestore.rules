@@ -1,32 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isDashboardAdmin() {
-      return request.auth != null
-        && exists(/databases/$(database)/documents/dashboard_admins/$(request.auth.uid));
-    }
-
-    match /dashboard_admins/{userId} {
-      allow read: if request.auth != null && request.auth.uid == userId;
-      allow write: if false;
-    }
-
-    match /transactions/{document=**} {
-      allow read, write: if isDashboardAdmin();
-    }
-
-    match /category_list/{document=**} {
-      allow read, write: if isDashboardAdmin();
-    }
-
-    match /category_map/{document=**} {
-      allow read, write: if isDashboardAdmin();
-    }
-
-    match /budgets/{document=**} {
-      allow read, write: if isDashboardAdmin();
-    }
-
     match /{document=**} {
       allow read, write: if false;
     }

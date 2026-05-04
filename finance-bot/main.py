@@ -35,6 +35,8 @@ app = FastAPI(title="Telegram Finance Bot", lifespan=lifespan)
 default_origins = [
     "https://budget-bot-123.web.app",
     "https://budget-bot-123.firebaseapp.com",
+    "https://budget-bot-123-dev.web.app",
+    "https://budget-bot-123-dev.firebaseapp.com",
     "http://localhost:3000",
     "http://localhost:5000",
 ]

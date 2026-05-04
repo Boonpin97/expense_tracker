@@ -1,8 +1,9 @@
+// ignore_for_file: unused_element, unused_element_parameter
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -108,6 +109,11 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   Future<void> _signIn() async {
+    if (_usernameController.text.trim().isEmpty) {
+      setState(() => _error = 'Username field is empty.');
+      return;
+    }
+
     setState(() {
       _busy = true;
       _error = null;
@@ -134,83 +140,150 @@ class _SignInScreenState extends State<SignInScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFFF7F8F4), Color(0xFFF1F5EF)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
+      backgroundColor: const Color(0xFFF8F8F5),
+      body: SafeArea(
         child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Card(
-              margin: const EdgeInsets.all(24),
-              child: Padding(
-                padding: const EdgeInsets.all(28),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: AutofillGroup(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text(
-                      'Expense Monitor',
-                      style: theme.textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Sign in with the dashboard username and password you set from Telegram.',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 24),
-                    TextField(
-                      controller: _usernameController,
-                      enabled: !_busy,
-                      decoration: const InputDecoration(
-                        labelText: 'Username',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    TextField(
-                      controller: _passwordController,
-                      enabled: !_busy,
-                      obscureText: true,
-                      onSubmitted: (_) => _busy ? null : _signIn(),
-                      decoration: const InputDecoration(
-                        labelText: 'Password',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    if (_error != null) ...[
-                      const SizedBox(height: 14),
-                      Text(
-                        _error!,
-                        style: TextStyle(color: theme.colorScheme.error),
-                      ),
-                    ],
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: _busy ? null : _signIn,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: _busy
-                              ? const SizedBox(
-                                  height: 18,
-                                  width: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Text('Sign in'),
+                    Center(
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF111815),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(
+                          Icons.account_balance_wallet_outlined,
+                          color: Colors.white,
+                          size: 24,
                         ),
                       ),
+                    ),
+                    const SizedBox(height: 22),
+                    Text(
+                      'Expense Monitor',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        color: const Color(0xFF111815),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    _LoginField(
+                      controller: _usernameController,
+                      enabled: !_busy,
+                      label: 'Username',
+                      autofillHints: const [AutofillHints.username],
+                      textInputAction: TextInputAction.next,
+                    ),
+                    const SizedBox(height: 12),
+                    _LoginField(
+                      controller: _passwordController,
+                      enabled: !_busy,
+                      label: 'Password',
+                      obscureText: true,
+                      autofillHints: const [AutofillHints.password],
+                      onSubmitted: (_) => _busy ? null : _signIn(),
+                    ),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      child: _error == null
+                          ? const SizedBox(height: 18)
+                          : Padding(
+                              padding: const EdgeInsets.only(top: 12, bottom: 6),
+                              child: Text(
+                                _error!,
+                                textAlign: TextAlign.center,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.error,
+                                ),
+                              ),
+                            ),
+                    ),
+                    FilledButton(
+                      onPressed: _busy ? null : _signIn,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF111815),
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size.fromHeight(52),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: _busy
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Sign in'),
                     ),
                   ],
                 ),
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LoginField extends StatelessWidget {
+  const _LoginField({
+    required this.controller,
+    required this.enabled,
+    required this.label,
+    this.autofillHints,
+    this.obscureText = false,
+    this.onSubmitted,
+    this.textInputAction,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final String label;
+  final Iterable<String>? autofillHints;
+  final bool obscureText;
+  final ValueChanged<String>? onSubmitted;
+  final TextInputAction? textInputAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      enabled: enabled,
+      obscureText: obscureText,
+      autofillHints: autofillHints,
+      onSubmitted: onSubmitted,
+      textInputAction: textInputAction,
+      decoration: InputDecoration(
+        labelText: label,
+        filled: true,
+        fillColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFD8DDD7)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFD8DDD7)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFF111815), width: 1.4),
         ),
       ),
     );
@@ -1409,226 +1482,7 @@ class _MetricCard extends StatelessWidget {
   }
 }
 
-class _Badge extends StatelessWidget {
-  const _Badge({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        child: Text(label),
-      ),
-    );
-  }
-}
-
 enum _LandingTone { neutral, warning, error }
-
-class _LandingShell extends StatelessWidget {
-  const _LandingShell({
-    required this.eyebrow,
-    required this.title,
-    required this.description,
-    required this.highlights,
-    required this.featureCard,
-    required this.sidePanel,
-  });
-
-  final String eyebrow;
-  final String title;
-  final String description;
-  final List<String> highlights;
-  final Widget featureCard;
-  final Widget sidePanel;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isWide = MediaQuery.of(context).size.width >= 1100;
-
-    return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFFF8FBF7), Color(0xFFF1F6FF), Color(0xFFFFF8EF)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              top: -120,
-              left: -60,
-              child: _GlowOrb(
-                color: const Color(0xFF91E4C1).withValues(alpha: 0.35),
-                size: 320,
-              ),
-            ),
-            Positioned(
-              top: 80,
-              right: -40,
-              child: _GlowOrb(
-                color: const Color(0xFFBBD6FF).withValues(alpha: 0.38),
-                size: 280,
-              ),
-            ),
-            SafeArea(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1280),
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            const _Wordmark(),
-                            const Spacer(),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.8),
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: theme.colorScheme.outlineVariant,
-                                ),
-                              ),
-                              child: Text(
-                                'Private finance dashboard',
-                                style: theme.textTheme.labelLarge,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 28),
-                        Expanded(
-                          child: isWide
-                              ? Row(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      flex: 6,
-                                      child: _HeroStory(
-                                        eyebrow: eyebrow,
-                                        title: title,
-                                        description: description,
-                                        highlights: highlights,
-                                        featureCard: featureCard,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 24),
-                                    Expanded(
-                                      flex: 4,
-                                      child: sidePanel,
-                                    ),
-                                  ],
-                                )
-                              : ListView(
-                                  children: [
-                                    _HeroStory(
-                                      eyebrow: eyebrow,
-                                      title: title,
-                                      description: description,
-                                      highlights: highlights,
-                                      featureCard: featureCard,
-                                    ),
-                                    const SizedBox(height: 20),
-                                    sidePanel,
-                                  ],
-                                ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HeroStory extends StatelessWidget {
-  const _HeroStory({
-    required this.eyebrow,
-    required this.title,
-    required this.description,
-    required this.highlights,
-    required this.featureCard,
-  });
-
-  final String eyebrow;
-  final String title;
-  final String description;
-  final List<String> highlights;
-  final Widget featureCard;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFDBF1E6),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Text(
-            eyebrow.toUpperCase(),
-            style: theme.textTheme.labelLarge?.copyWith(
-              letterSpacing: 1.1,
-              fontWeight: FontWeight.w700,
-              color: const Color(0xFF0B6E4F),
-            ),
-          ),
-        ),
-        const SizedBox(height: 20),
-        Text(
-          title,
-          style: theme.textTheme.displayMedium?.copyWith(
-            height: 1.05,
-            fontWeight: FontWeight.w700,
-            color: const Color(0xFF193225),
-          ),
-        ),
-        const SizedBox(height: 18),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 700),
-          child: Text(
-            description,
-            style: theme.textTheme.titleMedium?.copyWith(
-              height: 1.45,
-              color: const Color(0xFF42554A),
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: highlights.map((text) => _HighlightPill(text: text)).toList(),
-        ),
-        const SizedBox(height: 28),
-        Expanded(child: featureCard),
-      ],
-    );
-  }
-}
 
 class _PreviewCard extends StatelessWidget {
   const _PreviewCard({
@@ -1779,15 +1633,14 @@ class _SignInPanel extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             Text(
-              'Sign in with Google',
+              'Sign in',
               style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 10),
             Text(
-              'Only Firebase Auth users with a matching '
-              '`dashboard_admins/<uid>` document can access or edit data.',
+              'Use your dashboard username and password.',
               style: theme.textTheme.bodyLarge?.copyWith(
                 height: 1.45,
                 color: const Color(0xFF4B5F53),
@@ -1824,7 +1677,7 @@ class _SignInPanel extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.login),
-                label: Text(busy ? 'Signing in...' : 'Continue with Google'),
+                label: Text(busy ? 'Signing in...' : 'Sign in'),
               ),
             ),
             if (error != null) ...[
@@ -2138,16 +1991,6 @@ class DashboardTransaction {
     );
   }
 
-  factory DashboardTransaction.fromDocument(
-    DocumentSnapshot<Map<String, dynamic>> document,
-  ) {
-    final data = document.data() ?? const <String, dynamic>{};
-    return DashboardTransaction.fromJson({
-      ...data,
-      '_doc_id': document.id,
-    });
-  }
-
   final String id;
   final String item;
   final double amount;
@@ -2171,9 +2014,7 @@ class DashboardCategory {
     );
   }
 
-  factory DashboardCategory.fromDocument(
-    DocumentSnapshot<Map<String, dynamic>> document,
-  ) {
+  factory DashboardCategory.fromDocument(dynamic document) {
     final data = document.data() ?? const <String, dynamic>{};
     return DashboardCategory(
       name: (data['name'] ?? document.id).toString(),
@@ -2206,47 +2047,32 @@ class TrendPoint {
   final double total;
 }
 
-class DashboardSession {
-  const DashboardSession({
-    required this.username,
-    required this.chatId,
-  });
-
-  factory DashboardSession.fromJson(Map<String, dynamic> json) {
-    return DashboardSession(
-      username: (json['username'] ?? '').toString(),
-      chatId: (json['chat_id'] as num?)?.toInt() ?? 0,
-    );
-  }
-
-  final String username;
-  final int chatId;
-}
-
-class DashboardApiException implements Exception {
-  DashboardApiException(this.message);
-
-  final String message;
-
-  @override
-  String toString() => message;
-}
-
+/*
 class LegacyDashboardRepository {
+  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static final http.Client _client = createDashboardHttpClient();
   static final StreamController<int> _refreshController =
       StreamController<int>.broadcast();
   static int _refreshTick = 0;
-  static const String _defaultApiBaseUrl =
-      'https://finance-bot-318969558548.asia-southeast1.run.app';
+  static const String _prodApiBaseUrl =
+      'https://finance-bot-318969558548.asia-southeast3.run.app';
+  static const String _devApiBaseUrl =
+      'https://finance-bot-dev-318969558548.asia-southeast3.run.app';
   static const String _configuredApiBaseUrl =
       String.fromEnvironment('DASHBOARD_API_BASE_URL');
 
-  static String get _apiBaseUrl =>
-      (_configuredApiBaseUrl.isNotEmpty
-              ? _configuredApiBaseUrl
-              : _defaultApiBaseUrl)
-          .replaceAll(RegExp(r'/$'), '');
+  static String get _apiBaseUrl {
+    if (_configuredApiBaseUrl.isNotEmpty) {
+      return _configuredApiBaseUrl.replaceAll(RegExp(r'/$'), '');
+    }
+
+    final host = Uri.base.host.toLowerCase();
+    if (host == 'budget-bot-123-dev.web.app' ||
+        host == 'budget-bot-123-dev.firebaseapp.com') {
+      return _devApiBaseUrl;
+    }
+    return _prodApiBaseUrl;
+  }
 
   static Uri _uri(
     String path, {
@@ -2579,6 +2405,7 @@ class LegacyDashboardRepository {
     await batch.commit();
   }
 }
+*/
 
 class DashboardSession {
   const DashboardSession({
@@ -2611,16 +2438,25 @@ class DashboardRepository {
   static final StreamController<int> _refreshController =
       StreamController<int>.broadcast();
   static int _refreshTick = 0;
-  static const String _defaultApiBaseUrl =
-      'https://finance-bot-318969558548.asia-southeast1.run.app';
+  static const String _prodApiBaseUrl =
+      'https://finance-bot-318969558548.asia-southeast3.run.app';
+  static const String _devApiBaseUrl =
+      'https://finance-bot-dev-318969558548.asia-southeast3.run.app';
   static const String _configuredApiBaseUrl =
       String.fromEnvironment('DASHBOARD_API_BASE_URL');
 
-  static String get _apiBaseUrl =>
-      (_configuredApiBaseUrl.isNotEmpty
-              ? _configuredApiBaseUrl
-              : _defaultApiBaseUrl)
-          .replaceAll(RegExp(r'/$'), '');
+  static String get _apiBaseUrl {
+    if (_configuredApiBaseUrl.isNotEmpty) {
+      return _configuredApiBaseUrl.replaceAll(RegExp(r'/$'), '');
+    }
+
+    final host = Uri.base.host.toLowerCase();
+    if (host == 'budget-bot-123-dev.web.app' ||
+        host == 'budget-bot-123-dev.firebaseapp.com') {
+      return _devApiBaseUrl;
+    }
+    return _prodApiBaseUrl;
+  }
 
   static Uri _uri(
     String path, {
@@ -2931,7 +2767,7 @@ Future<void> showTransactionEditor(
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: categories.any((entry) => entry.name == category)
+                    initialValue: categories.any((entry) => entry.name == category)
                         ? category
                         : null,
                     items: categories

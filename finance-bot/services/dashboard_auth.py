@@ -11,7 +11,7 @@ SGT = timezone(timedelta(hours=8))
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 PASSWORD_MIN_LENGTH = 8
 PBKDF2_ITERATIONS = 240_000
-SESSION_TTL = timedelta(days=30)
+SESSION_TTL = timedelta(days=1)
 
 
 def normalize_username(value: str) -> str:

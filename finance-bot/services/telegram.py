@@ -372,6 +372,26 @@ async def set_webhook(url: str, secret_token: str) -> dict:
         return resp.json()
 
 
+async def send_dashboard_account_options_keyboard(chat_id: int, prompt: str) -> dict:
+    keyboard = [[
+        {"text": "Username", "callback_data": "acct:username"},
+        {"text": "Password", "callback_data": "acct:password"},
+        {"text": "Cancel", "callback_data": "acct:cancel"},
+    ]]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -400,7 +420,8 @@ async def set_my_commands() -> dict:
         {"command": "new_category", "description": "Add a new spending category"},
         {"command": "remove_category", "description": "Remove a spending category"},
         {"command": "edit_category", "description": "Edit a category's emoji, name, or order"},
-        {"command": "dashboard_account", "description": "Create or update dashboard username and password"},
+        {"command": "create_account", "description": "Create a dashboard username and password"},
+        {"command": "change_password", "description": "Change your dashboard password"},
         {"command": "set_recurring", "description": "Create a monthly recurring payment"},
         {"command": "list_recurring", "description": "List recurring payment plans"},
         {"command": "edit_recurring", "description": "Edit a recurring payment plan"},
