@@ -1,8 +1,9 @@
 import sys
 import types
 import unittest
+import asyncio
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -117,6 +118,7 @@ from routers.webhook import (
     _format_budget_list,
     _parse_budget_command_or_none,
     _parse_remove_budget_command_or_none,
+    webhook,
 )
 
 
@@ -241,6 +243,24 @@ class BudgetCommandTests(unittest.TestCase):
 
         self.assertTrue(removed)
         self.assertTrue(dummy_doc.deleted)
+
+    def test_budget_report_command_sends_formatted_report(self):
+        payload = {"message": {"chat": {"id": 123}, "text": "/budget_report"}}
+
+        class DummyRequest:
+            async def json(self):
+                return payload
+
+        with patch("routers.webhook._get_allowed_chat_ids", return_value={123}), patch(
+            "routers.webhook._format_budget_report",
+            return_value="Budget body",
+        ), patch(
+            "routers.webhook.telegram.send_message",
+            new=AsyncMock(),
+        ) as send_message:
+            asyncio.run(webhook(DummyRequest()))
+
+        send_message.assert_awaited_once_with(123, "<pre>Budget body</pre>")
 
 
 if __name__ == "__main__":
