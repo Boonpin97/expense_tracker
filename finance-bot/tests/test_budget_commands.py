@@ -262,6 +262,111 @@ class BudgetCommandTests(unittest.TestCase):
 
         send_message.assert_awaited_once_with(123, "<pre>Budget body</pre>")
 
+    def test_set_budget_command_starts_interactive_flow(self):
+        payload = {"message": {"chat": {"id": 123}, "text": "/set_budget"}}
+
+        class DummyRequest:
+            async def json(self):
+                return payload
+
+        with patch("routers.webhook._get_allowed_chat_ids", return_value={123}), patch(
+            "routers.webhook.start_session",
+        ) as start_session, patch(
+            "routers.webhook.telegram.send_budget_category_keyboard",
+            new=AsyncMock(),
+        ) as send_budget_category_keyboard:
+            asyncio.run(webhook(DummyRequest()))
+
+        start_session.assert_called_once_with(123, "set_budget", "choosing_category")
+        send_budget_category_keyboard.assert_awaited_once()
+
+    def test_set_budget_category_callback_prompts_for_amount(self):
+        payload = {
+            "callback_query": {
+                "id": "cb-1",
+                "data": "budgetcat:Food & Drink",
+                "message": {"chat": {"id": 123}},
+            }
+        }
+
+        class DummyRequest:
+            async def json(self):
+                return payload
+
+        with patch("routers.webhook._get_allowed_chat_ids", return_value={123}), patch(
+            "routers.webhook.get_session",
+            return_value={"flow_type": "set_budget", "step": "choosing_category", "payload": {}, "expires_at": "2999-01-01T00:00:00+08:00"},
+        ), patch(
+            "routers.webhook.get_category_list",
+            return_value=[{"name": "Food & Drink"}],
+        ), patch(
+            "routers.webhook.update_session",
+        ) as update_session, patch(
+            "routers.webhook.telegram.answer_callback_query",
+            new=AsyncMock(),
+        ) as answer_callback_query, patch(
+            "routers.webhook.telegram.send_message",
+            new=AsyncMock(),
+        ) as send_message:
+            asyncio.run(webhook(DummyRequest()))
+
+        update_session.assert_called_once_with(
+            123,
+            step="awaiting_amount",
+            payload_updates={"selected_category": "Food & Drink"},
+        )
+        answer_callback_query.assert_awaited_once_with("cb-1", "")
+        send_message.assert_awaited_once_with(
+            123,
+            "Send the monthly budget for <b>Food & Drink</b>, for example <code>300</code>.",
+        )
+
+    def test_set_budget_amount_entry_saves_budget_and_reprompts(self):
+        payload = {"message": {"chat": {"id": 123}, "text": "300"}}
+
+        class DummyRequest:
+            async def json(self):
+                return payload
+
+        session = {
+            "flow_type": "set_budget",
+            "step": "awaiting_amount",
+            "payload": {"selected_category": "Food & Drink"},
+            "expires_at": "2999-01-01T00:00:00+08:00",
+        }
+
+        with patch("routers.webhook._get_allowed_chat_ids", return_value={123}), patch(
+            "routers.webhook.get_session",
+            return_value=session,
+        ), patch(
+            "routers.webhook.set_budget",
+        ) as set_budget, patch(
+            "routers.webhook.update_session",
+        ) as update_session, patch(
+            "routers.webhook.telegram.send_message",
+            new=AsyncMock(),
+        ) as send_message, patch(
+            "routers.webhook.telegram.send_budget_category_keyboard",
+            new=AsyncMock(),
+        ) as send_budget_category_keyboard:
+            asyncio.run(webhook(DummyRequest()))
+
+        set_budget.assert_called_once_with(123, "Food & Drink", 300.0)
+        update_session.assert_called_once_with(
+            123,
+            step="choosing_category",
+            payload_updates={"selected_category": ""},
+        )
+        self.assertEqual(send_message.await_count, 1)
+        send_message.assert_awaited_once_with(
+            123,
+            "✅ Monthly budget for <b>Food & Drink</b> set to <b>$300.00</b>.",
+        )
+        send_budget_category_keyboard.assert_awaited_once_with(
+            123,
+            "Choose another category to set a monthly budget for, or tap Done.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

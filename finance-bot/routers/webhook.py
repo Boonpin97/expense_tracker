@@ -169,6 +169,13 @@ def _format_budget_list(chat_id: int) -> str:
     return "\n".join(lines)
 
 
+async def _send_set_budget_category_prompt(chat_id: int, prompt: str | None = None) -> None:
+    await telegram.send_budget_category_keyboard(
+        chat_id,
+        prompt or "Choose a category to set a monthly budget for. Tap Done when finished.",
+    )
+
+
 def _parse_user_date_or_none(text: str) -> datetime | None:
     parsed = parse_transaction_date(text)
     if parsed is None:
@@ -515,6 +522,8 @@ async def _get_active_session_or_expire(chat_id: int, flow_type: str) -> dict | 
         clear_user_state(chat_id)
         if flow_type == "dashboard_account":
             await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /dashboard_account again.")
+        elif flow_type == "set_budget":
+            await telegram.send_message(chat_id, "⏰ The /set_budget request has expired. Please send /set_budget again.")
         else:
             await telegram.send_message(chat_id, "⏰ This flow has expired. Please start again.")
         return None
@@ -583,6 +592,39 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
     return True
 
 
+async def _handle_set_budget_session(chat_id: int, text: str) -> bool:
+    session = await _get_active_session_or_expire(chat_id, "set_budget")
+    if not session:
+        return False
+
+    if session.get("step") != "awaiting_amount":
+        await telegram.send_message(chat_id, "Use the category buttons to choose a budget category, or tap Done.")
+        return True
+
+    category = (session.get("payload") or {}).get("selected_category", "").strip()
+    if not category:
+        clear_session(chat_id)
+        await telegram.send_message(chat_id, "⚠️ Budget setup was interrupted. Send /set_budget again.")
+        return True
+
+    amount = _valid_amount(text)
+    if amount is None:
+        await telegram.send_message(
+            chat_id,
+            f"⚠️ Send a positive number for <b>{category}</b>, for example <code>300</code>.",
+        )
+        return True
+
+    set_budget(chat_id, category, amount)
+    update_session(chat_id, step="choosing_category", payload_updates={"selected_category": ""})
+    await telegram.send_message(chat_id, f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>.")
+    await _send_set_budget_category_prompt(
+        chat_id,
+        "Choose another category to set a monthly budget for, or tap Done.",
+    )
+    return True
+
+
 def _split_expiring_callback(value: str) -> tuple[str, str | None]:
     if "|" not in value:
         return value, None
@@ -627,6 +669,33 @@ async def webhook(request: Request):
 
         callback_data = callback.get("data", "")
         callback_query_id = callback["id"]
+
+        if callback_data.startswith("budgetcat:"):
+            session = await _get_active_session_or_expire(chat_id, "set_budget")
+            if not session:
+                await telegram.answer_callback_query(callback_query_id, "Expired.")
+                return {"ok": True}
+
+            category = callback_data.split(":", 1)[1]
+            if category == "__done__":
+                clear_session(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_message(chat_id, "✅ Budget setup finished.")
+                return {"ok": True}
+
+            categories = {c["name"] for c in get_category_list()}
+            if category not in categories:
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, "⚠️ That category is no longer available. Send /set_budget again.")
+                return {"ok": True}
+
+            update_session(chat_id, step="awaiting_amount", payload_updates={"selected_category": category})
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_message(
+                chat_id,
+                f"Send the monthly budget for <b>{category}</b>, for example <code>300</code>.",
+            )
+            return {"ok": True}
 
         if callback_data.startswith("cat:") and get_user_state(chat_id) in {
             "awaiting_plan_category",
@@ -933,26 +1002,8 @@ async def webhook(request: Request):
             report = _format_report(label, transactions)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         elif text.startswith("/set_budget"):
-            parsed_budget = _parse_budget_command_or_none(text)
-            if parsed_budget is None:
-                await telegram.send_message(
-                    chat_id,
-                    "Usage: <code>/set_budget Food & Drink 300</code>",
-                )
-            else:
-                category, amount = parsed_budget
-                categories = {c["name"] for c in get_category_list()}
-                if category not in categories:
-                    await telegram.send_message(
-                        chat_id,
-                        f"⚠️ Category <b>{category}</b> does not exist. Create it first or choose an existing category.",
-                    )
-                else:
-                    set_budget(chat_id, category, amount)
-                    await telegram.send_message(
-                        chat_id,
-                        f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>.",
-                    )
+            start_session(chat_id, "set_budget", "choosing_category")
+            await _send_set_budget_category_prompt(chat_id)
         elif text == "/list_budget":
             await telegram.send_message(chat_id, _format_budget_list(chat_id))
         elif text == "/budget_report":
@@ -1075,6 +1126,9 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if await _handle_dashboard_account_session(chat_id, text):
+        return {"ok": True}
+
+    if await _handle_set_budget_session(chat_id, text):
         return {"ok": True}
 
     user_state = get_user_state(chat_id)

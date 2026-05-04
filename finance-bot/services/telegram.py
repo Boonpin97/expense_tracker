@@ -109,6 +109,36 @@ async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict
         return resp.json()
 
 
+async def send_budget_category_keyboard(chat_id: int, prompt: str) -> dict:
+    from services.firestore import get_category_list
+
+    keyboard = []
+    row = []
+    for cat in get_category_list():
+        emoji = cat.get("emoji", "🏷️")
+        name = cat["name"]
+        row.append({"text": f"{emoji} {name}", "callback_data": f"budgetcat:{name}"})
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([{"text": "Done", "callback_data": "budgetcat:__done__"}])
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prompt: str) -> dict:
     """Send an inline keyboard where each button is a transaction to delete."""
     ts = datetime.now(SGT).isoformat()
