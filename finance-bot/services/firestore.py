@@ -11,6 +11,7 @@ from models.transaction import (
     CategoryMapping,
     PaymentPlan,
     PendingPlan,
+    FlowSession,
 )
 from services.payment_plans import compute_next_due_date
 
@@ -150,6 +151,25 @@ def update_pending_plan(chat_id: int, **fields) -> None:
 
 def delete_pending_plan(chat_id: int) -> None:
     get_db().collection("pending_plans").document(str(chat_id)).delete()
+
+
+def save_interaction_session(session: FlowSession) -> None:
+    get_db().collection("interaction_sessions").document(str(session.chat_id)).set(session.model_dump())
+
+
+def get_interaction_session(chat_id: int) -> Optional[dict]:
+    doc = get_db().collection("interaction_sessions").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def update_interaction_session(chat_id: int, **fields) -> None:
+    get_db().collection("interaction_sessions").document(str(chat_id)).set(fields, merge=True)
+
+
+def delete_interaction_session(chat_id: int) -> None:
+    get_db().collection("interaction_sessions").document(str(chat_id)).delete()
 
 
 # ── Transactions (extended) ───────────────────────────────────

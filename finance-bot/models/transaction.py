@@ -69,3 +69,12 @@ class PendingPlan(BaseModel):
     selected_plan_id: Optional[str] = None
     edit_field: Optional[str] = None
     edit_value: Optional[str] = None
+
+
+class FlowSession(BaseModel):
+    chat_id: int
+    flow_type: str
+    step: str
+    payload: dict = Field(default_factory=dict)
+    created_at: str
+    expires_at: str

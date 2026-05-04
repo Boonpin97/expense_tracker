@@ -19,14 +19,12 @@ from services.firestore import (
     cancel_payment_plan,
     clear_user_state,
     delete_category,
-    delete_pending_dashboard_account,
     delete_pending,
     delete_pending_change,
     delete_pending_plan,
     delete_transactions_for_plan,
     delete_transaction,
     get_category_list,
-    get_pending_dashboard_account,
     get_last_transaction,
     get_payment_plan,
     get_pending,
@@ -41,7 +39,6 @@ from services.firestore import (
     remove_category_from_list,
     rename_category,
     save_category,
-    save_pending_dashboard_account,
     save_pending_change,
     set_user_state,
     upsert_web_account,
@@ -52,6 +49,13 @@ from services.firestore import (
     update_pending_plan,
     update_transaction_category,
     update_transaction_timestamp,
+)
+from services.interaction_sessions import (
+    clear_session,
+    get_session,
+    is_expired as session_expired,
+    start_session,
+    update_session,
 )
 from services.parser import parse_expense, parse_transaction_date
 from services.payment_plans import (
@@ -457,6 +461,83 @@ def _plan_delete_prompt(plan: dict) -> str:
     )
 
 
+async def _get_active_session_or_expire(chat_id: int, flow_type: str) -> dict | None:
+    session = get_session(chat_id)
+    if not session or session.get("flow_type") != flow_type:
+        return None
+    if session_expired(session):
+        clear_session(chat_id)
+        clear_user_state(chat_id)
+        if flow_type == "dashboard_account":
+            await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /dashboard_account again.")
+        else:
+            await telegram.send_message(chat_id, "⏰ This flow has expired. Please start again.")
+        return None
+    return session
+
+
+async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
+    session = await _get_active_session_or_expire(chat_id, "dashboard_account")
+    if not session:
+        return False
+
+    step = session.get("step")
+    payload = session.get("payload", {})
+    if step == "awaiting_username":
+        username = text.strip()
+        if not is_valid_username(username):
+            await telegram.send_message(
+                chat_id,
+                "⚠️ Username must be 3-32 characters using only letters, numbers, dots, underscores, or dashes.",
+            )
+            return True
+
+        update_session(chat_id, step="awaiting_password", payload_updates={"username": username})
+        await telegram.send_message(
+            chat_id,
+            "Now send the dashboard password you want to use. It will be hashed before storing.",
+        )
+        return True
+
+    if step == "awaiting_password":
+        username = payload.get("username", "").strip()
+        if not username:
+            clear_session(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, "⚠️ Username setup was lost. Send /dashboard_account again.")
+            return True
+
+        password_error = validate_password(text)
+        if password_error:
+            await telegram.send_message(chat_id, f"⚠️ {password_error}")
+            return True
+
+        try:
+            upsert_web_account(
+                chat_id=chat_id,
+                username=username,
+                password_hash=hash_password(text),
+            )
+        except ValueError as exc:
+            await telegram.send_message(chat_id, f"⚠️ {exc}")
+            return True
+
+        delete_web_sessions_for_chat(chat_id)
+        clear_session(chat_id)
+        clear_user_state(chat_id)
+        await telegram.send_message(
+            chat_id,
+            "✅ Dashboard login saved.\n"
+            "Use your username and password at <a href=\"https://budget-bot-123.web.app\">budget-bot-123.web.app</a>.",
+        )
+        return True
+
+    clear_session(chat_id)
+    clear_user_state(chat_id)
+    await telegram.send_message(chat_id, "⚠️ Dashboard setup was interrupted. Send /dashboard_account again.")
+    return True
+
+
 @router.post("/webhook")
 async def webhook(request: Request):
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -810,8 +891,8 @@ async def webhook(request: Request):
             else:
                 await telegram.send_edit_category_keyboard(chat_id, categories)
         elif text == "/dashboard_account":
-            save_pending_dashboard_account(chat_id)
-            set_user_state(chat_id, "awaiting_dashboard_username")
+            clear_user_state(chat_id)
+            start_session(chat_id, "dashboard_account", "awaiting_username")
             await telegram.send_message(
                 chat_id,
                 "Choose a dashboard username using 3-32 letters, numbers, dots, underscores, or dashes.",
@@ -836,71 +917,10 @@ async def webhook(request: Request):
             await _start_plan_delete(chat_id, "split_payment")
         return {"ok": True}
 
+    if await _handle_dashboard_account_session(chat_id, text):
+        return {"ok": True}
+
     user_state = get_user_state(chat_id)
-
-    if user_state == "awaiting_dashboard_username":
-        pending = get_pending_dashboard_account(chat_id)
-        if pending and _is_expired(pending.get("timestamp", "")):
-            delete_pending_dashboard_account(chat_id)
-            clear_user_state(chat_id)
-            await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /dashboard_account again.")
-            return {"ok": True}
-
-        username = text.strip()
-        if not is_valid_username(username):
-            await telegram.send_message(
-                chat_id,
-                "⚠️ Username must be 3-32 characters using only letters, numbers, dots, underscores, or dashes.",
-            )
-            return {"ok": True}
-
-        save_pending_dashboard_account(chat_id, username=username)
-        set_user_state(chat_id, "awaiting_dashboard_password")
-        await telegram.send_message(
-            chat_id,
-            "Now send the dashboard password you want to use. It will be hashed before storing.",
-        )
-        return {"ok": True}
-
-    if user_state == "awaiting_dashboard_password":
-        pending = get_pending_dashboard_account(chat_id)
-        if not pending or _is_expired(pending.get("timestamp", "")):
-            delete_pending_dashboard_account(chat_id)
-            clear_user_state(chat_id)
-            await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /dashboard_account again.")
-            return {"ok": True}
-
-        username = pending.get("username", "").strip()
-        if not username:
-            delete_pending_dashboard_account(chat_id)
-            clear_user_state(chat_id)
-            await telegram.send_message(chat_id, "⚠️ Username setup was lost. Send /dashboard_account again.")
-            return {"ok": True}
-
-        password_error = validate_password(text)
-        if password_error:
-            await telegram.send_message(chat_id, f"⚠️ {password_error}")
-            return {"ok": True}
-
-        try:
-            upsert_web_account(
-                chat_id=chat_id,
-                username=username,
-                password_hash=hash_password(text),
-            )
-        except ValueError as exc:
-            await telegram.send_message(chat_id, f"⚠️ {exc}")
-            return {"ok": True}
-
-        delete_web_sessions_for_chat(chat_id)
-        delete_pending_dashboard_account(chat_id)
-        clear_user_state(chat_id)
-        await telegram.send_message(
-            chat_id,
-            "✅ Dashboard login saved.\n"
-            "Use your username and password at <a href=\"https://budget-bot-123.web.app\">budget-bot-123.web.app</a>.",
-        )
-        return {"ok": True}
 
     if user_state and user_state.startswith("awaiting_new_cat_name|"):
         ts = user_state[len("awaiting_new_cat_name|"):]
