@@ -26,6 +26,7 @@ from services.firestore import (
     delete_transactions_for_plan,
     delete_transaction,
     get_category_list,
+    get_budgets,
     get_last_transaction,
     get_payment_plan,
     get_pending,
@@ -41,6 +42,7 @@ from services.firestore import (
     rename_category,
     save_category,
     save_pending_change,
+    set_budget,
     set_user_state,
     upsert_web_account,
     delete_web_sessions_for_chat,
@@ -123,6 +125,34 @@ def _valid_months(text: str) -> int | None:
 
 def _valid_transaction_date(text: str) -> str | None:
     return parse_transaction_date(text)
+
+
+def _parse_budget_command_or_none(text: str) -> tuple[str, float] | None:
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    remainder = parts[1].strip()
+    match = re.fullmatch(r"(.+?)\s+\$?(\d+(?:\.\d+)?)", remainder)
+    if not match:
+        return None
+    category = match.group(1).strip().title()
+    amount = float(match.group(2))
+    if amount <= 0:
+        return None
+    return category, amount
+
+
+def _format_budget_list(chat_id: int) -> str:
+    budgets = get_budgets(chat_id)
+    if not budgets:
+        return "No monthly budgets found. Use <code>/set_budget Category 100</code> to add one."
+
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+    lines = ["<b>Monthly Budgets</b>"]
+    for category, amount in sorted(budgets.items(), key=lambda item: item[0].lower()):
+        emoji = category_emoji.get(category, "📦")
+        lines.append(f"{emoji} {category}: <b>${amount:.2f}</b>")
+    return "\n".join(lines)
 
 
 def _parse_user_date_or_none(text: str) -> datetime | None:
@@ -888,6 +918,29 @@ async def webhook(request: Request):
             transactions = get_transactions(chat_id, start, end)
             report = _format_report(label, transactions)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+        elif text.startswith("/set_budget"):
+            parsed_budget = _parse_budget_command_or_none(text)
+            if parsed_budget is None:
+                await telegram.send_message(
+                    chat_id,
+                    "Usage: <code>/set_budget Food & Drink 300</code>",
+                )
+            else:
+                category, amount = parsed_budget
+                categories = {c["name"] for c in get_category_list()}
+                if category not in categories:
+                    await telegram.send_message(
+                        chat_id,
+                        f"⚠️ Category <b>{category}</b> does not exist. Create it first or choose an existing category.",
+                    )
+                else:
+                    set_budget(chat_id, category, amount)
+                    await telegram.send_message(
+                        chat_id,
+                        f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>.",
+                    )
+        elif text == "/list_budget":
+            await telegram.send_message(chat_id, _format_budget_list(chat_id))
         elif text.startswith("/monthly"):
             now = datetime.now(SGT)
             buttons = _build_monthly_report_buttons(now)
