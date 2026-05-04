@@ -41,6 +41,7 @@ from services.firestore import (
     get_transactions,
     get_transactions_with_ids,
     get_user_state,
+    get_web_account_by_chat_id,
     list_payment_plans,
     reassign_transactions_category,
     remove_category_from_list,
@@ -521,13 +522,115 @@ async def _get_active_session_or_expire(chat_id: int, flow_type: str) -> dict | 
         clear_session(chat_id)
         clear_user_state(chat_id)
         if flow_type == "dashboard_account":
-            await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /dashboard_account again.")
+            await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /create_account again.")
         elif flow_type == "set_budget":
             await telegram.send_message(chat_id, "⏰ The /set_budget request has expired. Please send /set_budget again.")
         else:
             await telegram.send_message(chat_id, "⏰ This flow has expired. Please start again.")
         return None
     return session
+
+
+async def _send_existing_dashboard_account_options(chat_id: int, account: dict) -> None:
+    start_session(
+        chat_id,
+        "dashboard_account",
+        "choosing_update",
+        payload={"username": account.get("username", "")},
+    )
+    await telegram.send_dashboard_account_options_keyboard(
+        chat_id,
+        "You already have a dashboard account. What do you want to change?",
+    )
+
+
+async def _start_create_account_flow(chat_id: int) -> None:
+    account = get_web_account_by_chat_id(chat_id)
+    clear_user_state(chat_id)
+    if account:
+        await _send_existing_dashboard_account_options(chat_id, account)
+        return
+
+    start_session(
+        chat_id,
+        "dashboard_account",
+        "awaiting_username",
+        payload={"action": "create"},
+    )
+    await telegram.send_message(
+        chat_id,
+        "Choose a dashboard username using 3-32 letters, numbers, dots, underscores, or dashes.",
+    )
+
+
+async def _start_change_password_flow(chat_id: int) -> None:
+    account = get_web_account_by_chat_id(chat_id)
+    clear_user_state(chat_id)
+    if not account:
+        await telegram.send_message(chat_id, "You do not have a dashboard account yet. Send /create_account first.")
+        return
+
+    start_session(
+        chat_id,
+        "dashboard_account",
+        "awaiting_password",
+        payload={
+            "action": "update_password",
+            "username": account.get("username", ""),
+        },
+    )
+    await telegram.send_message(chat_id, "Send the new dashboard password. It will be hashed before storing.")
+
+
+async def _handle_dashboard_account_choice(chat_id: int, callback_query_id: str, choice: str) -> bool:
+    session = await _get_active_session_or_expire(chat_id, "dashboard_account")
+    if not session or session.get("step") != "choosing_update":
+        await telegram.answer_callback_query(callback_query_id, "Expired.")
+        await telegram.send_message(chat_id, "This account choice has expired. Send /create_account again.")
+        return True
+
+    account = get_web_account_by_chat_id(chat_id)
+    if not account:
+        clear_session(chat_id)
+        await telegram.answer_callback_query(callback_query_id, "No account")
+        await telegram.send_message(chat_id, "No dashboard account was found. Send /create_account to create one.")
+        return True
+
+    if choice == "cancel":
+        clear_session(chat_id)
+        clear_user_state(chat_id)
+        await telegram.answer_callback_query(callback_query_id, "Cancelled")
+        await telegram.send_message(chat_id, "Dashboard account update cancelled.")
+        return True
+
+    if choice == "username":
+        update_session(
+            chat_id,
+            step="awaiting_username",
+            payload_updates={"action": "update_username"},
+        )
+        await telegram.answer_callback_query(callback_query_id, "")
+        await telegram.send_message(
+            chat_id,
+            "Send the new dashboard username using 3-32 letters, numbers, dots, underscores, or dashes.",
+        )
+        return True
+
+    if choice == "password":
+        update_session(
+            chat_id,
+            step="awaiting_password",
+            payload_updates={
+                "action": "update_password",
+                "username": account.get("username", ""),
+            },
+        )
+        await telegram.answer_callback_query(callback_query_id, "")
+        await telegram.send_message(chat_id, "Send the new dashboard password. It will be hashed before storing.")
+        return True
+
+    await telegram.answer_callback_query(callback_query_id, "Invalid")
+    return True
 
 
 async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
@@ -546,7 +649,35 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
             )
             return True
 
-        update_session(chat_id, step="awaiting_password", payload_updates={"username": username})
+        action = payload.get("action", "create")
+        if action == "update_username":
+            account = get_web_account_by_chat_id(chat_id)
+            if not account or not account.get("password_hash"):
+                clear_session(chat_id)
+                clear_user_state(chat_id)
+                await telegram.send_message(chat_id, "⚠️ No dashboard account was found. Send /create_account to create one.")
+                return True
+            try:
+                upsert_web_account(
+                    chat_id=chat_id,
+                    username=username,
+                    password_hash=account["password_hash"],
+                )
+            except ValueError as exc:
+                await telegram.send_message(chat_id, f"⚠️ {exc}")
+                return True
+
+            delete_web_sessions_for_chat(chat_id)
+            clear_session(chat_id)
+            clear_user_state(chat_id)
+            await telegram.send_message(chat_id, "✅ Dashboard username updated. Please sign in again on the dashboard.")
+            return True
+
+        update_session(
+            chat_id,
+            step="awaiting_password",
+            payload_updates={"action": "create", "username": username},
+        )
         await telegram.send_message(
             chat_id,
             "Now send the dashboard password you want to use. It will be hashed before storing.",
@@ -554,11 +685,15 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
         return True
 
     if step == "awaiting_password":
+        action = payload.get("action", "create")
+        account = get_web_account_by_chat_id(chat_id)
         username = payload.get("username", "").strip()
+        if action == "update_password" and account:
+            username = (account.get("username") or username).strip()
         if not username:
             clear_session(chat_id)
             clear_user_state(chat_id)
-            await telegram.send_message(chat_id, "⚠️ Username setup was lost. Send /dashboard_account again.")
+            await telegram.send_message(chat_id, "⚠️ Username setup was lost. Send /create_account again.")
             return True
 
         password_error = validate_password(text)
@@ -581,14 +716,18 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
         clear_user_state(chat_id)
         await telegram.send_message(
             chat_id,
-            "✅ Dashboard login saved.\n"
-            "Use your username and password at <a href=\"https://budget-bot-123.web.app\">budget-bot-123.web.app</a>.",
+            (
+                "✅ Dashboard password updated.\n"
+                if action == "update_password"
+                else "✅ Dashboard login saved.\n"
+            )
+            + "Use your username and password at <a href=\"https://budget-bot-123.web.app\">budget-bot-123.web.app</a>.",
         )
         return True
 
     clear_session(chat_id)
     clear_user_state(chat_id)
-    await telegram.send_message(chat_id, "⚠️ Dashboard setup was interrupted. Send /dashboard_account again.")
+    await telegram.send_message(chat_id, "⚠️ Dashboard setup was interrupted. Send /create_account again.")
     return True
 
 
@@ -695,6 +834,11 @@ async def webhook(request: Request):
                 chat_id,
                 f"Send the monthly budget for <b>{category}</b>, for example <code>300</code>.",
             )
+            return {"ok": True}
+
+        if callback_data.startswith("acct:"):
+            choice = callback_data.split(":", 1)[1]
+            await _handle_dashboard_account_choice(chat_id, callback_query_id, choice)
             return {"ok": True}
 
         if callback_data.startswith("cat:") and get_user_state(chat_id) in {
@@ -1098,13 +1242,10 @@ async def webhook(request: Request):
                 await telegram.send_message(chat_id, "No categories to edit.")
             else:
                 await telegram.send_edit_category_keyboard(chat_id, categories)
-        elif text == "/dashboard_account":
-            clear_user_state(chat_id)
-            start_session(chat_id, "dashboard_account", "awaiting_username")
-            await telegram.send_message(
-                chat_id,
-                "Choose a dashboard username using 3-32 letters, numbers, dots, underscores, or dashes.",
-            )
+        elif text == "/create_account":
+            await _start_create_account_flow(chat_id)
+        elif text == "/change_password":
+            await _start_change_password_flow(chat_id)
         elif text == "/set_recurring":
             start_pending_plan(chat_id, "recurring")
             set_user_state(chat_id, "awaiting_recurring_item")

@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "budget-bot-123"
-  }
+  },
+  "targets": {
+    "budget-bot-123": {
+      "hosting": {
+        "prod": [
+          "budget-bot-123"
+        ],
+        "dev": [
+          "budget-bot-123-dev"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

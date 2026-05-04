@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +12,7 @@ from services.dashboard_auth import (
     is_valid_username,
     normalize_username,
     session_doc_id,
+    session_expiry,
     validate_password,
     verify_password,
 )
@@ -36,6 +38,10 @@ class DashboardAuthTests(unittest.TestCase):
         self.assertIsNone(validate_password("long-enough-password"))
         self.assertEqual(session_doc_id("abc123"), session_doc_id("abc123"))
         self.assertNotEqual(session_doc_id("abc123"), session_doc_id("xyz789"))
+
+    def test_session_expires_after_one_day(self):
+        now = datetime(2026, 5, 5, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+        self.assertEqual(session_expiry(now), now + timedelta(days=1))
 
 
 if __name__ == "__main__":
