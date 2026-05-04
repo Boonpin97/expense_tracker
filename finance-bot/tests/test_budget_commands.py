@@ -113,7 +113,11 @@ if "fastapi" not in sys.modules:
     fastapi_stub.Request = Request
     sys.modules["fastapi"] = fastapi_stub
 
-from routers.webhook import _format_budget_list, _parse_budget_command_or_none
+from routers.webhook import (
+    _format_budget_list,
+    _parse_budget_command_or_none,
+    _parse_remove_budget_command_or_none,
+)
 
 
 class BudgetCommandTests(unittest.TestCase):
@@ -132,6 +136,13 @@ class BudgetCommandTests(unittest.TestCase):
         self.assertIsNone(_parse_budget_command_or_none("/set_budget Food nope"))
         self.assertIsNone(_parse_budget_command_or_none("/set_budget Food 0"))
 
+    def test_parse_remove_budget_command(self):
+        self.assertEqual(
+            _parse_remove_budget_command_or_none("/remove_budget Food & Drink"),
+            "Food & Drink",
+        )
+        self.assertIsNone(_parse_remove_budget_command_or_none("/remove_budget"))
+
     def test_format_budget_list(self):
         with patch("routers.webhook.get_budgets", return_value={"Food & Drink": 300.0, "Transport": 50.0}), patch(
             "routers.webhook.get_category_list",
@@ -145,6 +156,91 @@ class BudgetCommandTests(unittest.TestCase):
         self.assertIn("<b>Monthly Budgets</b>", message)
         self.assertIn("🍔 Food & Drink: <b>$300.00</b>", message)
         self.assertIn("🚗 Transport: <b>$50.00</b>", message)
+
+    def test_remove_budget_deletes_only_requested_category(self):
+        class DummyDoc:
+            def __init__(self):
+                self._data = {"Food & Drink": 300.0, "Transport": 50.0}
+                self.exists = True
+                self.deleted = False
+
+            def get(self):
+                return self
+
+            def to_dict(self):
+                return dict(self._data)
+
+            def set(self, data):
+                self._data = dict(data)
+
+            def delete(self):
+                self.deleted = True
+
+        class DummyCollection:
+            def __init__(self, doc):
+                self._doc = doc
+
+            def document(self, _doc_id):
+                return self._doc
+
+        class DummyDB:
+            def __init__(self, doc):
+                self._doc = doc
+
+            def collection(self, _name):
+                return DummyCollection(self._doc)
+
+        from services.firestore import remove_budget
+
+        dummy_doc = DummyDoc()
+        with patch("services.firestore.get_db", return_value=DummyDB(dummy_doc)):
+            removed = remove_budget(123, "Food & Drink")
+
+        self.assertTrue(removed)
+        self.assertEqual(dummy_doc._data, {"Transport": 50.0})
+        self.assertFalse(dummy_doc.deleted)
+
+    def test_remove_budget_deletes_document_when_last_budget_removed(self):
+        class DummyDoc:
+            def __init__(self):
+                self._data = {"Food & Drink": 300.0}
+                self.exists = True
+                self.deleted = False
+
+            def get(self):
+                return self
+
+            def to_dict(self):
+                return dict(self._data)
+
+            def set(self, data):
+                self._data = dict(data)
+
+            def delete(self):
+                self.deleted = True
+
+        class DummyCollection:
+            def __init__(self, doc):
+                self._doc = doc
+
+            def document(self, _doc_id):
+                return self._doc
+
+        class DummyDB:
+            def __init__(self, doc):
+                self._doc = doc
+
+            def collection(self, _name):
+                return DummyCollection(self._doc)
+
+        from services.firestore import remove_budget
+
+        dummy_doc = DummyDoc()
+        with patch("services.firestore.get_db", return_value=DummyDB(dummy_doc)):
+            removed = remove_budget(123, "Food & Drink")
+
+        self.assertTrue(removed)
+        self.assertTrue(dummy_doc.deleted)
 
 
 if __name__ == "__main__":

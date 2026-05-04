@@ -361,6 +361,7 @@ async def set_my_commands() -> dict:
         {"command": "weekly", "description": "This week's spending summary"},
         {"command": "set_budget", "description": "Set a monthly budget for a category"},
         {"command": "list_budget", "description": "List monthly budgets"},
+        {"command": "remove_budget", "description": "Remove a monthly budget"},
         {"command": "monthly", "description": "This month's spending summary"},
         {"command": "delete_last", "description": "Delete the last recorded transaction"},
         {"command": "delete_today", "description": "Delete a transactions from today"},

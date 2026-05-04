@@ -39,6 +39,7 @@ from services.firestore import (
     list_payment_plans,
     reassign_transactions_category,
     remove_category_from_list,
+    remove_budget,
     rename_category,
     save_category,
     save_pending_change,
@@ -140,6 +141,14 @@ def _parse_budget_command_or_none(text: str) -> tuple[str, float] | None:
     if amount <= 0:
         return None
     return category, amount
+
+
+def _parse_remove_budget_command_or_none(text: str) -> str | None:
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    category = parts[1].strip().title()
+    return category or None
 
 
 def _format_budget_list(chat_id: int) -> str:
@@ -941,6 +950,30 @@ async def webhook(request: Request):
                     )
         elif text == "/list_budget":
             await telegram.send_message(chat_id, _format_budget_list(chat_id))
+        elif text.startswith("/remove_budget"):
+            category = _parse_remove_budget_command_or_none(text)
+            if category is None:
+                await telegram.send_message(
+                    chat_id,
+                    "Usage: <code>/remove_budget Food & Drink</code>",
+                )
+            else:
+                categories = {c["name"] for c in get_category_list()}
+                if category not in categories:
+                    await telegram.send_message(
+                        chat_id,
+                        f"⚠️ Category <b>{category}</b> does not exist. Choose an existing category.",
+                    )
+                elif remove_budget(chat_id, category):
+                    await telegram.send_message(
+                        chat_id,
+                        f"🗑️ Removed the monthly budget for <b>{category}</b>.",
+                    )
+                else:
+                    await telegram.send_message(
+                        chat_id,
+                        f"⚠️ No monthly budget found for <b>{category}</b>.",
+                    )
         elif text.startswith("/monthly"):
             now = datetime.now(SGT)
             buttons = _build_monthly_report_buttons(now)
