@@ -993,7 +993,7 @@ async def webhook(request: Request):
 
     if text.startswith("/"):
         if text == "/start":
-            await telegram.send_message(chat_id, "👋 Welcome! Send me an expense like <b>Coffee $10</b> and I'll track it for you.")
+            await telegram.send_message(chat_id, "👋 Welcome! Send me an expense like <b>Coffee $10</b> or <b>Drinks 10+20*2</b> and I'll track it for you.")
         elif text.startswith("/daily"):
             await telegram.send_daily_report_keyboard(chat_id, "Choose a daily report:")
         elif text.startswith("/weekly"):
@@ -1534,7 +1534,7 @@ async def webhook(request: Request):
 
     parsed = parse_expense(text)
     if parsed is None:
-        await telegram.send_message(chat_id, "🤔 I couldn't understand that. Try something like:\n<code>Coffee $10</code>\n<code>Grab 15.50</code>\n<code>Coffee $10 130126</code>")
+        await telegram.send_message(chat_id, "🤔 I couldn't understand that. Try something like:\n<code>Coffee $10</code>\n<code>Drinks 10+20*2</code>\n<code>Coffee $10 130126</code>")
         return {"ok": True}
 
     await handle_expense(

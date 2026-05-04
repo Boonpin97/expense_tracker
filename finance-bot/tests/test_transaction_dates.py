@@ -103,6 +103,42 @@ class TransactionDateParsingTests(unittest.TestCase):
         self.assertEqual(parsed.amount, 10.0)
         self.assertEqual(parsed.transaction_date, "2026-01-13")
 
+    def test_parse_expense_with_math_expression(self):
+        parsed = parse_expense("Drinks 10+20*2")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "Drinks")
+        self.assertEqual(parsed.amount, 50.0)
+
+    def test_parse_expense_with_dollar_math_expression(self):
+        parsed = parse_expense("Drinks $10+20*2")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "Drinks")
+        self.assertEqual(parsed.amount, 50.0)
+
+    def test_parse_expense_with_leading_dollar_math_expression(self):
+        parsed = parse_expense("$10+20*2 Drinks")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "Drinks")
+        self.assertEqual(parsed.amount, 50.0)
+
+    def test_parse_expense_with_parentheses_and_trailing_date(self):
+        parsed = parse_expense("Snacks (10+20)*2 130126")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "Snacks")
+        self.assertEqual(parsed.amount, 60.0)
+        self.assertEqual(parsed.transaction_date, "2026-01-13")
+
+    def test_parse_expense_with_x_alias(self):
+        parsed = parse_expense("Taxi 10+20x2")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "Taxi")
+        self.assertEqual(parsed.amount, 50.0)
+
+    def test_parse_expense_rejects_invalid_math_expression(self):
+        self.assertIsNone(parse_expense("Drinks 10++"))
+        self.assertIsNone(parse_expense("Drinks (10+20"))
+        self.assertIsNone(parse_expense("Drinks 10/0"))
+
     def test_parse_expense_rejects_invalid_trailing_date(self):
         self.assertIsNone(parse_expense("Coffee $10 310226"))
 
