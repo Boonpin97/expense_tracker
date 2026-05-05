@@ -1137,7 +1137,7 @@ async def webhook(request: Request):
 
     if text.startswith("/"):
         if text == "/start":
-            await telegram.send_message(chat_id, "👋 Welcome! Send me an expense like <b>Coffee $10</b> or <b>Drinks 10+20*2</b> and I'll track it for you.")
+            await telegram.send_message(chat_id, "Hello")
         elif text.startswith("/daily"):
             await telegram.send_daily_report_keyboard(chat_id, "Choose a daily report:")
         elif text.startswith("/weekly"):
