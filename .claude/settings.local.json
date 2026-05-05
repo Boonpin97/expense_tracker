@@ -28,7 +28,10 @@
       "Bash(curl *)",
       "Bash(claude plugin *)",
       "Bash(flutter pub *)",
-      "Bash(flutter analyze *)"
+      "Bash(flutter analyze *)",
+      "Bash(where bun *)",
+      "Bash(where npm *)",
+      "Bash(npm run *)"
     ]
   }
 }
