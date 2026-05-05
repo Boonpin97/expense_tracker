@@ -23,13 +23,12 @@
     },
     {
       "target": "dev",
-      "public": "build/web",
+      "public": "lovable/dist",
       "ignore": [
         "firebase.json",
         "**/.*",
         "**/node_modules/**",
-        "**/*.symbols",
-        "canvaskit/**"
+        "**/*.symbols"
       ],
       "rewrites": [
         {

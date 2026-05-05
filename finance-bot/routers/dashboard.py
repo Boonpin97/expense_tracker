@@ -31,6 +31,7 @@ from services.firestore import (
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 COOKIE_NAME = "dashboard_session"
+SESSION_HEADER = "x-dashboard-session"
 SGT = timezone(timedelta(hours=8))
 
 
@@ -43,6 +44,7 @@ class SessionResponse(BaseModel):
     authenticated: bool
     username: Optional[str] = None
     chat_id: Optional[int] = None
+    session_token: Optional[str] = None
 
 
 class TransactionUpdateRequest(BaseModel):
@@ -96,6 +98,12 @@ def _clear_session_cookie(response: Response) -> None:
 
 def _session_payload(request: Request) -> Optional[dict]:
     token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        token = request.headers.get(SESSION_HEADER)
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
     if not token:
         return None
     return get_web_session(token)
@@ -155,6 +163,7 @@ async def login_dashboard(request: LoginRequest, response: Response):
         authenticated=True,
         username=account["username"],
         chat_id=account["chat_id"],
+        session_token=token,
     )
 
 

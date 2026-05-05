@@ -1137,7 +1137,11 @@ async def webhook(request: Request):
 
     if text.startswith("/"):
         if text == "/start":
-            await telegram.send_message(chat_id, "👋 Welcome! Send me an expense like <b>Coffee $10</b> or <b>Drinks 10+20*2</b> and I'll track it for you.")
+            await telegram.send_message(
+                chat_id,
+                "Welcome to Expense Bot! 👋\n\nI'm here to help you track your spending and stay on top of your budget. Here's what you can do:\n\n• Log a transaction by typing naturally, e.g. <i>lunch 12.50</i>\n• <b>/daily</b> — view today's or a past day's report\n• <b>/weekly</b> — view this week's spending\n• <b>/set_budget</b> — set a monthly budget per category\n\nLet's get started — your finances are in good hands! 💰",
+                parse_mode="HTML",
+            )
         elif text.startswith("/daily"):
             await telegram.send_daily_report_keyboard(chat_id, "Choose a daily report:")
         elif text.startswith("/weekly"):
