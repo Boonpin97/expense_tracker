@@ -20,29 +20,29 @@ import 'dashboard_http_client.dart';
 // ============================================================================
 
 class Ink {
-  static const ground = Color(0xFF0E120F);
-  static const surface = Color(0xFF161B17);
-  static const surfaceHi = Color(0xFF1D2420);
-  static const surfaceLo = Color(0xFF11150F);
-  static const hairline = Color(0xFF2A332D);
-  static const hairlineHi = Color(0xFF3B463E);
+  static const ground = Color(0xFFF5F0E6);
+  static const surface = Color(0xFFFFFCF6);
+  static const surfaceHi = Color(0xFFF2EBDD);
+  static const surfaceLo = Color(0xFFEEE4D3);
+  static const hairline = Color(0xFFD8CBB8);
+  static const hairlineHi = Color(0xFFB9AC98);
 }
 
 class Cream {
-  static const primary = Color(0xFFEDE6D6);
-  static const secondary = Color(0xFF9AA39A);
-  static const tertiary = Color(0xFF5C6660);
+  static const primary = Color(0xFF1E2822);
+  static const secondary = Color(0xFF566459);
+  static const tertiary = Color(0xFF7D877D);
 }
 
 class Accent {
-  static const lime = Color(0xFFC2F25C);
-  static const limeDeep = Color(0xFF8DBE2E);
-  static const amber = Color(0xFFE8B568);
-  static const terracotta = Color(0xFFE5704C);
-  static const mauve = Color(0xFFB79EFF);
-  static const sky = Color(0xFF7AC8E5);
-  static const sage = Color(0xFF8BB89A);
-  static const rose = Color(0xFFE68FA0);
+  static const lime = Color(0xFF1F6B4F);
+  static const limeDeep = Color(0xFF174F3C);
+  static const amber = Color(0xFFB67B2D);
+  static const terracotta = Color(0xFFBA6147);
+  static const mauve = Color(0xFF8B74B7);
+  static const sky = Color(0xFF5E93B3);
+  static const sage = Color(0xFF6F9A78);
+  static const rose = Color(0xFFC57A88);
 }
 
 TextStyle display(double size, {FontWeight weight = FontWeight.w400, Color? color, double? letterSpacing, double? height}) {
@@ -90,19 +90,19 @@ class ExpenseDashboardApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = const ColorScheme.dark(
-      brightness: Brightness.dark,
+    final colorScheme = const ColorScheme.light(
+      brightness: Brightness.light,
       primary: Accent.lime,
-      onPrimary: Ink.ground,
+      onPrimary: Ink.surface,
       secondary: Accent.amber,
-      onSecondary: Ink.ground,
+      onSecondary: Ink.surface,
       surface: Ink.surface,
       onSurface: Cream.primary,
       surfaceContainerHighest: Ink.surfaceHi,
       outline: Ink.hairlineHi,
       outlineVariant: Ink.hairline,
       error: Accent.terracotta,
-      onError: Ink.ground,
+      onError: Ink.surface,
     );
 
     return MaterialApp(
@@ -187,7 +187,7 @@ class ExpenseDashboardApp extends StatelessWidget {
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
             backgroundColor: Accent.lime,
-            foregroundColor: Ink.ground,
+            foregroundColor: Ink.surface,
             textStyle: ui(13, weight: FontWeight.w600, letterSpacing: 0.4),
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
@@ -453,7 +453,7 @@ class _SignInScreenState extends State<SignInScreen> {
                           onPressed: _busy ? null : _signIn,
                           style: FilledButton.styleFrom(
                             backgroundColor: Accent.lime,
-                            foregroundColor: Ink.ground,
+                            foregroundColor: Ink.surface,
                             disabledBackgroundColor: Ink.surfaceHi,
                             disabledForegroundColor: Cream.tertiary,
                             minimumSize: const Size.fromHeight(52),
@@ -468,7 +468,7 @@ class _SignInScreenState extends State<SignInScreen> {
                                   width: 18,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
-                                    color: Ink.ground,
+                                    color: Ink.surface,
                                   ),
                                 )
                               : const Text('SIGN IN'),
@@ -747,7 +747,7 @@ class _Sidebar extends StatelessWidget {
                       session.username.isNotEmpty
                           ? session.username[0].toUpperCase()
                           : '?',
-                      style: ui(13, weight: FontWeight.w700, color: Ink.ground),
+                      style: ui(13, weight: FontWeight.w700, color: Ink.surface),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1396,9 +1396,9 @@ class AnalyticsPage extends StatefulWidget {
 class _AnalyticsPageState extends State<AnalyticsPage> {
   AnalyticsRangePreset _rangePreset = AnalyticsRangePreset.currentMonth;
   DateTimeRange _range = currentMonthRange();
-  String? _category;
-  bool _budgetedOnly = false;
-  bool _overBudgetOnly = false;
+  Set<String> _selectedCategories = <String>{};
+  Set<String> _knownCategories = <String>{};
+  bool _categoriesInitialized = false;
 
   void _setRangePreset(AnalyticsRangePreset preset) {
     setState(() {
@@ -1417,9 +1417,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       initialDateRange: _range,
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.dark(
+          colorScheme: const ColorScheme.light(
             primary: Accent.lime,
-            onPrimary: Ink.ground,
+            onPrimary: Ink.surface,
             surface: Ink.surface,
             onSurface: Cream.primary,
           ),
@@ -1436,16 +1436,60 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     });
   }
 
+  Future<void> _handleRangePresetChange(
+    BuildContext context,
+    AnalyticsRangePreset preset,
+  ) async {
+    if (preset == AnalyticsRangePreset.custom) {
+      await _pickCustomRange(context);
+      return;
+    }
+    _setRangePreset(preset);
+  }
+
+  void _syncSelectedCategories(List<DashboardCategory> categories) {
+    final currentNames = categories.map((category) => category.name).toSet();
+    if (!_categoriesInitialized) {
+      _selectedCategories = {...currentNames};
+      _knownCategories = {...currentNames};
+      _categoriesInitialized = true;
+      return;
+    }
+
+    final hadAllSelected = _selectedCategories.length == _knownCategories.length &&
+        _selectedCategories.containsAll(_knownCategories);
+    _selectedCategories = _selectedCategories.where(currentNames.contains).toSet();
+    if (hadAllSelected) {
+      _selectedCategories = {...currentNames};
+    } else if (_selectedCategories.isEmpty && currentNames.isNotEmpty) {
+      _selectedCategories = {...currentNames};
+    }
+    _knownCategories = {...currentNames};
+  }
+
+  void _toggleCategorySelection(String categoryName) {
+    setState(() {
+      if (_selectedCategories.contains(categoryName)) {
+        if (_selectedCategories.length == 1) {
+          return;
+        }
+        _selectedCategories.remove(categoryName);
+      } else {
+        _selectedCategories.add(categoryName);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<DashboardCategory>>(
       stream: DashboardRepository.streamCategories(),
       builder: (context, categorySnapshot) {
         final categories = categorySnapshot.data ?? const <DashboardCategory>[];
+        _syncSelectedCategories(categories);
         return StreamBuilder<List<DashboardTransaction>>(
           stream: DashboardRepository.streamTransactions(
             range: _range,
-            category: _category,
           ),
           builder: (context, transactionSnapshot) {
             if (transactionSnapshot.connectionState == ConnectionState.waiting) {
@@ -1459,11 +1503,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
               stream: DashboardRepository.streamBudgets(),
               builder: (context, budgetSnapshot) {
                 final budgets = budgetSnapshot.data ?? const <String, double>{};
-                final transactions = applyAnalyticsFilters(
+                final transactions = filterTransactionsBySelectedCategories(
                   rangeTransactions,
-                  budgets: budgets,
-                  budgetedOnly: _budgetedOnly,
-                  overBudgetOnly: _overBudgetOnly,
+                  _selectedCategories,
                 );
                 final summaries = buildCategorySummaries(transactions, categories);
                 final trend = buildTrendSeries(transactions);
@@ -1485,35 +1527,119 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                 return _StaggeredColumn(
                   padding: const EdgeInsets.fromLTRB(36, 8, 36, 32),
                   children: [
-                    _HeroBlock(
-                      total: total,
-                      transactionCount: transactions.length,
-                      avg: avg,
-                      topCategory: topCat,
-                      overBudget: overBudget,
-                      range: _range,
-                      trend: trend,
-                    ),
-                    const SizedBox(height: 18),
                     _FilterStrip(
                       rangePreset: _rangePreset,
                       range: _range,
-                      category: _category,
                       categories: categories,
-                      budgetedOnly: _budgetedOnly,
-                      overBudgetOnly: _overBudgetOnly,
-                      onRangePresetChange: _setRangePreset,
-                      onPickCustomRange: () => _pickCustomRange(context),
-                      onCategoryChange: (c) => setState(() => _category = c),
-                      onBudgetedOnlyChange: (value) => setState(() => _budgetedOnly = value),
-                      onOverBudgetOnlyChange: (value) => setState(() => _overBudgetOnly = value),
+                      selectedCategories: _selectedCategories,
+                      onRangePresetChange: (preset) =>
+                          _handleRangePresetChange(context, preset),
+                      onToggleCategory: _toggleCategorySelection,
                       onReset: () => setState(() {
                         _rangePreset = AnalyticsRangePreset.currentMonth;
                         _range = currentMonthRange();
-                        _category = null;
-                        _budgetedOnly = false;
-                        _overBudgetOnly = false;
+                        _selectedCategories = {
+                          for (final category in categories) category.name,
+                        };
                       }),
+                    ),
+                    const SizedBox(height: 18),
+                    _PanelCard(
+                      eyebrow: 'TIMELINE',
+                      title: 'Spending trend',
+                      trailing: Text(
+                        describeDateRange(_range),
+                        style: ui(11, color: Cream.tertiary, letterSpacing: 0.4),
+                      ),
+                      child: trend.isEmpty
+                          ? _EmptyChart(message: emptyMessage)
+                          : SizedBox(
+                              height: 380,
+                              child: LineChart(
+                                LineChartData(
+                                  minY: 0,
+                                  gridData: _gridData(),
+                                  borderData: FlBorderData(show: false),
+                                  titlesData: minimalChartTitles(
+                                    bottomBuilder: (value, meta) {
+                                      final index = value.toInt();
+                                      if (index < 0 || index >= trend.length) {
+                                        return const SizedBox.shrink();
+                                      }
+                                      if (trend.length > 12 && index.isOdd) {
+                                        return const SizedBox.shrink();
+                                      }
+                                      return Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: Text(
+                                          DateFormat('d MMM').format(trend[index].date),
+                                          style: mono(
+                                            10,
+                                            color: Cream.tertiary,
+                                            letterSpacing: 0.3,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  lineTouchData: LineTouchData(
+                                    touchTooltipData: LineTouchTooltipData(
+                                      getTooltipColor: (_) => Ink.surfaceHi,
+                                      tooltipBorder: const BorderSide(color: Ink.hairline),
+                                      getTooltipItems: (spots) => spots.map((spot) {
+                                        final point = trend[spot.x.toInt()];
+                                        return LineTooltipItem(
+                                          '${formatCurrency(point.total)}\n',
+                                          mono(
+                                            13,
+                                            color: Cream.primary,
+                                            weight: FontWeight.w600,
+                                          ),
+                                          children: [
+                                            TextSpan(
+                                              text: DateFormat('EEE, d MMM').format(point.date),
+                                              style: ui(10, color: Cream.tertiary),
+                                            ),
+                                          ],
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ),
+                                  lineBarsData: [
+                                    LineChartBarData(
+                                      isCurved: false,
+                                      color: Accent.lime,
+                                      barWidth: 2,
+                                      spots: [
+                                        for (var i = 0; i < trend.length; i++)
+                                          FlSpot(i.toDouble(), trend[i].total),
+                                      ],
+                                      dotData: FlDotData(
+                                        show: true,
+                                        getDotPainter: (_, __, ___, ____) =>
+                                            FlDotCirclePainter(
+                                          radius: 3.2,
+                                          color: Accent.lime,
+                                          strokeWidth: 1.4,
+                                          strokeColor: Ink.surface,
+                                        ),
+                                      ),
+                                      belowBarData: BarAreaData(
+                                        show: true,
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Accent.lime.withValues(alpha: 0.16),
+                                            Accent.lime.withValues(alpha: 0.0),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                     ),
                     const SizedBox(height: 18),
                     LayoutBuilder(builder: (ctx, c) {
@@ -1533,7 +1659,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                           child: _MetricCard(
                             title: 'Average ticket',
                             value: formatCurrency(avg),
-                            subtitle: _category ?? 'All categories',
+                            subtitle: analyticsCategorySelectionLabel(
+                              _selectedCategories,
+                              categories,
+                            ),
                             accent: Accent.amber,
                           ),
                         ),
@@ -1570,87 +1699,6 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                     const SizedBox(height: 20),
                     LayoutBuilder(builder: (ctx, c) {
                       final wide = c.maxWidth >= 1100;
-                      final trendCard = _PanelCard(
-                        eyebrow: 'TIMELINE',
-                        title: 'Spending trend',
-                        trailing: Text(
-                          describeDateRange(_range),
-                          style: ui(11, color: Cream.tertiary, letterSpacing: 0.4),
-                        ),
-                        child: trend.isEmpty
-                            ? _EmptyChart(message: emptyMessage)
-                            : SizedBox(
-                                height: 340,
-                                child: LineChart(
-                                  LineChartData(
-                                    minY: 0,
-                                    gridData: _gridData(),
-                                    borderData: FlBorderData(show: false),
-                                    titlesData: minimalChartTitles(
-                                      bottomBuilder: (value, meta) {
-                                        final index = value.toInt();
-                                        if (index < 0 || index >= trend.length) {
-                                          return const SizedBox.shrink();
-                                        }
-                                        if (trend.length > 12 && index % 2 != 0) {
-                                          return const SizedBox.shrink();
-                                        }
-                                        return Padding(
-                                          padding: const EdgeInsets.only(top: 8),
-                                          child: Text(
-                                            DateFormat('d MMM').format(trend[index].date),
-                                            style: mono(10, color: Cream.tertiary, letterSpacing: 0.3),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    lineTouchData: LineTouchData(
-                                      touchTooltipData: LineTouchTooltipData(
-                                        getTooltipColor: (_) => Ink.surfaceHi,
-                                        tooltipBorder: const BorderSide(color: Ink.hairline),
-                                        getTooltipItems: (spots) => spots.map((s) {
-                                          final p = trend[s.x.toInt()];
-                                          return LineTooltipItem(
-                                            '${formatCurrency(p.total)}\n',
-                                            mono(13, color: Cream.primary, weight: FontWeight.w600),
-                                            children: [
-                                              TextSpan(
-                                                text: DateFormat('EEE, d MMM').format(p.date),
-                                                style: ui(10, color: Cream.tertiary),
-                                              ),
-                                            ],
-                                          );
-                                        }).toList(),
-                                      ),
-                                    ),
-                                    lineBarsData: [
-                                      LineChartBarData(
-                                        isCurved: true,
-                                        curveSmoothness: 0.28,
-                                        color: Accent.lime,
-                                        barWidth: 2,
-                                        spots: [
-                                          for (var i = 0; i < trend.length; i++)
-                                            FlSpot(i.toDouble(), trend[i].total),
-                                        ],
-                                        dotData: const FlDotData(show: false),
-                                        belowBarData: BarAreaData(
-                                          show: true,
-                                          gradient: LinearGradient(
-                                            begin: Alignment.topCenter,
-                                            end: Alignment.bottomCenter,
-                                            colors: [
-                                              Accent.lime.withValues(alpha: 0.18),
-                                              Accent.lime.withValues(alpha: 0.0),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                      );
                       final breakdownCard = _PanelCard(
                         eyebrow: 'COMPOSITION',
                         title: 'Category breakdown',
@@ -1691,24 +1739,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                               ),
                       );
                       if (wide) {
-                        return IntrinsicHeight(
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Expanded(flex: 8, child: trendCard),
-                              const SizedBox(width: 16),
-                              Expanded(flex: 4, child: breakdownCard),
-                            ],
-                          ),
-                        );
+                        return breakdownCard;
                       }
-                      return Column(
-                        children: [
-                          trendCard,
-                          const SizedBox(height: 16),
-                          breakdownCard,
-                        ],
-                      );
+                      return breakdownCard;
                     }),
                     const SizedBox(height: 16),
 
@@ -2070,29 +2103,19 @@ class _FilterStrip extends StatelessWidget {
   const _FilterStrip({
     required this.rangePreset,
     required this.range,
-    required this.category,
     required this.categories,
-    required this.budgetedOnly,
-    required this.overBudgetOnly,
+    required this.selectedCategories,
     required this.onRangePresetChange,
-    required this.onPickCustomRange,
-    required this.onCategoryChange,
-    required this.onBudgetedOnlyChange,
-    required this.onOverBudgetOnlyChange,
+    required this.onToggleCategory,
     required this.onReset,
   });
 
   final AnalyticsRangePreset rangePreset;
   final DateTimeRange range;
-  final String? category;
   final List<DashboardCategory> categories;
-  final bool budgetedOnly;
-  final bool overBudgetOnly;
+  final Set<String> selectedCategories;
   final ValueChanged<AnalyticsRangePreset> onRangePresetChange;
-  final VoidCallback onPickCustomRange;
-  final ValueChanged<String?> onCategoryChange;
-  final ValueChanged<bool> onBudgetedOnlyChange;
-  final ValueChanged<bool> onOverBudgetOnlyChange;
+  final ValueChanged<String> onToggleCategory;
   final VoidCallback onReset;
 
   @override
@@ -2131,6 +2154,11 @@ class _FilterStrip extends StatelessWidget {
             runSpacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
+              _CategoryMultiSelectButton(
+                categories: categories,
+                selectedCategories: selectedCategories,
+                onToggleCategory: onToggleCategory,
+              ),
               _PillDropdown<AnalyticsRangePreset>(
                 value: rangePreset,
                 icon: Icons.calendar_today_outlined,
@@ -2143,37 +2171,107 @@ class _FilterStrip extends StatelessWidget {
                 ],
                 onChanged: onRangePresetChange,
               ),
-              _PillButton(
-                icon: Icons.date_range_outlined,
-                label: rangePreset == AnalyticsRangePreset.custom
-                    ? describeDateRange(range)
-                    : 'Custom dates',
-                onTap: onPickCustomRange,
-              ),
-              _PillDropdown<String?>(
-                value: category,
-                placeholder: 'All categories',
-                items: [
-                  const _PillDropdownItem<String?>(value: null, label: 'All categories'),
-                  for (final c in categories)
-                    _PillDropdownItem<String?>(value: c.name, label: '${c.emoji}  ${c.name}'),
-                ],
-                onChanged: onCategoryChange,
-              ),
-              _FilterToggle(
-                label: 'Budgeted only',
-                value: budgetedOnly,
-                onChanged: onBudgetedOnlyChange,
-              ),
-              _FilterToggle(
-                label: 'Over budget only',
-                value: overBudgetOnly,
-                onChanged: onOverBudgetOnlyChange,
-              ),
             ],
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CategoryMultiSelectButton extends StatelessWidget {
+  const _CategoryMultiSelectButton({
+    required this.categories,
+    required this.selectedCategories,
+    required this.onToggleCategory,
+  });
+
+  final List<DashboardCategory> categories;
+  final Set<String> selectedCategories;
+  final ValueChanged<String> onToggleCategory;
+
+  @override
+  Widget build(BuildContext context) {
+    return MenuAnchor(
+      crossAxisUnconstrained: false,
+      style: const MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(Ink.surfaceHi),
+        side: WidgetStatePropertyAll(BorderSide(color: Ink.hairline)),
+        padding: WidgetStatePropertyAll(EdgeInsets.zero),
+      ),
+      menuChildren: [
+        SizedBox(
+          width: 280,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('CATEGORY FILTER', style: eyebrow(color: Cream.tertiary)),
+                const SizedBox(height: 4),
+                Text(
+                  '${selectedCategories.length}/${categories.length} selected',
+                  style: ui(11, color: Cream.tertiary),
+                ),
+                const SizedBox(height: 12),
+                for (var i = 0; i < categories.length; i++) ...[
+                  if (i > 0) Container(height: 1, color: Ink.hairline),
+                  InkWell(
+                    onTap: () => onToggleCategory(categories[i].name),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 160),
+                            width: 18,
+                            height: 18,
+                            decoration: BoxDecoration(
+                              color: selectedCategories.contains(categories[i].name)
+                                  ? Accent.lime
+                                  : Colors.transparent,
+                              border: Border.all(
+                                color: selectedCategories.contains(categories[i].name)
+                                    ? Accent.lime
+                                    : Cream.tertiary,
+                              ),
+                            ),
+                            child: selectedCategories.contains(categories[i].name)
+                                ? const Icon(Icons.check, size: 13, color: Ink.surface)
+                                : null,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              '${categories[i].emoji} ${categories[i].name}',
+                              style: ui(12, color: Cream.primary),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+      builder: (context, controller, child) {
+        return _PillButton(
+          icon: Icons.category_outlined,
+          label:
+              'Category · ${analyticsCategorySelectionLabel(selectedCategories, categories)}',
+          onPressed: () {
+            if (controller.isOpen) {
+              controller.close();
+            } else {
+              controller.open();
+            }
+          },
+        );
+      },
     );
   }
 }
@@ -2219,55 +2317,6 @@ class _PillButtonState extends State<_PillButton> {
               Text(widget.label, style: ui(12, color: Cream.primary)),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FilterToggle extends StatelessWidget {
-  const _FilterToggle({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final String label;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => onChanged(!value),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: value ? Accent.lime.withValues(alpha: 0.12) : Ink.surface,
-          border: Border.all(
-            color: value ? Accent.lime.withValues(alpha: 0.5) : Ink.hairline,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 16,
-              height: 16,
-              decoration: BoxDecoration(
-                color: value ? Accent.lime : Colors.transparent,
-                border: Border.all(
-                  color: value ? Accent.lime : Cream.tertiary,
-                ),
-              ),
-              child: value
-                  ? const Icon(Icons.check, size: 12, color: Ink.ground)
-                  : null,
-            ),
-            const SizedBox(width: 10),
-            Text(label, style: ui(12, color: Cream.primary)),
-          ],
         ),
       ),
     );
@@ -3837,9 +3886,9 @@ class LegacyDashboardRepository {
       StreamController<int>.broadcast();
   static int _refreshTick = 0;
   static const String _prodApiBaseUrl =
-      'https://finance-bot-318969558548.asia-southeast3.run.app';
+      'https://finance-bot-jrpmzkxwoa-eu.a.run.app';
   static const String _devApiBaseUrl =
-      'https://finance-bot-dev-318969558548.asia-southeast3.run.app';
+      'https://finance-bot-dev-jrpmzkxwoa-eu.a.run.app';
   static const String _configuredApiBaseUrl =
       String.fromEnvironment('DASHBOARD_API_BASE_URL');
 
@@ -4221,9 +4270,9 @@ class DashboardRepository {
       StreamController<int>.broadcast();
   static int _refreshTick = 0;
   static const String _prodApiBaseUrl =
-      'https://finance-bot-318969558548.asia-southeast3.run.app';
+      'https://finance-bot-jrpmzkxwoa-eu.a.run.app';
   static const String _devApiBaseUrl =
-      'https://finance-bot-dev-318969558548.asia-southeast3.run.app';
+      'https://finance-bot-dev-jrpmzkxwoa-eu.a.run.app';
   static const String _configuredApiBaseUrl =
       String.fromEnvironment('DASHBOARD_API_BASE_URL');
 
@@ -4823,6 +4872,35 @@ DateTimeRange analyticsRangeForPreset(
   }
 }
 
+String analyticsCategorySelectionLabel(
+  Set<String> selectedCategories,
+  List<DashboardCategory> categories,
+) {
+  if (categories.isEmpty) {
+    return 'All categories';
+  }
+
+  final orderedNames = categories.map((category) => category.name).toList();
+  if (selectedCategories.length >= orderedNames.length &&
+      selectedCategories.containsAll(orderedNames)) {
+    return 'All categories';
+  }
+
+  if (selectedCategories.length == 1) {
+    final only = selectedCategories.first;
+    DashboardCategory? match;
+    for (final category in categories) {
+      if (category.name == only) {
+        match = category;
+        break;
+      }
+    }
+    return match == null ? only : '${match.emoji} ${match.name}';
+  }
+
+  return '${selectedCategories.length} categories';
+}
+
 List<DashboardTransaction> filterTransactionsByRange(
   List<DashboardTransaction> transactions,
   DateTimeRange range,
@@ -4833,6 +4911,19 @@ List<DashboardTransaction> filterTransactionsByRange(
       .where(
         (tx) => !tx.timestamp.isBefore(start) && tx.timestamp.isBefore(end),
       )
+      .toList();
+}
+
+List<DashboardTransaction> filterTransactionsBySelectedCategories(
+  List<DashboardTransaction> transactions,
+  Set<String> selectedCategories,
+) {
+  if (selectedCategories.isEmpty) {
+    return transactions;
+  }
+
+  return transactions
+      .where((transaction) => selectedCategories.contains(transaction.category))
       .toList();
 }
 
