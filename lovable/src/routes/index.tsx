@@ -149,11 +149,16 @@ function SignInScreen({
   return (
     <div className="min-h-screen bg-secondary/40 px-4 py-10">
       <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-md items-center">
-        <Card className="w-full border-border/70 bg-background">
+        <Card className="w-full border-border/60 bg-background shadow-sm">
           <CardContent className="p-8 sm:p-10">
-            <div>
-              <h1 className="text-2xl font-bold text-primary">BudgetFlow</h1>
-              <p className="mt-2 text-sm text-muted-foreground">Sign in to your financial command center.</p>
+            <div className="flex flex-col items-center text-center">
+              <img
+                alt="BudgetFlow"
+                className="h-14 w-14 rounded-2xl"
+                src="/logo.png"
+              />
+              <h1 className="mt-5 text-xl font-semibold tracking-tight text-primary">BudgetFlow</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Sign in to continue</p>
             </div>
             <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
               <div className="space-y-2">
