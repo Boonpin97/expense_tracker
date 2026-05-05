@@ -44,24 +44,21 @@ Make `lovable/` the new web dashboard frontend for `Expense Bot`, backed by the 
 
 ## Phase 3: Cutover Readiness
 
-- [ ] Update Firebase Hosting config to serve the React build output instead of Flutter `build/web`.
-- [ ] Replace the Flutter web deploy script with a React build + deploy flow.
-- [ ] Verify dev hosting points at the dev backend.
-- [ ] Test login/session flow on dev hosting.
+- [x] Update Firebase Hosting config to serve the React build output instead of Flutter `build/web`.
+- [x] Replace the Flutter web deploy script with a React build + deploy flow.
+- [x] Verify dev hosting points at the dev backend.
+- [x] Test login/session flow on dev hosting.
 
 ## Phase 4: Flutter Retirement
 
-- [ ] Reach feature parity for the required dashboard flows.
+- [-] Reach feature parity for the required dashboard flows.
 - [ ] Decide whether to archive or remove the Flutter web frontend.
 - [ ] Update repo docs to reflect the new frontend stack and deployment flow.
 
 ## Current Checkpoint
 
-Current implementation focus:
-- First backend-backed React pass landed in `lovable/src`.
-- Remaining UI migration work is now refinement and parity work rather than blank-slate setup.
+Prod and dev hosting both now serve `lovable/dist` (React build). The Flutter `build/web` output is no longer deployed anywhere.
 
-If interrupted next:
-1. Verify the new React app with installed dependencies and fix any compile/runtime issues.
-2. Refine the analytics UX toward parity with the desired production layout.
-3. Update Firebase Hosting and deployment flow once the React app is ready to serve.
+Remaining work:
+- Analytics UX refinement (category multi-select, date presets, chart polish) is in progress.
+- Flutter frontend still exists in `lib/` and `build/web` — retirement decision pending.
