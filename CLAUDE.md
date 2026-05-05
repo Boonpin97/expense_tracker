@@ -2,13 +2,18 @@
 
 ## Purpose
 
-This repository contains a Telegram finance bot and a Flutter client. Most interactive bot logic lives under `finance-bot/`.
+This repository contains a Telegram finance bot and a React web dashboard. Most interactive bot logic lives under `finance-bot/`. The web dashboard lives under `lovable/`.
 
 Primary backend stack:
 - FastAPI
 - Firestore
 - Telegram Bot API
 - Python tests via `unittest`
+
+Frontend stack (web dashboard):
+- React 19 + TanStack Router
+- Vite + Tailwind CSS v4 + shadcn/ui
+- Deployed via Firebase Hosting
 
 ## Repo Focus
 
@@ -18,7 +23,12 @@ When working on backend bot behavior, prefer these paths first:
 - `finance-bot/models/`
 - `finance-bot/tests/`
 
-Do not assume the Flutter app and the Telegram backend share the same runtime or state model.
+When working on the web dashboard, work inside `lovable/src/`:
+- `lovable/src/routes/index.tsx` — main dashboard page and sign-in screen
+- `lovable/src/lib/dashboard-api.ts` — API client (auth, transactions, categories, budgets)
+- `lovable/src/lib/dashboard-analytics.ts` — analytics helpers
+
+Do not assume the React dashboard and the Telegram backend share the same runtime or state model.
 
 ## Interactive Flow Policy
 
@@ -121,8 +131,22 @@ When making changes that touch Firestore, Cloud Run config, or hosting:
 
 **Cloud Run — never deploy manually.** Cloud Run deployments are handled exclusively by Cloud Build triggers on git push. Do not run `gcloud run deploy` or equivalent. To deploy backend changes, commit and push to the appropriate branch (`development` for dev, `main` for prod).
 
-**Flutter web — always deploy to dev unless told otherwise.** When deploying UI changes, always target the dev hosting site (`budget-bot-123-dev.web.app`):
-```
+**React web dashboard — always deploy to dev unless told otherwise.** When deploying UI changes:
+
+```powershell
+# 1. Build from the lovable/ directory
+cd lovable
+npm run build
+
+# 2. Deploy to dev hosting
 firebase deploy --only hosting:dev
 ```
+
 Never deploy to the prod hosting site (`budget-bot-123.web.app`) unless explicitly instructed.
+
+If a prod deploy fails with a Firebase uploader `paths[1] undefined` error, delete the stale hosting cache and rebuild:
+```powershell
+Remove-Item .firebase\hosting.bG92YWJsZVxkaXN0.cache -ErrorAction SilentlyContinue
+cd lovable && npm run build
+firebase deploy --only hosting:prod
+```

@@ -12,10 +12,10 @@ Build a Telegram bot that tracks personal finances and sends spending reports. U
 |---|---|
 | Bot interface | Telegram Bot API (webhook mode) |
 | Backend | FastAPI (Python) |
-| Hosting | Google Cloud Run |
+| Hosting | Google Cloud Run (backend) · Firebase Hosting (web dashboard) |
 | Database | Google Cloud Firestore |
 | Scheduler | Google Cloud Scheduler |
-| Frontend | None (Telegram is the UI) |
+| Web dashboard | React 19 + TanStack Router + Vite + Tailwind CSS v4 + shadcn/ui |
 
 ---
 
@@ -142,6 +142,51 @@ gcloud scheduler jobs create http finance-bot-monthly \
 # .env — add the Telegram user/chat ID so the scheduler knows who to message
 TELEGRAM_CHAT_ID=<your Telegram user ID — get it by messaging @userinfobot>
 ```
+
+---
+
+## 🌐 Web Dashboard
+
+A React web dashboard is served at the Firebase Hosting URLs below. It connects to the same backend API as the bot.
+
+| Environment | URL |
+|---|---|
+| Production | https://budget-bot-123.web.app |
+| Development | https://budget-bot-123-dev.web.app |
+
+### Dashboard structure
+
+```
+lovable/
+├── src/
+│   ├── routes/
+│   │   ├── __root.tsx          # App shell (head, body, Scripts)
+│   │   └── index.tsx           # Dashboard + sign-in page
+│   ├── lib/
+│   │   ├── dashboard-api.ts    # API client (auth, transactions, categories, budgets)
+│   │   └── dashboard-analytics.ts  # Analytics helpers (date presets, summaries)
+│   ├── components/ui/          # shadcn/ui component library
+│   └── styles.css
+├── public/
+│   └── logo.png                # App icon shown on the sign-in screen
+└── package.json
+```
+
+### Build & deploy
+
+```powershell
+# Build
+cd lovable
+npm run build
+
+# Deploy to dev (default)
+firebase deploy --only hosting:dev
+
+# Deploy to prod (explicit instruction required)
+firebase deploy --only hosting:prod
+```
+
+> **Note:** Cloud Run (backend) is deployed automatically by Cloud Build on git push — never run `gcloud run deploy` manually.
 
 ---
 
