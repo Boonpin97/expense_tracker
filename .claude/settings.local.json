@@ -17,7 +17,18 @@
       "Bash(Get-ChildItem -Path C:\\\\Users\\\\pohbo\\\\Flutter\\\\expense_tracker -Recurse -Filter \"AGENTS.md\")",
       "Bash(firebase hosting:channel:list --project=budget-bot-123 --site=budget-bot-123)",
       "Bash(firebase hosting:channel:list --project=budget-bot-123 --site=budget-bot-123-dev)",
-      "Bash(flutter build *)"
+      "Bash(flutter build *)",
+      "Bash(firebase deploy *)",
+      "Bash(firebase *)",
+      "Bash(npm install *)",
+      "Bash(Get-ChildItem -Recurse \"C:\\\\Users\\\\pohbo\\\\Flutter\\\\expense_tracker\\\\build\\\\web\")",
+      "Bash(Select-Object FullName, Length)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(xargs cat *)",
+      "Bash(curl *)",
+      "Bash(claude plugin *)",
+      "Bash(flutter pub *)",
+      "Bash(flutter analyze *)"
     ]
   }
 }
