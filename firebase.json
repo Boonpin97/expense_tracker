@@ -6,7 +6,7 @@
   "hosting": [
     {
       "target": "prod",
-      "public": "lovable/dist",
+      "public": "dist",
       "ignore": [
         "firebase.json",
         "**/.*",
@@ -22,7 +22,7 @@
     },
     {
       "target": "dev",
-      "public": "lovable/dist",
+      "public": "dist",
       "ignore": [
         "firebase.json",
         "**/.*",
