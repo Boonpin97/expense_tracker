@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository contains a Telegram finance bot and a React web dashboard. Most interactive bot logic lives under `finance-bot/`. The web dashboard lives under `lovable/`.
+This repository contains a Telegram finance bot and a React web dashboard. Most interactive bot logic lives under `finance-bot/`. The web dashboard lives at the project root (`src/`).
 
 Primary backend stack:
 - FastAPI
@@ -23,10 +23,10 @@ When working on backend bot behavior, prefer these paths first:
 - `finance-bot/models/`
 - `finance-bot/tests/`
 
-When working on the web dashboard, work inside `lovable/src/`:
-- `lovable/src/routes/index.tsx` — main dashboard page and sign-in screen
-- `lovable/src/lib/dashboard-api.ts` — API client (auth, transactions, categories, budgets)
-- `lovable/src/lib/dashboard-analytics.ts` — analytics helpers
+When working on the web dashboard, work inside `src/`:
+- `src/routes/index.tsx` — main dashboard page and sign-in screen
+- `src/lib/dashboard-api.ts` — API client (auth, transactions, categories, budgets)
+- `src/lib/dashboard-analytics.ts` — analytics helpers
 
 Do not assume the React dashboard and the Telegram backend share the same runtime or state model.
 
@@ -134,8 +134,7 @@ When making changes that touch Firestore, Cloud Run config, or hosting:
 **React web dashboard — always deploy to dev unless told otherwise.** When deploying UI changes:
 
 ```powershell
-# 1. Build from the lovable/ directory
-cd lovable
+# 1. Build from the project root
 npm run build
 
 # 2. Deploy to dev hosting
@@ -146,7 +145,7 @@ Never deploy to the prod hosting site (`budget-bot-123.web.app`) unless explicit
 
 If a prod deploy fails with a Firebase uploader `paths[1] undefined` error, delete the stale hosting cache and rebuild:
 ```powershell
-Remove-Item .firebase\hosting.bG92YWJsZVxkaXN0.cache -ErrorAction SilentlyContinue
-cd lovable && npm run build
+Remove-Item .firebase\hosting.*.cache -ErrorAction SilentlyContinue
+npm run build
 firebase deploy --only hosting:prod
 ```

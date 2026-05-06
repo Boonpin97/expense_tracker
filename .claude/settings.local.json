@@ -31,7 +31,26 @@
       "Bash(flutter analyze *)",
       "Bash(where bun *)",
       "Bash(where npm *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\lovable\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\finance-bot\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "PowerShell(head *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\lib\" -Recurse -Force | Select-Object FullName | ForEach-Object {$_.FullName.Replace\\(\"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\\", \"\"\\)} | Select-Object -First 50)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\" -Recurse -Force -Directory | Where-Object {$_.Name -notmatch '^\\\\.git$|^\\\\.dart_tool$|^build$|^\\\\.idea$|^\\\\.firebase$|^\\\\.npm-cache$|^node_modules$|^\\\\.angular$'} | Select-Object FullName | ForEach-Object {$_.FullName.Replace\\(\"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\\", \"\"\\)})",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\" -Force | Where-Object {$_.Name -match '^\\\\.\\(github|gitlab|circleci\\)$' -or $_.Name -match '^\\(cloudbuild\\\\.yaml|\\\\.github\\)$'})",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\lovable\\\\src\" -Recurse -Force | Where-Object {-not $_.PSIsContainer} | Select-Object FullName | ForEach-Object {$_.FullName.Replace\\(\"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\lovable\\\\src\\\\\", \"\"\\)} | Select-Object -First 40)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\finance-bot\" -Recurse -Force | Where-Object {-not $_.PSIsContainer} | Select-Object FullName | ForEach-Object {$_.FullName.Replace\\(\"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\finance-bot\\\\\", \"\"\\)})",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\android\" -Force | Where-Object {$_.Name -match '\\\\.gradle|\\\\.kts|\\\\.properties'})",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\windows\" -Recurse -Force | Where-Object {$_.Name -eq \"CMakeLists.txt\" -or $_.Name -eq \"generated_plugins.cmake\"} | Select-Object FullName | ForEach-Object {$_.FullName.Replace\\(\"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\\", \"\"\\)})",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\linux\" -Recurse -Force | Where-Object {$_.Name -eq \"CMakeLists.txt\" -or $_.Name -eq \"generated_plugins.cmake\"} | Select-Object FullName | ForEach-Object {$_.FullName.Replace\\(\"C:\\\\Users\\\\pohbo\\\\flutter project\\\\expense_bot\\\\\", \"\"\\)})",
+      "Bash(git rm *)",
+      "Bash(Remove-Item -Recurse -Force \".dart_tool\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Recurse -Force \".idea\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Force \"expense_bot.iml\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Force \".flutter-plugins-dependencies\" -ErrorAction SilentlyContinue)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(git mv *)"
     ]
   }
 }
