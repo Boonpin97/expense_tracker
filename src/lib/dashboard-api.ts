@@ -25,7 +25,7 @@ export class DashboardApiError extends Error {
   }
 }
 
-const PROD_API_BASE_URL = "https://finance-bot-jrpmzkxwoa-as.a.run.app";
+const PROD_API_BASE_URL = "https://finance-bot-jrpmzkxwoa-eu.a.run.app";
 const DEV_API_BASE_URL = "https://finance-bot-dev-jrpmzkxwoa-eu.a.run.app";
 const SESSION_STORAGE_KEY = "dashboard_session_token";
 
@@ -59,7 +59,12 @@ export function getDashboardApiBaseUrl() {
 
   if (typeof window !== "undefined") {
     const host = window.location.host.toLowerCase();
-    if (host === "budget-bot-123-dev.web.app" || host === "budget-bot-123-dev.firebaseapp.com") {
+    if (
+      host === "budget-bot-123-dev.web.app" ||
+      host === "budget-bot-123-dev.firebaseapp.com" ||
+      host.startsWith("localhost") ||
+      host.startsWith("127.0.0.1")
+    ) {
       return DEV_API_BASE_URL;
     }
   }
