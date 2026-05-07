@@ -17,6 +17,7 @@ import {
   Loader2,
   CalendarIcon,
   Filter,
+  ArrowUpNarrowWide,
 } from "lucide-react";
 import {
   Select,
@@ -634,7 +635,7 @@ function DashboardLayout({
                             innerRadius={50}
                             outerRadius={85}
                             paddingAngle={2}
-                            label={({ percent }) => `${((percent ?? 0) * 100).toFixed(0)}%`}
+                            label={({ value }) => currency.format(Number(value ?? 0))}
                             labelLine={false}
                           >
                             {pieData.map((entry) => (
@@ -655,10 +656,13 @@ function DashboardLayout({
                             wrapperStyle={{ fontSize: 12 }}
                             formatter={(value, entry: { payload?: { value?: number } }) => (
                               <span className="text-foreground">
-                                {value}{" "}
                                 <span className="text-muted-foreground">
-                                  â€” {currency.format(entry?.payload?.value ?? 0)}
-                                </span>
+                                  {Math.round(
+                                    ((entry?.payload?.value ?? 0) / Math.max(monthTotal, 1)) * 100,
+                                  )}
+                                  %
+                                </span>{" "}
+                                {value}
                               </span>
                             )}
                           />
@@ -1063,6 +1067,29 @@ function TransactionsTab({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle className="text-lg">All Transactions</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5">
+              <span className="text-sm text-muted-foreground">Min</span>
+              <Input
+                id="min-amount"
+                className="h-8 w-24 border-0 px-0 shadow-none focus-visible:ring-0"
+                inputMode="decimal"
+                onChange={(event) => setMinAmount(event.target.value)}
+                placeholder="0.00"
+                type="number"
+                value={minAmount}
+              />
+              <span className="text-sm text-muted-foreground">-</span>
+              <span className="text-sm text-muted-foreground">Max</span>
+              <Input
+                id="max-amount"
+                className="h-8 w-24 border-0 px-0 shadow-none focus-visible:ring-0"
+                inputMode="decimal"
+                onChange={(event) => setMaxAmount(event.target.value)}
+                placeholder="No limit"
+                type="number"
+                value={maxAmount}
+              />
+            </div>
             <RangeSelector
               rangeKey={rangeKey}
               custom={custom}
@@ -1079,8 +1106,9 @@ function TransactionsTab({
               value={sortKey}
               onValueChange={(value) => setSortKey(value as TransactionSortKey)}
             >
-              <SelectTrigger className="w-[170px] h-9">
-                <SelectValue />
+              <SelectTrigger className="h-9 w-9 px-0">
+                <ArrowUpNarrowWide className="h-4 w-4" />
+                <span className="sr-only">Sort transactions</span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="date-desc">Date (Newest)</SelectItem>
@@ -1091,31 +1119,6 @@ function TransactionsTab({
                 <SelectItem value="amount-asc">Amount (Low-High)</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:max-w-md">
-          <div className="space-y-2">
-            <Label htmlFor="min-amount">Min amount</Label>
-            <Input
-              id="min-amount"
-              inputMode="decimal"
-              onChange={(event) => setMinAmount(event.target.value)}
-              placeholder="0.00"
-              type="number"
-              value={minAmount}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="max-amount">Max amount</Label>
-            <Input
-              id="max-amount"
-              inputMode="decimal"
-              onChange={(event) => setMaxAmount(event.target.value)}
-              placeholder="No limit"
-              type="number"
-              value={maxAmount}
-            />
           </div>
         </div>
       </CardHeader>
