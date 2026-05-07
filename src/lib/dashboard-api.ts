@@ -25,8 +25,8 @@ export class DashboardApiError extends Error {
   }
 }
 
-const PROD_API_BASE_URL = "https://finance-bot-jrpmzkxwoa-eu.a.run.app";
-const DEV_API_BASE_URL = "https://finance-bot-dev-jrpmzkxwoa-eu.a.run.app";
+const PROD_API_BASE_URL = "https://finance-bot-jrpmzkxwoa-as.a.run.app";
+const DEV_API_BASE_URL = "https://finance-bot-dev-jrpmzkxwoa-as.a.run.app";
 const SESSION_STORAGE_KEY = "dashboard_session_token";
 
 function readStoredSessionToken() {

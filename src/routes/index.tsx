@@ -8,10 +8,23 @@ import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Plus, TrendingUp, TrendingDown, Wallet, Target, LogOut, Loader2,
-  CalendarIcon, Filter,
+  Plus,
+  TrendingUp,
+  TrendingDown,
+  Wallet,
+  Target,
+  LogOut,
+  Loader2,
+  CalendarIcon,
+  Filter,
 } from "lucide-react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar } from "@/components/ui/calendar";
@@ -19,8 +32,34 @@ import { endOfDay, format, startOfDay, startOfMonth, startOfYear, subDays } from
 import { cn } from "@/lib/utils";
 import type { DateRange } from "react-day-picker";
 import {
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
 } from "recharts";
 import {
   DashboardApiError,
@@ -38,26 +77,41 @@ import {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "BudgetFlow — Expense Tracking & Budgeting Dashboard" },
-      { name: "description", content: "Track daily, weekly, and monthly expenses, visualize spending trends, and stay on top of your budget." },
+      { title: "BudgetFlow â€” Expense Tracking & Budgeting Dashboard" },
+      {
+        name: "description",
+        content:
+          "Track daily, weekly, and monthly expenses, visualize spending trends, and stay on top of your budget.",
+      },
     ],
   }),
   component: DashboardRoute,
 });
 
-const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+const currency = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 2,
+});
+const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
+const TRANSACTIONS_PAGE_SIZE = 25;
 
-const CAT_PALETTE = [
-  "oklch(0.65 0.18 254)",
-  "oklch(0.32 0.13 265)",
-  "oklch(0.7 0.15 180)",
-  "oklch(0.75 0.16 60)",
-  "oklch(0.6 0.2 20)",
-  "oklch(0.65 0.18 120)",
-  "oklch(0.55 0.15 300)",
-];
+type DashboardTab = "overview" | "charts" | "budget" | "transactions";
+type RangeKey = "current-month" | "30d" | "90d" | "ytd" | "custom";
+type TransactionSortKey =
+  | "date-desc"
+  | "date-asc"
+  | "category-asc"
+  | "category-desc"
+  | "amount-desc"
+  | "amount-asc";
 
-type RangeKey = "current-month" | "30d" | "60d" | "ytd" | "custom";
+function colorForCategory(index: number) {
+  const hue = (index * 137.508) % 360;
+  const lightness = [0.6, 0.68, 0.74][index % 3];
+  const chroma = [0.2, 0.16, 0.13][index % 3];
+  return `oklch(${lightness} ${chroma} ${hue})`;
+}
 
 function getRange(key: RangeKey, custom?: DateRange): { from: Date; to: Date } {
   const today = new Date();
@@ -68,19 +122,76 @@ function getRange(key: RangeKey, custom?: DateRange): { from: Date; to: Date } {
   if (key === "30d") {
     return { from: startOfDay(subDays(today, 29)), to: endOfDay(today) };
   }
-  if (key === "60d") {
-    return { from: startOfDay(subDays(today, 59)), to: endOfDay(today) };
+  if (key === "90d") {
+    return { from: startOfDay(subDays(today, 89)), to: endOfDay(today) };
   }
   if (key === "ytd") {
     return { from: startOfYear(today), to: endOfDay(today) };
   }
-  return {
-    from: custom?.from ? startOfDay(custom.from) : today,
-    to: custom?.to ? endOfDay(custom.to) : endOfDay(today),
-  };
+  const customFrom = custom?.from ? startOfDay(custom.from) : today;
+  const customTo = custom?.to ? endOfDay(custom.to) : endOfDay(custom?.from ?? today);
+  return { from: customFrom, to: customTo };
 }
 
-// ─── Session management ───────────────────────────────────────────────────────
+function buildFilledDailySeries(
+  transactions: DashboardTransaction[],
+  from: Date,
+  to: Date,
+  selectedCategories: string[],
+) {
+  const allowedCategories = new Set(selectedCategories);
+  const perDay = new Map<string, number>();
+
+  for (const transaction of transactions) {
+    if (transaction.timestamp < from || transaction.timestamp > to) {
+      continue;
+    }
+    if (!allowedCategories.has(transaction.category)) {
+      continue;
+    }
+    const key = startOfDay(transaction.timestamp).toISOString();
+    perDay.set(key, (perDay.get(key) ?? 0) + transaction.amount);
+  }
+
+  const series: { date: string; amount: number }[] = [];
+  for (
+    let cursor = startOfDay(from);
+    cursor <= to;
+    cursor = startOfDay(new Date(cursor.getTime() + 86400000))
+  ) {
+    const key = cursor.toISOString();
+    series.push({
+      date: format(cursor, "MMM d"),
+      amount: Number((perDay.get(key) ?? 0).toFixed(2)),
+    });
+  }
+  return series;
+}
+
+function sortTransactions(transactions: DashboardTransaction[], sortKey: TransactionSortKey) {
+  return [...transactions].sort((left, right) => {
+    switch (sortKey) {
+      case "date-desc":
+        return right.timestamp.getTime() - left.timestamp.getTime();
+      case "date-asc":
+        return left.timestamp.getTime() - right.timestamp.getTime();
+      case "category-asc":
+        return (
+          left.category.localeCompare(right.category) ||
+          right.timestamp.getTime() - left.timestamp.getTime()
+        );
+      case "category-desc":
+        return (
+          right.category.localeCompare(left.category) ||
+          right.timestamp.getTime() - left.timestamp.getTime()
+        );
+      case "amount-desc":
+        return right.amount - left.amount || right.timestamp.getTime() - left.timestamp.getTime();
+      case "amount-asc":
+        return left.amount - right.amount || right.timestamp.getTime() - left.timestamp.getTime();
+    }
+  });
+}
 
 type SessionState =
   | { status: "loading" }
@@ -101,14 +212,20 @@ function DashboardRoute() {
         if (!active) return;
         setSessionState({ status: "anonymous" });
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (sessionState.status === "loading") {
     return <CenteredState title="Checking session" detail="Connecting to the dashboard backend." />;
   }
   if (sessionState.status === "anonymous") {
-    return <SignInScreen onSignedIn={(session) => setSessionState({ status: "authenticated", session })} />;
+    return (
+      <SignInScreen
+        onSignedIn={(session) => setSessionState({ status: "authenticated", session })}
+      />
+    );
   }
   return (
     <DashboardShell
@@ -117,8 +234,6 @@ function DashboardRoute() {
     />
   );
 }
-
-// ─── Sign-in screen ───────────────────────────────────────────────────────────
 
 function SignInScreen({ onSignedIn }: { onSignedIn: (session: DashboardSession) => void }) {
   const [username, setUsername] = useState("");
@@ -191,9 +306,13 @@ function SignInScreen({ onSignedIn }: { onSignedIn: (session: DashboardSession) 
   );
 }
 
-// ─── Data shell ───────────────────────────────────────────────────────────────
-
-function DashboardShell({ session, onSignedOut }: { session: DashboardSession; onSignedOut: () => void }) {
+function DashboardShell({
+  session,
+  onSignedOut,
+}: {
+  session: DashboardSession;
+  onSignedOut: () => void;
+}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [categories, setCategories] = useState<DashboardCategory[]>([]);
@@ -209,8 +328,7 @@ function DashboardShell({ session, onSignedOut }: { session: DashboardSession; o
     void Promise.all([
       fetchDashboardCategories(),
       fetchDashboardBudgets(),
-      // Fetch ~365 days to cover all stat card time ranges
-      fetchDashboardTransactions({ start: startOfDay(subDays(now, 365)), end: endOfDay(now) }),
+      fetchDashboardTransactions({ start: HISTORY_START, end: endOfDay(now) }),
     ])
       .then(([cats, buds, txns]) => {
         if (!active) return;
@@ -231,7 +349,9 @@ function DashboardShell({ session, onSignedOut }: { session: DashboardSession; o
         setLoading(false);
       });
 
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [session.chatId]);
 
   async function handleLogout() {
@@ -252,8 +372,6 @@ function DashboardShell({ session, onSignedOut }: { session: DashboardSession; o
   );
 }
 
-// ─── Dashboard layout (restored from original) ───────────────────────────────
-
 function DashboardLayout({
   session,
   loading,
@@ -271,55 +389,92 @@ function DashboardLayout({
   transactions: DashboardTransaction[];
   onLogout: () => void;
 }) {
+  const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+
   const catColorMap = useMemo(() => {
-    const m: Record<string, string> = {};
-    categories.forEach((cat, i) => { m[cat.name] = CAT_PALETTE[i % CAT_PALETTE.length]; });
-    return m;
+    const map: Record<string, string> = {};
+    categories.forEach((category, index) => {
+      map[category.name] = colorForCategory(index);
+    });
+    return map;
   }, [categories]);
 
-  // Current-month summaries (used for pie chart and budget tab)
   const monthSummaries = useMemo(() => {
     const now = new Date();
     const from = startOfMonth(now);
-    const end = endOfDay(now);
-    const m: Record<string, number> = {};
+    const to = endOfDay(now);
+    const summaries: Record<string, number> = {};
     transactions
-      .filter((t) => t.timestamp >= from && t.timestamp <= end)
-      .forEach((t) => { m[t.category] = (m[t.category] ?? 0) + t.amount; });
-    return m;
+      .filter((transaction) => transaction.timestamp >= from && transaction.timestamp <= to)
+      .forEach((transaction) => {
+        summaries[transaction.category] =
+          (summaries[transaction.category] ?? 0) + transaction.amount;
+      });
+    return summaries;
   }, [transactions]);
 
-  const monthTotal = Object.values(monthSummaries).reduce((s, v) => s + v, 0);
-  const budgetTotal = Object.values(budgets).reduce((s, v) => s + v, 0);
+  const monthTotal = Object.values(monthSummaries).reduce((sum, value) => sum + value, 0);
+  const budgetTotal = Object.values(budgets).reduce((sum, value) => sum + value, 0);
   const budgetRemaining = Math.max(budgetTotal - monthTotal, 0);
 
   const recentTransactions = useMemo(
-    () => [...transactions].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()).slice(0, 5),
+    () =>
+      [...transactions]
+        .sort((left, right) => right.timestamp.getTime() - left.timestamp.getTime())
+        .slice(0, 5),
     [transactions],
+  );
+
+  const budgetRows = useMemo(
+    () =>
+      categories
+        .map((category, index) => {
+          const spent = monthSummaries[category.name] ?? 0;
+          const budget = budgets[category.name] ?? 0;
+          return {
+            category,
+            spent,
+            budget,
+            ratio: budget > 0 ? spent / budget : Number.NEGATIVE_INFINITY,
+            index,
+          };
+        })
+        .sort((left, right) => {
+          const leftHasBudget = left.budget > 0;
+          const rightHasBudget = right.budget > 0;
+          if (leftHasBudget !== rightHasBudget) {
+            return leftHasBudget ? -1 : 1;
+          }
+          if (leftHasBudget && rightHasBudget && left.ratio !== right.ratio) {
+            return right.ratio - left.ratio;
+          }
+          return left.index - right.index;
+        }),
+    [categories, monthSummaries, budgets],
   );
 
   const pieData = useMemo(
     () =>
       categories
-        .map((cat, i) => ({
-          name: `${cat.emoji} ${cat.name}`,
-          value: Number((monthSummaries[cat.name] ?? 0).toFixed(2)),
-          color: CAT_PALETTE[i % CAT_PALETTE.length],
+        .map((category) => ({
+          name: `${category.emoji} ${category.name}`,
+          value: Number((monthSummaries[category.name] ?? 0).toFixed(2)),
+          color: catColorMap[category.name],
         }))
-        .filter((d) => d.value > 0),
-    [categories, monthSummaries],
+        .filter((entry) => entry.value > 0),
+    [categories, monthSummaries, catColorMap],
   );
 
   const dailyData = useMemo(() => {
     const now = new Date();
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = subDays(now, 6 - i);
-      const from = startOfDay(d);
-      const to = endOfDay(d);
+    return Array.from({ length: 7 }, (_, index) => {
+      const day = subDays(now, 6 - index);
+      const from = startOfDay(day);
+      const to = endOfDay(day);
       const amount = transactions
-        .filter((t) => t.timestamp >= from && t.timestamp <= to)
-        .reduce((s, t) => s + t.amount, 0);
-      return { day: format(d, "EEE"), amount: Number(amount.toFixed(2)) };
+        .filter((transaction) => transaction.timestamp >= from && transaction.timestamp <= to)
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
+      return { day: format(day, "EEE"), amount: Number(amount.toFixed(2)) };
     });
   }, [transactions]);
 
@@ -329,7 +484,9 @@ function DashboardLayout({
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-primary">BudgetFlow</h1>
-            <p className="text-xs sm:text-sm text-muted-foreground">Your financial command center</p>
+            <p className="text-xs sm:text-sm text-muted-foreground">
+              Your financial command center
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <div className="hidden lg:block text-sm text-muted-foreground">
@@ -354,14 +511,18 @@ function DashboardLayout({
           </div>
         ) : null}
 
-        <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full sm:w-auto grid-cols-3 sm:inline-grid">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as DashboardTab)}
+          className="space-y-6"
+        >
+          <TabsList className="grid w-full grid-cols-2 sm:w-auto sm:grid-cols-4 sm:inline-grid">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
+            <TabsTrigger value="transactions">Transactions</TabsTrigger>
           </TabsList>
 
-          {/* OVERVIEW */}
           <TabsContent value="overview" className="space-y-6">
             <OverviewCards transactions={transactions} budgetTotal={budgetTotal} />
 
@@ -369,34 +530,55 @@ function DashboardLayout({
               <CardHeader>
                 <CardTitle className="text-lg">Recent Transactions</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-1">
+              <CardContent className="space-y-4">
                 {loading ? (
-                  <CenteredListMessage label="Loading transactions…" />
+                  <CenteredListMessage label="Loading transactionsâ€¦" />
                 ) : recentTransactions.length === 0 ? (
                   <CenteredListMessage label="No transactions found." />
                 ) : (
-                  recentTransactions.map((t) => (
-                    <div key={t.id} className="flex items-center justify-between py-3 border-b border-border last:border-0">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-9 w-9 rounded-full bg-secondary flex items-center justify-center shrink-0 text-base leading-none">
-                          {categories.find((c) => c.name === t.category)?.emoji ?? "💳"}
+                  <>
+                    <div className="space-y-1">
+                      {recentTransactions.map((transaction) => (
+                        <div
+                          key={transaction.id}
+                          className="flex items-center justify-between py-3 border-b border-border last:border-0"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="h-9 w-9 rounded-full bg-secondary flex items-center justify-center shrink-0 text-base leading-none">
+                              {categories.find((category) => category.name === transaction.category)
+                                ?.emoji ?? "ðŸ’³"}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium text-sm truncate">{transaction.item}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {transaction.category} Â· {format(transaction.timestamp, "MMM d")}
+                              </p>
+                            </div>
+                          </div>
+                          <p className="font-semibold text-sm shrink-0">
+                            {currency.format(transaction.amount)}
+                          </p>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-medium text-sm truncate">{t.item}</p>
-                          <p className="text-xs text-muted-foreground">{t.category} · {format(t.timestamp, "MMM d")}</p>
-                        </div>
-                      </div>
-                      <p className="font-semibold text-sm shrink-0">{currency.format(t.amount)}</p>
+                      ))}
                     </div>
-                  ))
+                    <div className="flex justify-center">
+                      <Button variant="ghost" onClick={() => setActiveTab("transactions")}>
+                        Show all
+                      </Button>
+                    </div>
+                  </>
                 )}
               </CardContent>
             </Card>
           </TabsContent>
 
-          {/* CHARTS */}
           <TabsContent value="charts" className="space-y-6">
-            <TrendCard transactions={transactions} categories={categories} catColorMap={catColorMap} loading={loading} />
+            <TrendCard
+              transactions={transactions}
+              categories={categories}
+              catColorMap={catColorMap}
+              loading={loading}
+            />
 
             <div className="grid lg:grid-cols-2 gap-6">
               <Card>
@@ -406,7 +588,7 @@ function DashboardLayout({
                 <CardContent>
                   <div className="h-72 w-full">
                     {loading ? (
-                      <CenteredChartMessage label="Loading…" />
+                      <CenteredChartMessage label="Loadingâ€¦" />
                     ) : (
                       <ResponsiveContainer>
                         <BarChart data={dailyData}>
@@ -415,11 +597,14 @@ function DashboardLayout({
                           <YAxis
                             stroke="oklch(0.55 0.04 257)"
                             fontSize={12}
-                            tickFormatter={(v) => currency.format(Number(v))}
+                            tickFormatter={(value) => currency.format(Number(value))}
                           />
                           <Tooltip
-                            contentStyle={{ borderRadius: 8, border: "1px solid oklch(0.92 0.01 256)" }}
-                            formatter={(v: number) => currency.format(v)}
+                            contentStyle={{
+                              borderRadius: 8,
+                              border: "1px solid oklch(0.92 0.01 256)",
+                            }}
+                            formatter={(value: number) => currency.format(value)}
                           />
                           <Bar dataKey="amount" fill="oklch(0.65 0.18 254)" radius={[6, 6, 0, 0]} />
                         </BarChart>
@@ -436,7 +621,9 @@ function DashboardLayout({
                 <CardContent>
                   <div className="h-72 w-full">
                     {loading || pieData.length === 0 ? (
-                      <CenteredChartMessage label={loading ? "Loading…" : "No data for this month."} />
+                      <CenteredChartMessage
+                        label={loading ? "Loadingâ€¦" : "No data for this month."}
+                      />
                     ) : (
                       <ResponsiveContainer>
                         <PieChart>
@@ -450,22 +637,27 @@ function DashboardLayout({
                             label={({ percent }) => `${((percent ?? 0) * 100).toFixed(0)}%`}
                             labelLine={false}
                           >
-                            {pieData.map((c, i) => <Cell key={i} fill={c.color} />)}
+                            {pieData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
                           </Pie>
                           <Tooltip
-                            contentStyle={{ borderRadius: 8, border: "1px solid oklch(0.92 0.01 256)" }}
-                            formatter={(v: number) => currency.format(v)}
+                            contentStyle={{
+                              borderRadius: 8,
+                              border: "1px solid oklch(0.92 0.01 256)",
+                            }}
+                            formatter={(value: number) => currency.format(value)}
                           />
                           <Legend
                             layout="vertical"
                             align="right"
                             verticalAlign="middle"
                             wrapperStyle={{ fontSize: 12 }}
-                            formatter={(value, entry: any) => (
+                            formatter={(value, entry: { payload?: { value?: number } }) => (
                               <span className="text-foreground">
                                 {value}{" "}
                                 <span className="text-muted-foreground">
-                                  — {currency.format(entry?.payload?.value ?? 0)}
+                                  â€” {currency.format(entry?.payload?.value ?? 0)}
                                 </span>
                               </span>
                             )}
@@ -479,10 +671,15 @@ function DashboardLayout({
             </div>
           </TabsContent>
 
-          {/* BUDGET */}
           <TabsContent value="budget" className="space-y-6">
             <div className="grid sm:grid-cols-3 gap-4">
-              <StatCard label="Total Budget" value={currency.format(budgetTotal)} sub="Monthly limit" icon={Target} trend="down" />
+              <StatCard
+                label="Total Budget"
+                value={currency.format(budgetTotal)}
+                sub="Monthly limit"
+                icon={Target}
+                trend="down"
+              />
               <StatCard
                 label="Spent"
                 value={currency.format(monthTotal)}
@@ -490,7 +687,13 @@ function DashboardLayout({
                 icon={Wallet}
                 trend="up"
               />
-              <StatCard label="Remaining" value={currency.format(budgetRemaining)} sub={`${Math.round((budgetRemaining / Math.max(budgetTotal, 1)) * 100)}% left`} icon={TrendingDown} trend="down" />
+              <StatCard
+                label="Remaining"
+                value={currency.format(budgetRemaining)}
+                sub={`${Math.round((budgetRemaining / Math.max(budgetTotal, 1)) * 100)}% left`}
+                icon={TrendingDown}
+                trend="down"
+              />
             </div>
 
             <Card>
@@ -499,32 +702,35 @@ function DashboardLayout({
               </CardHeader>
               <CardContent className="space-y-5">
                 {loading ? (
-                  <CenteredListMessage label="Loading budget data…" />
+                  <CenteredListMessage label="Loading budget dataâ€¦" />
                 ) : categories.length === 0 ? (
                   <CenteredListMessage label="No categories found." />
                 ) : (
-                  categories.map((cat) => {
-                    const spent = monthSummaries[cat.name] ?? 0;
-                    const budget = budgets[cat.name] ?? 0;
+                  budgetRows.map(({ category, spent, budget }) => {
                     const pct = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
                     const over = budget > 0 && spent > budget;
                     return (
-                      <div key={cat.name} className="space-y-2">
+                      <div key={category.name} className="space-y-2">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2 min-w-0">
                             <div className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
-                              {cat.emoji}
+                              {category.emoji}
                             </div>
-                            <p className="font-medium text-sm">{cat.name}</p>
+                            <p className="font-medium text-sm">{category.name}</p>
                           </div>
-                          <p className={`text-sm font-semibold shrink-0 ${over ? "text-destructive" : "text-foreground"}`}>
+                          <p
+                            className={`text-sm font-semibold shrink-0 ${over ? "text-destructive" : "text-foreground"}`}
+                          >
                             {currency.format(spent)}{" "}
                             <span className="text-muted-foreground font-normal">
                               {budget > 0 ? `/ ${currency.format(budget)}` : ""}
                             </span>
                           </p>
                         </div>
-                        <Progress value={pct} className={over ? "[&>div]:bg-destructive" : "[&>div]:bg-accent"} />
+                        <Progress
+                          value={pct}
+                          className={over ? "[&>div]:bg-destructive" : "[&>div]:bg-accent"}
+                        />
                       </div>
                     );
                   })
@@ -532,22 +738,37 @@ function DashboardLayout({
               </CardContent>
             </Card>
           </TabsContent>
+
+          <TabsContent value="transactions" className="space-y-6">
+            <TransactionsTab
+              transactions={transactions}
+              categories={categories}
+              catColorMap={catColorMap}
+              loading={loading}
+            />
+          </TabsContent>
         </Tabs>
       </main>
     </div>
   );
 }
 
-// ─── Overview stat cards with Info toggle (restored from original) ────────────
-
-function OverviewCards({ transactions, budgetTotal }: { transactions: DashboardTransaction[]; budgetTotal: number }) {
+function OverviewCards({
+  transactions,
+  budgetTotal,
+}: {
+  transactions: DashboardTransaction[];
+  budgetTotal: number;
+}) {
   const [visible, setVisible] = useState(["today", "week", "month", "budget"]);
 
   const stats = useMemo(() => {
     const now = new Date();
     const end = endOfDay(now);
     const sumFrom = (from: Date) =>
-      transactions.filter((t) => t.timestamp >= from && t.timestamp <= end).reduce((s, t) => s + t.amount, 0);
+      transactions
+        .filter((transaction) => transaction.timestamp >= from && transaction.timestamp <= end)
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
     const monthTotal = sumFrom(startOfMonth(now));
     const remaining = Math.max(budgetTotal - monthTotal, 0);
     return {
@@ -561,18 +782,73 @@ function OverviewCards({ transactions, budgetTotal }: { transactions: DashboardT
     };
   }, [transactions, budgetTotal]);
 
-  const STAT_CARDS = [
-    { key: "today", label: "Today", value: currency.format(stats.todayTotal), sub: "Spent today", icon: Wallet, trend: "up" as const },
-    { key: "week", label: "This Week", value: currency.format(stats.weekTotal), sub: "Last 7 days", icon: TrendingDown, trend: "down" as const },
-    { key: "month", label: "This Month", value: currency.format(stats.monthTotal), sub: "Current month", icon: TrendingUp, trend: "up" as const },
-    { key: "budget", label: "Budget Left", value: currency.format(stats.remaining), sub: budgetTotal > 0 ? `${Math.round((stats.remaining / budgetTotal) * 100)}% left` : "No budget set", icon: Target, trend: "down" as const },
-    { key: "30d", label: "Last 30 Days", value: currency.format(stats.d30Total), sub: "Rolling 30 days", icon: TrendingDown, trend: "down" as const },
-    { key: "90d", label: "Last 90 Days", value: currency.format(stats.d90Total), sub: "Rolling 90 days", icon: TrendingUp, trend: "up" as const },
-    { key: "ytd", label: "Year to Date", value: currency.format(stats.ytdTotal), sub: "This year", icon: TrendingUp, trend: "up" as const },
+  const statCards = [
+    {
+      key: "today",
+      label: "Today",
+      value: currency.format(stats.todayTotal),
+      sub: "Spent today",
+      icon: Wallet,
+      trend: "up" as const,
+    },
+    {
+      key: "week",
+      label: "This Week",
+      value: currency.format(stats.weekTotal),
+      sub: "Last 7 days",
+      icon: TrendingDown,
+      trend: "down" as const,
+    },
+    {
+      key: "month",
+      label: "This Month",
+      value: currency.format(stats.monthTotal),
+      sub: "Current month",
+      icon: TrendingUp,
+      trend: "up" as const,
+    },
+    {
+      key: "budget",
+      label: "Budget Left",
+      value: currency.format(stats.remaining),
+      sub:
+        budgetTotal > 0
+          ? `${Math.round((stats.remaining / budgetTotal) * 100)}% left`
+          : "No budget set",
+      icon: Target,
+      trend: "down" as const,
+    },
+    {
+      key: "30d",
+      label: "Last 30 Days",
+      value: currency.format(stats.d30Total),
+      sub: "Rolling 30 days",
+      icon: TrendingDown,
+      trend: "down" as const,
+    },
+    {
+      key: "90d",
+      label: "Last 90 Days",
+      value: currency.format(stats.d90Total),
+      sub: "Rolling 90 days",
+      icon: TrendingUp,
+      trend: "up" as const,
+    },
+    {
+      key: "ytd",
+      label: "Year to Date",
+      value: currency.format(stats.ytdTotal),
+      sub: "This year",
+      icon: TrendingUp,
+      trend: "up" as const,
+    },
   ];
 
-  const cards = STAT_CARDS.filter((c) => visible.includes(c.key));
-  const toggle = (k: string) => setVisible((p) => p.includes(k) ? p.filter((x) => x !== k) : [...p, k]);
+  const cards = statCards.filter((card) => visible.includes(card.key));
+  const toggle = (key: string) =>
+    setVisible((prev) =>
+      prev.includes(key) ? prev.filter((value) => value !== key) : [...prev, key],
+    );
 
   return (
     <div className="space-y-5">
@@ -586,10 +862,13 @@ function OverviewCards({ transactions, budgetTotal }: { transactions: DashboardT
           </PopoverTrigger>
           <PopoverContent className="w-56" align="start">
             <div className="space-y-2">
-              {STAT_CARDS.map((c) => (
-                <label key={c.key} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <Checkbox checked={visible.includes(c.key)} onCheckedChange={() => toggle(c.key)} />
-                  {c.label}
+              {statCards.map((card) => (
+                <label key={card.key} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <Checkbox
+                    checked={visible.includes(card.key)}
+                    onCheckedChange={() => toggle(card.key)}
+                  />
+                  {card.label}
                 </label>
               ))}
             </div>
@@ -598,8 +877,15 @@ function OverviewCards({ transactions, budgetTotal }: { transactions: DashboardT
       </div>
       {cards.length > 0 ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {cards.map((c) => (
-            <StatCard key={c.key} label={c.label} value={c.value} sub={c.sub} icon={c.icon} trend={c.trend} />
+          {cards.map((card) => (
+            <StatCard
+              key={card.key}
+              label={card.label}
+              value={card.value}
+              sub={card.sub}
+              icon={card.icon}
+              trend={card.trend}
+            />
           ))}
         </div>
       ) : (
@@ -608,8 +894,6 @@ function OverviewCards({ transactions, budgetTotal }: { transactions: DashboardT
     </div>
   );
 }
-
-// ─── Spending Trend card with range + category filter (restored from original) ─
 
 function TrendCard({
   transactions,
@@ -627,110 +911,49 @@ function TrendCard({
   const [selected, setSelected] = useState<string[]>([]);
 
   useEffect(() => {
-    setSelected(categories.map((c) => c.name));
+    setSelected(categories.map((category) => category.name));
   }, [categories]);
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
 
-  const data = useMemo(() => {
-    const filtered = transactions.filter((t) => t.timestamp >= from && t.timestamp <= to);
-    const dayMap = new Map<string, { date: Date; perCat: Record<string, number> }>();
-    filtered.forEach((t) => {
-      const key = format(t.timestamp, "yyyy-MM-dd");
-      if (!dayMap.has(key)) dayMap.set(key, { date: startOfDay(t.timestamp), perCat: {} });
-      const entry = dayMap.get(key)!;
-      entry.perCat[t.category] = (entry.perCat[t.category] ?? 0) + t.amount;
-    });
-    return [...dayMap.values()]
-      .sort((a, b) => a.date.getTime() - b.date.getTime())
-      .map((d) => ({
-        date: format(d.date, "MMM d"),
-        amount: Number(selected.reduce((s, cat) => s + (d.perCat[cat] ?? 0), 0).toFixed(2)),
-      }));
-  }, [transactions, from, to, selected]);
+  const data = useMemo(
+    () => buildFilledDailySeries(transactions, from, to, selected),
+    [transactions, from, to, selected],
+  );
 
-  const toggleCat = (cat: string) =>
-    setSelected((prev) => prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]);
+  const toggleCategory = (categoryName: string) => {
+    setSelected((prev) =>
+      prev.includes(categoryName)
+        ? prev.filter((value) => value !== categoryName)
+        : [...prev, categoryName],
+    );
+  };
 
   return (
     <Card>
       <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 space-y-0">
         <CardTitle className="text-lg">Spending Trend</CardTitle>
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={rangeKey} onValueChange={(v) => setRangeKey(v as RangeKey)}>
-            <SelectTrigger className="w-[170px] h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="current-month">Current Month</SelectItem>
-              <SelectItem value="30d">Last 30 Days</SelectItem>
-              <SelectItem value="60d">Last 60 Days</SelectItem>
-              <SelectItem value="ytd">Year to Date</SelectItem>
-              <SelectItem value="custom">Custom Range</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {rangeKey === "custom" && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn("h-9 justify-start text-left font-normal", !custom && "text-muted-foreground")}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {custom?.from
-                    ? custom.to
-                      ? `${format(custom.from, "MMM d")} – ${format(custom.to, "MMM d")}`
-                      : format(custom.from, "MMM d")
-                    : "Pick dates"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="range"
-                  selected={custom}
-                  onSelect={setCustom}
-                  numberOfMonths={2}
-                  className={cn("p-3 pointer-events-auto")}
-                />
-              </PopoverContent>
-            </Popover>
-          )}
-
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9">
-                <Filter className="mr-2 h-4 w-4" />
-                Categories ({selected.length}/{categories.length})
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-56" align="end">
-              <div className="space-y-2">
-                {categories.map((cat) => (
-                  <label key={cat.name} className="flex items-center gap-2 text-sm cursor-pointer">
-                    <Checkbox
-                      checked={selected.includes(cat.name)}
-                      onCheckedChange={() => toggleCat(cat.name)}
-                    />
-                    <span
-                      className="h-2.5 w-2.5 rounded-sm shrink-0"
-                      style={{ background: catColorMap[cat.name] ?? CAT_PALETTE[0] }}
-                    />
-                    {cat.emoji} {cat.name}
-                  </label>
-                ))}
-              </div>
-            </PopoverContent>
-          </Popover>
+          <RangeSelector
+            rangeKey={rangeKey}
+            custom={custom}
+            onRangeKeyChange={setRangeKey}
+            onCustomChange={setCustom}
+          />
+          <CategoryFilterPopover
+            categories={categories}
+            selected={selected}
+            catColorMap={catColorMap}
+            onToggle={toggleCategory}
+          />
         </div>
       </CardHeader>
       <CardContent>
         <div className="h-96 w-full">
           {loading ? (
-            <CenteredChartMessage label="Loading trend data…" />
-          ) : data.length === 0 ? (
-            <CenteredChartMessage label="No transactions in this range." />
+            <CenteredChartMessage label="Loading trend dataâ€¦" />
+          ) : selected.length === 0 ? (
+            <CenteredChartMessage label="Select at least one category." />
           ) : (
             <ResponsiveContainer>
               <LineChart data={data}>
@@ -739,11 +962,11 @@ function TrendCard({
                 <YAxis
                   stroke="oklch(0.55 0.04 257)"
                   fontSize={12}
-                  tickFormatter={(v) => currency.format(Number(v))}
+                  tickFormatter={(value) => currency.format(Number(value))}
                 />
                 <Tooltip
                   contentStyle={{ borderRadius: 8, border: "1px solid oklch(0.92 0.01 256)" }}
-                  formatter={(v: number) => currency.format(v)}
+                  formatter={(value: number) => currency.format(value)}
                 />
                 <Line
                   type="linear"
@@ -762,7 +985,336 @@ function TrendCard({
   );
 }
 
-// ─── Shared components ────────────────────────────────────────────────────────
+function TransactionsTab({
+  transactions,
+  categories,
+  catColorMap,
+  loading,
+}: {
+  transactions: DashboardTransaction[];
+  categories: DashboardCategory[];
+  catColorMap: Record<string, string>;
+  loading: boolean;
+}) {
+  const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
+  const [custom, setCustom] = useState<DateRange | undefined>();
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [minAmount, setMinAmount] = useState("");
+  const [maxAmount, setMaxAmount] = useState("");
+  const [sortKey, setSortKey] = useState<TransactionSortKey>("date-desc");
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setSelectedCategories(categories.map((category) => category.name));
+  }, [categories]);
+
+  const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
+  const minValue = minAmount.trim() === "" ? null : Number(minAmount);
+  const maxValue = maxAmount.trim() === "" ? null : Number(maxAmount);
+
+  const filteredTransactions = useMemo(() => {
+    const selectedSet = new Set(selectedCategories);
+    const filtered = transactions.filter((transaction) => {
+      if (transaction.timestamp < from || transaction.timestamp > to) {
+        return false;
+      }
+      if (!selectedSet.has(transaction.category)) {
+        return false;
+      }
+      if (minValue !== null && !Number.isNaN(minValue) && transaction.amount < minValue) {
+        return false;
+      }
+      if (maxValue !== null && !Number.isNaN(maxValue) && transaction.amount > maxValue) {
+        return false;
+      }
+      return true;
+    });
+    return sortTransactions(filtered, sortKey);
+  }, [transactions, from, to, selectedCategories, minValue, maxValue, sortKey]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [rangeKey, custom, selectedCategories, minAmount, maxAmount, sortKey]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / TRANSACTIONS_PAGE_SIZE));
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  const pageRows = useMemo(() => {
+    const startIndex = (page - 1) * TRANSACTIONS_PAGE_SIZE;
+    return filteredTransactions.slice(startIndex, startIndex + TRANSACTIONS_PAGE_SIZE);
+  }, [filteredTransactions, page]);
+
+  const toggleCategory = (categoryName: string) => {
+    setSelectedCategories((prev) =>
+      prev.includes(categoryName)
+        ? prev.filter((value) => value !== categoryName)
+        : [...prev, categoryName],
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader className="space-y-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <CardTitle className="text-lg">All Transactions</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <RangeSelector
+              rangeKey={rangeKey}
+              custom={custom}
+              onRangeKeyChange={setRangeKey}
+              onCustomChange={setCustom}
+            />
+            <CategoryFilterPopover
+              categories={categories}
+              selected={selectedCategories}
+              catColorMap={catColorMap}
+              onToggle={toggleCategory}
+            />
+            <Select
+              value={sortKey}
+              onValueChange={(value) => setSortKey(value as TransactionSortKey)}
+            >
+              <SelectTrigger className="w-[170px] h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="date-desc">Date (Newest)</SelectItem>
+                <SelectItem value="date-asc">Date (Oldest)</SelectItem>
+                <SelectItem value="category-asc">Category (A-Z)</SelectItem>
+                <SelectItem value="category-desc">Category (Z-A)</SelectItem>
+                <SelectItem value="amount-desc">Amount (High-Low)</SelectItem>
+                <SelectItem value="amount-asc">Amount (Low-High)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:max-w-md">
+          <div className="space-y-2">
+            <Label htmlFor="min-amount">Min amount</Label>
+            <Input
+              id="min-amount"
+              inputMode="decimal"
+              onChange={(event) => setMinAmount(event.target.value)}
+              placeholder="0.00"
+              type="number"
+              value={minAmount}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="max-amount">Max amount</Label>
+            <Input
+              id="max-amount"
+              inputMode="decimal"
+              onChange={(event) => setMaxAmount(event.target.value)}
+              placeholder="No limit"
+              type="number"
+              value={maxAmount}
+            />
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? (
+          <CenteredListMessage label="Loading transactionsâ€¦" />
+        ) : pageRows.length === 0 ? (
+          <CenteredListMessage label="No transactions found for the selected filters." />
+        ) : (
+          <>
+            <div className="rounded-xl border border-border/70">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[120px]">Date</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pageRows.map((transaction) => (
+                    <TableRow key={transaction.id}>
+                      <TableCell className="whitespace-nowrap">
+                        {format(transaction.timestamp, "MMM d, yyyy")}
+                      </TableCell>
+                      <TableCell className="font-medium">{transaction.item}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 rounded-sm shrink-0"
+                            style={{
+                              background: catColorMap[transaction.category] ?? colorForCategory(0),
+                            }}
+                          />
+                          <span className="truncate">
+                            {categories.find((category) => category.name === transaction.category)
+                              ?.emoji ?? "ðŸ’³"}{" "}
+                            {transaction.category}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {currency.format(transaction.amount)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Showing {(page - 1) * TRANSACTIONS_PAGE_SIZE + 1}-
+                {Math.min(page * TRANSACTIONS_PAGE_SIZE, filteredTransactions.length)} of{" "}
+                {filteredTransactions.length}
+              </p>
+              <Pagination className="mx-0 w-auto justify-end">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      href="#"
+                      aria-disabled={page === 1}
+                      className={page === 1 ? "pointer-events-none opacity-50" : ""}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        if (page > 1) {
+                          setPage(page - 1);
+                        }
+                      }}
+                    />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <span className="px-3 text-sm text-muted-foreground">
+                      Page {page} of {totalPages}
+                    </span>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext
+                      href="#"
+                      aria-disabled={page === totalPages}
+                      className={page === totalPages ? "pointer-events-none opacity-50" : ""}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        if (page < totalPages) {
+                          setPage(page + 1);
+                        }
+                      }}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RangeSelector({
+  rangeKey,
+  custom,
+  onRangeKeyChange,
+  onCustomChange,
+}: {
+  rangeKey: RangeKey;
+  custom: DateRange | undefined;
+  onRangeKeyChange: (value: RangeKey) => void;
+  onCustomChange: (value: DateRange | undefined) => void;
+}) {
+  return (
+    <>
+      <Select value={rangeKey} onValueChange={(value) => onRangeKeyChange(value as RangeKey)}>
+        <SelectTrigger className="w-[170px] h-9">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="current-month">Current Month</SelectItem>
+          <SelectItem value="30d">Last 30 Days</SelectItem>
+          <SelectItem value="90d">Last 90 Days</SelectItem>
+          <SelectItem value="ytd">Year to Date</SelectItem>
+          <SelectItem value="custom">Custom Range</SelectItem>
+        </SelectContent>
+      </Select>
+
+      {rangeKey === "custom" && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                "h-9 justify-start text-left font-normal",
+                !custom && "text-muted-foreground",
+              )}
+            >
+              <CalendarIcon className="mr-2 h-4 w-4" />
+              {custom?.from
+                ? custom.to
+                  ? `${format(custom.from, "MMM d")} â€“ ${format(custom.to, "MMM d")}`
+                  : format(custom.from, "MMM d")
+                : "Pick dates"}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar
+              mode="range"
+              selected={custom}
+              onSelect={onCustomChange}
+              numberOfMonths={2}
+              className={cn("p-3 pointer-events-auto")}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
+    </>
+  );
+}
+
+function CategoryFilterPopover({
+  categories,
+  selected,
+  catColorMap,
+  onToggle,
+}: {
+  categories: DashboardCategory[];
+  selected: string[];
+  catColorMap: Record<string, string>;
+  onToggle: (categoryName: string) => void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9">
+          <Filter className="mr-2 h-4 w-4" />
+          Categories ({selected.length}/{categories.length})
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56" align="end">
+        <div className="space-y-2">
+          {categories.map((category) => (
+            <label key={category.name} className="flex items-center gap-2 text-sm cursor-pointer">
+              <Checkbox
+                checked={selected.includes(category.name)}
+                onCheckedChange={() => onToggle(category.name)}
+              />
+              <span
+                className="h-2.5 w-2.5 rounded-sm shrink-0"
+                style={{ background: catColorMap[category.name] ?? colorForCategory(0) }}
+              />
+              {category.emoji} {category.name}
+            </label>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function StatCard({
   label,
@@ -784,8 +1336,14 @@ function StatCard({
           <div>
             <p className="text-sm text-muted-foreground">{label}</p>
             <p className="text-2xl font-bold mt-1 text-foreground">{value}</p>
-            <p className={`text-xs mt-1 flex items-center gap-1 ${trend === "up" ? "text-destructive" : "text-accent"}`}>
-              {trend === "up" ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+            <p
+              className={`text-xs mt-1 flex items-center gap-1 ${trend === "up" ? "text-destructive" : "text-accent"}`}
+            >
+              {trend === "up" ? (
+                <TrendingUp className="h-3 w-3" />
+              ) : (
+                <TrendingDown className="h-3 w-3" />
+              )}
               {sub}
             </p>
           </div>
@@ -815,7 +1373,11 @@ function CenteredState({ title, detail }: { title: string; detail: string }) {
 }
 
 function CenteredChartMessage({ label }: { label: string }) {
-  return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{label}</div>;
+  return (
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      {label}
+    </div>
+  );
 }
 
 function CenteredListMessage({ label }: { label: string }) {
