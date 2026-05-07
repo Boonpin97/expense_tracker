@@ -14,6 +14,7 @@ from services.dashboard_auth import (
 from services.firestore import (
     add_category_to_list,
     delete_web_session,
+    delete_transaction,
     get_account_by_username,
     get_budgets,
     get_category_list,
@@ -242,6 +243,17 @@ async def update_dashboard_transaction(
             "timestamp": transaction["timestamp"],
         }
     )
+    return {"ok": True}
+
+
+@router.delete("/transactions/{transaction_id}")
+async def delete_dashboard_transaction(transaction_id: str, request: Request):
+    session = _require_session(request)
+    transaction = get_transaction_by_id(transaction_id)
+    if not transaction or transaction.get("chat_id") != session["chat_id"]:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+
+    delete_transaction(transaction_id)
     return {"ok": True}
 
 

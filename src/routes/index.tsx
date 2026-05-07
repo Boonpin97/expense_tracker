@@ -8,7 +8,6 @@ import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Plus,
   TrendingUp,
   TrendingDown,
   Wallet,
@@ -17,7 +16,9 @@ import {
   Loader2,
   CalendarIcon,
   Filter,
-  ArrowUpNarrowWide,
+  ListFilter,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import {
   Select,
@@ -29,6 +30,14 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar } from "@/components/ui/calendar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { endOfDay, format, startOfDay, startOfMonth, startOfYear, subDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import type { DateRange } from "react-day-picker";
@@ -64,12 +73,14 @@ import {
 } from "recharts";
 import {
   DashboardApiError,
+  deleteDashboardTransaction,
   fetchDashboardBudgets,
   fetchDashboardCategories,
   fetchDashboardSession,
   fetchDashboardTransactions,
   loginToDashboard,
   logoutFromDashboard,
+  updateDashboardTransaction,
   type DashboardCategory,
   type DashboardSession,
   type DashboardTransaction,
@@ -78,7 +89,7 @@ import {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "BudgetFlow â€” Expense Tracking & Budgeting Dashboard" },
+      { title: "BudgetFlow - Expense Tracking & Budgeting Dashboard" },
       {
         name: "description",
         content:
@@ -112,6 +123,15 @@ function colorForCategory(index: number) {
   const lightness = [0.6, 0.68, 0.74][index % 3];
   const chroma = [0.2, 0.16, 0.13][index % 3];
   return `oklch(${lightness} ${chroma} ${hue})`;
+}
+
+function formatDateTimeInputValue(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hours = String(value.getHours()).padStart(2, "0");
+  const minutes = String(value.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
 function getRange(key: RangeKey, custom?: DateRange): { from: Date; to: Date } {
@@ -360,6 +380,28 @@ function DashboardShell({
     onSignedOut();
   }
 
+  async function handleUpdateTransaction(
+    transactionId: string,
+    payload: {
+      item: string;
+      amount: number;
+      category: string;
+      timestamp: Date;
+    },
+  ) {
+    await updateDashboardTransaction(transactionId, payload);
+    setTransactions((current) =>
+      current.map((transaction) =>
+        transaction.id === transactionId ? { ...transaction, ...payload } : transaction,
+      ),
+    );
+  }
+
+  async function handleDeleteTransaction(transactionId: string) {
+    await deleteDashboardTransaction(transactionId);
+    setTransactions((current) => current.filter((transaction) => transaction.id !== transactionId));
+  }
+
   return (
     <DashboardLayout
       session={session}
@@ -368,7 +410,9 @@ function DashboardShell({
       categories={categories}
       budgets={budgets}
       transactions={transactions}
+      onDeleteTransaction={handleDeleteTransaction}
       onLogout={() => void handleLogout()}
+      onUpdateTransaction={handleUpdateTransaction}
     />
   );
 }
@@ -380,7 +424,9 @@ function DashboardLayout({
   categories,
   budgets,
   transactions,
+  onDeleteTransaction,
   onLogout,
+  onUpdateTransaction,
 }: {
   session: DashboardSession;
   loading: boolean;
@@ -388,9 +434,25 @@ function DashboardLayout({
   categories: DashboardCategory[];
   budgets: Record<string, number>;
   transactions: DashboardTransaction[];
+  onDeleteTransaction: (transactionId: string) => Promise<void>;
   onLogout: () => void;
+  onUpdateTransaction: (
+    transactionId: string,
+    payload: {
+      item: string;
+      amount: number;
+      category: string;
+      timestamp: Date;
+    },
+  ) => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+  const [visibleOverviewCards, setVisibleOverviewCards] = useState([
+    "today",
+    "week",
+    "month",
+    "budget",
+  ]);
 
   const catColorMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -493,10 +555,6 @@ function DashboardLayout({
             <div className="hidden lg:block text-sm text-muted-foreground">
               Signed in as <span className="font-medium text-foreground">{session.username}</span>
             </div>
-            <Button className="gap-2" size="sm" variant="outline">
-              <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">Add Expense</span>
-            </Button>
             <Button onClick={onLogout} size="sm" variant="outline">
               <LogOut className="mr-2 h-4 w-4" />
               Sign out
@@ -523,9 +581,19 @@ function DashboardLayout({
             <TabsTrigger value="budget">Budget</TabsTrigger>
             <TabsTrigger value="transactions">Transactions</TabsTrigger>
           </TabsList>
+          <div className="flex justify-start">
+            <OverviewInfoPopover
+              visible={visibleOverviewCards}
+              onVisibleChange={setVisibleOverviewCards}
+            />
+          </div>
 
           <TabsContent value="overview" className="space-y-6">
-            <OverviewCards transactions={transactions} budgetTotal={budgetTotal} />
+            <OverviewCards
+              transactions={transactions}
+              budgetTotal={budgetTotal}
+              visible={visibleOverviewCards}
+            />
 
             <Card>
               <CardHeader>
@@ -533,7 +601,7 @@ function DashboardLayout({
               </CardHeader>
               <CardContent className="space-y-4">
                 {loading ? (
-                  <CenteredListMessage label="Loading transactionsâ€¦" />
+                  <CenteredListMessage label="Loading transactions..." />
                 ) : recentTransactions.length === 0 ? (
                   <CenteredListMessage label="No transactions found." />
                 ) : (
@@ -547,12 +615,12 @@ function DashboardLayout({
                           <div className="flex items-center gap-3 min-w-0">
                             <div className="h-9 w-9 rounded-full bg-secondary flex items-center justify-center shrink-0 text-base leading-none">
                               {categories.find((category) => category.name === transaction.category)
-                                ?.emoji ?? "ðŸ’³"}
+                                ?.emoji ?? "$"}
                             </div>
                             <div className="min-w-0">
                               <p className="font-medium text-sm truncate">{transaction.item}</p>
                               <p className="text-xs text-muted-foreground">
-                                {transaction.category} Â· {format(transaction.timestamp, "MMM d")}
+                                {transaction.category} - {format(transaction.timestamp, "MMM d")}
                               </p>
                             </div>
                           </div>
@@ -589,7 +657,7 @@ function DashboardLayout({
                 <CardContent>
                   <div className="h-72 w-full">
                     {loading ? (
-                      <CenteredChartMessage label="Loadingâ€¦" />
+                      <CenteredChartMessage label="Loading..." />
                     ) : (
                       <ResponsiveContainer>
                         <BarChart data={dailyData}>
@@ -623,7 +691,7 @@ function DashboardLayout({
                   <div className="h-72 w-full">
                     {loading || pieData.length === 0 ? (
                       <CenteredChartMessage
-                        label={loading ? "Loadingâ€¦" : "No data for this month."}
+                        label={loading ? "Loading..." : "No data for this month."}
                       />
                     ) : (
                       <ResponsiveContainer>
@@ -656,13 +724,13 @@ function DashboardLayout({
                             wrapperStyle={{ fontSize: 12 }}
                             formatter={(value, entry: { payload?: { value?: number } }) => (
                               <span className="text-foreground">
+                                {value}{" "}
                                 <span className="text-muted-foreground">
                                   {Math.round(
                                     ((entry?.payload?.value ?? 0) / Math.max(monthTotal, 1)) * 100,
                                   )}
                                   %
-                                </span>{" "}
-                                {value}
+                                </span>
                               </span>
                             )}
                           />
@@ -706,7 +774,7 @@ function DashboardLayout({
               </CardHeader>
               <CardContent className="space-y-5">
                 {loading ? (
-                  <CenteredListMessage label="Loading budget dataâ€¦" />
+                  <CenteredListMessage label="Loading budget data..." />
                 ) : categories.length === 0 ? (
                   <CenteredListMessage label="No categories found." />
                 ) : (
@@ -749,6 +817,8 @@ function DashboardLayout({
               categories={categories}
               catColorMap={catColorMap}
               loading={loading}
+              onDeleteTransaction={onDeleteTransaction}
+              onUpdateTransaction={onUpdateTransaction}
             />
           </TabsContent>
         </Tabs>
@@ -760,12 +830,12 @@ function DashboardLayout({
 function OverviewCards({
   transactions,
   budgetTotal,
+  visible,
 }: {
   transactions: DashboardTransaction[];
   budgetTotal: number;
+  visible: string[];
 }) {
-  const [visible, setVisible] = useState(["today", "week", "month", "budget"]);
-
   const stats = useMemo(() => {
     const now = new Date();
     const end = endOfDay(now);
@@ -849,36 +919,9 @@ function OverviewCards({
   ];
 
   const cards = statCards.filter((card) => visible.includes(card.key));
-  const toggle = (key: string) =>
-    setVisible((prev) =>
-      prev.includes(key) ? prev.filter((value) => value !== key) : [...prev, key],
-    );
 
   return (
     <div className="space-y-5">
-      <div className="flex justify-start">
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 text-left">
-              <Filter className="mr-2 h-4 w-4" />
-              Info
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-56" align="start">
-            <div className="space-y-2">
-              {statCards.map((card) => (
-                <label key={card.key} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <Checkbox
-                    checked={visible.includes(card.key)}
-                    onCheckedChange={() => toggle(card.key)}
-                  />
-                  {card.label}
-                </label>
-              ))}
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
       {cards.length > 0 ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {cards.map((card) => (
@@ -896,6 +939,53 @@ function OverviewCards({
         <p className="text-sm text-muted-foreground text-center py-8">No cards selected.</p>
       )}
     </div>
+  );
+}
+
+function OverviewInfoPopover({
+  visible,
+  onVisibleChange,
+}: {
+  visible: string[];
+  onVisibleChange: (value: string[]) => void;
+}) {
+  const statCards = [
+    { key: "today", label: "Today" },
+    { key: "week", label: "This Week" },
+    { key: "month", label: "This Month" },
+    { key: "budget", label: "Budget Left" },
+    { key: "30d", label: "Last 30 Days" },
+    { key: "90d", label: "Last 90 Days" },
+    { key: "ytd", label: "Year to Date" },
+  ];
+
+  const toggle = (key: string) =>
+    onVisibleChange(
+      visible.includes(key) ? visible.filter((value) => value !== key) : [...visible, key],
+    );
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9 text-left">
+          <Filter className="mr-2 h-4 w-4" />
+          Info
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56" align="start">
+        <div className="space-y-2">
+          {statCards.map((card) => (
+            <label key={card.key} className="flex items-center gap-2 text-sm cursor-pointer">
+              <Checkbox
+                checked={visible.includes(card.key)}
+                onCheckedChange={() => toggle(card.key)}
+              />
+              {card.label}
+            </label>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -955,7 +1045,7 @@ function TrendCard({
       <CardContent>
         <div className="h-96 w-full">
           {loading ? (
-            <CenteredChartMessage label="Loading trend dataâ€¦" />
+            <CenteredChartMessage label="Loading trend data..." />
           ) : selected.length === 0 ? (
             <CenteredChartMessage label="Select at least one category." />
           ) : (
@@ -994,11 +1084,23 @@ function TransactionsTab({
   categories,
   catColorMap,
   loading,
+  onDeleteTransaction,
+  onUpdateTransaction,
 }: {
   transactions: DashboardTransaction[];
   categories: DashboardCategory[];
   catColorMap: Record<string, string>;
   loading: boolean;
+  onDeleteTransaction: (transactionId: string) => Promise<void>;
+  onUpdateTransaction: (
+    transactionId: string,
+    payload: {
+      item: string;
+      amount: number;
+      category: string;
+      timestamp: Date;
+    },
+  ) => Promise<void>;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
@@ -1007,6 +1109,14 @@ function TransactionsTab({
   const [maxAmount, setMaxAmount] = useState("");
   const [sortKey, setSortKey] = useState<TransactionSortKey>("date-desc");
   const [page, setPage] = useState(1);
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [editingItem, setEditingItem] = useState("");
+  const [editingAmount, setEditingAmount] = useState("");
+  const [editingCategory, setEditingCategory] = useState("");
+  const [editingTimestamp, setEditingTimestamp] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [savingTransaction, setSavingTransaction] = useState(false);
+  const [deletingTransactionId, setDeletingTransactionId] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedCategories(categories.map((category) => category.name));
@@ -1053,6 +1163,11 @@ function TransactionsTab({
     return filteredTransactions.slice(startIndex, startIndex + TRANSACTIONS_PAGE_SIZE);
   }, [filteredTransactions, page]);
 
+  const editingTransaction = useMemo(
+    () => transactions.find((transaction) => transaction.id === editingTransactionId) ?? null,
+    [transactions, editingTransactionId],
+  );
+
   const toggleCategory = (categoryName: string) => {
     setSelectedCategories((prev) =>
       prev.includes(categoryName)
@@ -1061,161 +1176,352 @@ function TransactionsTab({
     );
   };
 
-  return (
-    <Card>
-      <CardHeader className="space-y-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <CardTitle className="text-lg">All Transactions</CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5">
-              <span className="text-sm text-muted-foreground">Min</span>
-              <Input
-                id="min-amount"
-                className="h-8 w-24 border-0 px-0 shadow-none focus-visible:ring-0"
-                inputMode="decimal"
-                onChange={(event) => setMinAmount(event.target.value)}
-                placeholder="0.00"
-                type="number"
-                value={minAmount}
-              />
-              <span className="text-sm text-muted-foreground">-</span>
-              <span className="text-sm text-muted-foreground">Max</span>
-              <Input
-                id="max-amount"
-                className="h-8 w-24 border-0 px-0 shadow-none focus-visible:ring-0"
-                inputMode="decimal"
-                onChange={(event) => setMaxAmount(event.target.value)}
-                placeholder="No limit"
-                type="number"
-                value={maxAmount}
-              />
-            </div>
-            <RangeSelector
-              rangeKey={rangeKey}
-              custom={custom}
-              onRangeKeyChange={setRangeKey}
-              onCustomChange={setCustom}
-            />
-            <CategoryFilterPopover
-              categories={categories}
-              selected={selectedCategories}
-              catColorMap={catColorMap}
-              onToggle={toggleCategory}
-            />
-            <Select
-              value={sortKey}
-              onValueChange={(value) => setSortKey(value as TransactionSortKey)}
-            >
-              <SelectTrigger className="h-9 w-9 px-0">
-                <ArrowUpNarrowWide className="h-4 w-4" />
-                <span className="sr-only">Sort transactions</span>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="date-desc">Date (Newest)</SelectItem>
-                <SelectItem value="date-asc">Date (Oldest)</SelectItem>
-                <SelectItem value="category-asc">Category (A-Z)</SelectItem>
-                <SelectItem value="category-desc">Category (Z-A)</SelectItem>
-                <SelectItem value="amount-desc">Amount (High-Low)</SelectItem>
-                <SelectItem value="amount-asc">Amount (Low-High)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {loading ? (
-          <CenteredListMessage label="Loading transactionsâ€¦" />
-        ) : pageRows.length === 0 ? (
-          <CenteredListMessage label="No transactions found for the selected filters." />
-        ) : (
-          <>
-            <div className="rounded-xl border border-border/70">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[120px]">Date</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pageRows.map((transaction) => (
-                    <TableRow key={transaction.id}>
-                      <TableCell className="whitespace-nowrap">
-                        {format(transaction.timestamp, "MMM d, yyyy")}
-                      </TableCell>
-                      <TableCell className="font-medium">{transaction.item}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="h-2.5 w-2.5 rounded-sm shrink-0"
-                            style={{
-                              background: catColorMap[transaction.category] ?? colorForCategory(0),
-                            }}
-                          />
-                          <span className="truncate">
-                            {categories.find((category) => category.name === transaction.category)
-                              ?.emoji ?? "ðŸ’³"}{" "}
-                            {transaction.category}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right font-semibold">
-                        {currency.format(transaction.amount)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+  function openEditDialog(transaction: DashboardTransaction) {
+    setActionError(null);
+    setEditingTransactionId(transaction.id);
+    setEditingItem(transaction.item);
+    setEditingAmount(String(transaction.amount));
+    setEditingCategory(transaction.category);
+    setEditingTimestamp(formatDateTimeInputValue(transaction.timestamp));
+  }
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-muted-foreground">
-                Showing {(page - 1) * TRANSACTIONS_PAGE_SIZE + 1}-
-                {Math.min(page * TRANSACTIONS_PAGE_SIZE, filteredTransactions.length)} of{" "}
-                {filteredTransactions.length}
-              </p>
-              <Pagination className="mx-0 w-auto justify-end">
-                <PaginationContent>
-                  <PaginationItem>
-                    <PaginationPrevious
-                      href="#"
-                      aria-disabled={page === 1}
-                      className={page === 1 ? "pointer-events-none opacity-50" : ""}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        if (page > 1) {
-                          setPage(page - 1);
-                        }
-                      }}
-                    />
-                  </PaginationItem>
-                  <PaginationItem>
-                    <span className="px-3 text-sm text-muted-foreground">
-                      Page {page} of {totalPages}
-                    </span>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <PaginationNext
-                      href="#"
-                      aria-disabled={page === totalPages}
-                      className={page === totalPages ? "pointer-events-none opacity-50" : ""}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        if (page < totalPages) {
-                          setPage(page + 1);
-                        }
-                      }}
-                    />
-                  </PaginationItem>
-                </PaginationContent>
-              </Pagination>
+  function closeEditDialog() {
+    if (savingTransaction) {
+      return;
+    }
+    setEditingTransactionId(null);
+    setEditingItem("");
+    setEditingAmount("");
+    setEditingCategory("");
+    setEditingTimestamp("");
+    setActionError(null);
+  }
+
+  async function handleSaveTransactionEdit() {
+    if (!editingTransactionId) {
+      return;
+    }
+
+    const amount = Number(editingAmount);
+    const timestamp = new Date(editingTimestamp);
+
+    if (!editingItem.trim()) {
+      setActionError("Item name cannot be empty.");
+      return;
+    }
+    if (!editingCategory.trim()) {
+      setActionError("Category is required.");
+      return;
+    }
+    if (Number.isNaN(amount) || amount <= 0) {
+      setActionError("Amount must be a positive number.");
+      return;
+    }
+    if (Number.isNaN(timestamp.getTime())) {
+      setActionError("Date is invalid.");
+      return;
+    }
+
+    setSavingTransaction(true);
+    setActionError(null);
+    try {
+      await onUpdateTransaction(editingTransactionId, {
+        item: editingItem.trim(),
+        amount,
+        category: editingCategory,
+        timestamp,
+      });
+      closeEditDialog();
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "Unable to update transaction.");
+    } finally {
+      setSavingTransaction(false);
+    }
+  }
+
+  async function handleDeleteTransactionClick(transaction: DashboardTransaction) {
+    const confirmed = window.confirm(`Delete "${transaction.item}"?`);
+    if (!confirmed) {
+      return;
+    }
+    setDeletingTransactionId(transaction.id);
+    setActionError(null);
+    try {
+      await onDeleteTransaction(transaction.id);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "Unable to delete transaction.");
+    } finally {
+      setDeletingTransactionId(null);
+    }
+  }
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <CardTitle className="text-lg">All Transactions</CardTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5">
+                <span className="text-sm text-muted-foreground">Min</span>
+                <Input
+                  id="min-amount"
+                  className="h-8 w-14 self-center border-0 px-0 text-sm leading-none shadow-none [appearance:textfield] focus-visible:ring-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  inputMode="decimal"
+                  onChange={(event) => setMinAmount(event.target.value)}
+                  placeholder="0.00"
+                  type="number"
+                  value={minAmount}
+                />
+                <span className="text-sm text-muted-foreground">-</span>
+                <span className="text-sm text-muted-foreground">Max</span>
+                <Input
+                  id="max-amount"
+                  className="h-8 w-14 self-center border-0 px-0 text-sm leading-none shadow-none [appearance:textfield] focus-visible:ring-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  inputMode="decimal"
+                  onChange={(event) => setMaxAmount(event.target.value)}
+                  placeholder="Limit"
+                  type="number"
+                  value={maxAmount}
+                />
+              </div>
+              <RangeSelector
+                rangeKey={rangeKey}
+                custom={custom}
+                onRangeKeyChange={setRangeKey}
+                onCustomChange={setCustom}
+              />
+              <CategoryFilterPopover
+                categories={categories}
+                selected={selectedCategories}
+                catColorMap={catColorMap}
+                onToggle={toggleCategory}
+              />
+              <Select
+                value={sortKey}
+                onValueChange={(value) => setSortKey(value as TransactionSortKey)}
+              >
+                <SelectTrigger className="h-9 w-[112px] px-3">
+                  <div className="flex items-center gap-2 pr-4">
+                    <ListFilter className="h-4 w-4" />
+                    <span>Sort</span>
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="date-desc">Date (Newest)</SelectItem>
+                  <SelectItem value="date-asc">Date (Oldest)</SelectItem>
+                  <SelectItem value="category-asc">Category (A-Z)</SelectItem>
+                  <SelectItem value="category-desc">Category (Z-A)</SelectItem>
+                  <SelectItem value="amount-desc">Amount (High-Low)</SelectItem>
+                  <SelectItem value="amount-asc">Amount (Low-High)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {actionError ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {actionError}
+            </div>
+          ) : null}
+          {loading ? (
+            <CenteredListMessage label="Loading transactions..." />
+          ) : pageRows.length === 0 ? (
+            <CenteredListMessage label="No transactions found for the selected filters." />
+          ) : (
+            <>
+              <div className="rounded-xl border border-border/70">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[120px]">Date</TableHead>
+                      <TableHead>Item</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="w-[96px] text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pageRows.map((transaction) => (
+                      <TableRow key={transaction.id}>
+                        <TableCell className="whitespace-nowrap">
+                          {format(transaction.timestamp, "MMM d, yyyy")}
+                        </TableCell>
+                        <TableCell className="font-medium">{transaction.item}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 rounded-sm shrink-0"
+                              style={{
+                                background:
+                                  catColorMap[transaction.category] ?? colorForCategory(0),
+                              }}
+                            />
+                            <span className="truncate">
+                              {categories.find((category) => category.name === transaction.category)
+                                ?.emoji ?? "$"}{" "}
+                              {transaction.category}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          {currency.format(transaction.amount)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              aria-label={`Edit ${transaction.item}`}
+                              onClick={() => openEditDialog(transaction)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-destructive hover:text-destructive"
+                              aria-label={`Delete ${transaction.item}`}
+                              disabled={deletingTransactionId === transaction.id}
+                              onClick={() => void handleDeleteTransactionClick(transaction)}
+                            >
+                              {deletingTransactionId === transaction.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Showing {(page - 1) * TRANSACTIONS_PAGE_SIZE + 1}-
+                  {Math.min(page * TRANSACTIONS_PAGE_SIZE, filteredTransactions.length)} of{" "}
+                  {filteredTransactions.length}
+                </p>
+                <Pagination className="mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        aria-disabled={page === 1}
+                        className={page === 1 ? "pointer-events-none opacity-50" : ""}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (page > 1) {
+                            setPage(page - 1);
+                          }
+                        }}
+                      />
+                    </PaginationItem>
+                    <PaginationItem>
+                      <span className="px-3 text-sm text-muted-foreground">
+                        Page {page} of {totalPages}
+                      </span>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        aria-disabled={page === totalPages}
+                        className={page === totalPages ? "pointer-events-none opacity-50" : ""}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (page < totalPages) {
+                            setPage(page + 1);
+                          }
+                        }}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={editingTransaction !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeEditDialog();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit transaction</DialogTitle>
+            <DialogDescription>Update the item, category, amount, and date.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="edit-item">Item</Label>
+              <Input
+                id="edit-item"
+                value={editingItem}
+                onChange={(event) => setEditingItem(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-category">Category</Label>
+              <Select value={editingCategory} onValueChange={setEditingCategory}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map((category) => (
+                    <SelectItem key={category.name} value={category.name}>
+                      {category.emoji} {category.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-amount">Amount</Label>
+              <Input
+                id="edit-amount"
+                type="number"
+                inputMode="decimal"
+                value={editingAmount}
+                onChange={(event) => setEditingAmount(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-date">Date</Label>
+              <Input
+                id="edit-date"
+                type="datetime-local"
+                value={editingTimestamp}
+                onChange={(event) => setEditingTimestamp(event.target.value)}
+              />
+            </div>
+            {actionError ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {actionError}
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeEditDialog} disabled={savingTransaction}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleSaveTransactionEdit()} disabled={savingTransaction}>
+              {savingTransaction ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -1259,7 +1565,7 @@ function RangeSelector({
               <CalendarIcon className="mr-2 h-4 w-4" />
               {custom?.from
                 ? custom.to
-                  ? `${format(custom.from, "MMM d")} â€“ ${format(custom.to, "MMM d")}`
+                  ? `${format(custom.from, "MMM d")} - ${format(custom.to, "MMM d")}`
                   : format(custom.from, "MMM d")
                 : "Pick dates"}
             </Button>

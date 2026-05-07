@@ -199,6 +199,29 @@ export async function fetchDashboardTransactions(options: {
   return (data.transactions ?? []).map(parseTransaction);
 }
 
+export async function updateDashboardTransaction(
+  transactionId: string,
+  payload: {
+    item: string;
+    amount: number;
+    category: string;
+    timestamp: Date;
+  },
+) {
+  await requestJson("PATCH", `/dashboard/transactions/${transactionId}`, {
+    body: {
+      item: payload.item,
+      amount: payload.amount,
+      category: payload.category,
+      timestamp: payload.timestamp.toISOString(),
+    },
+  });
+}
+
+export async function deleteDashboardTransaction(transactionId: string) {
+  await requestJson("DELETE", `/dashboard/transactions/${transactionId}`);
+}
+
 export async function fetchDashboardCategories() {
   const data = await requestJson<{ categories?: Record<string, unknown>[] }>(
     "GET",
