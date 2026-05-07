@@ -38,16 +38,21 @@ default_origins = [
     "https://budget-bot-123-dev.web.app",
     "https://budget-bot-123-dev.firebaseapp.com",
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "http://localhost:5000",
+    "http://127.0.0.1:5000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 configured_origins = [
     origin.strip()
     for origin in os.getenv("DASHBOARD_WEB_ORIGINS", "").split(",")
     if origin.strip()
 ]
+allowed_origins = list(dict.fromkeys([*default_origins, *configured_origins]))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=configured_origins or default_origins,
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
