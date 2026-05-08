@@ -79,7 +79,7 @@ async def send_category_keyboard(chat_id: int, item: str, amount: float) -> dict
     from services.firestore import get_category_list
 
     categories = []
-    for cat in get_category_list():
+    for cat in get_category_list(chat_id):
         emoji = cat.get("emoji", "🏷️")
         name = cat["name"]
         categories.append((f"{emoji} {name}", f"cat:{name}"))
@@ -114,7 +114,7 @@ async def send_budget_category_keyboard(chat_id: int, prompt: str) -> dict:
 
     keyboard = []
     row = []
-    for cat in get_category_list():
+    for cat in get_category_list(chat_id):
         emoji = cat.get("emoji", "🏷️")
         name = cat["name"]
         row.append({"text": f"{emoji} {name}", "callback_data": f"budgetcat:{name}"})

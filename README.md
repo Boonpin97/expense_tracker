@@ -231,15 +231,28 @@ finance-bot/
 }
 ```
 
-### Collection: `category_map`
+### Subcollection: `users/{chat_id}/category_map`
 
 ```python
-# Document ID = item name lowercased and stripped (e.g. "coffee", "grab")
+# Document ID = "{url-encoded item_key}" (e.g. "coffee")
 {
-    "item_key": "coffee",       # Normalised item name (document ID)
+
+    "item_key": "coffee",       # Normalised item name
     "category": "Food & Drink", # User-confirmed category
     "confirmed_by_user": True,  # False if auto-guessed, True if user picked it
     "created_at": "2024-01-15T21:00:00+08:00"
+}
+```
+
+### Subcollection: `users/{chat_id}/category_list`
+
+```python
+# Document ID = "{url-encoded category_name}"
+{
+
+    "name": "Food & Drink",     # Category label shown to that user
+    "emoji": "🍔",              # Category icon
+    "order": 1                  # Per-user display order; "Other" stays at 9999
 }
 ```
 
@@ -257,9 +270,9 @@ finance-bot/
 ### Category engine (`services/categoriser.py`)
 
 1. Normalise the item name (lowercase, strip punctuation)
-2. Query `category_map` collection for an exact match on the document ID
+2. Query `users/{chat_id}/category_map` for the current user's `{item_key}` document
 3. **If found**: use the stored category, save the transaction, confirm to the user
-4. **If not found**: send a Telegram inline keyboard with preset categories:
+4. **If not found**: send a Telegram inline keyboard using that user's `category_list`:
    - 🍔 Food & Drink
    - 🚗 Transport
    - 🏠 Housing
@@ -355,6 +368,37 @@ Generate the files in this order:
 ---
 
 ## Notes
+
+### Current Firestore Partitioning
+
+- `chat_id` is the active per-user partition key
+- `transactions`, `category_map`, `category_list`, budgets, sessions, and payment plans are already scoped by `chat_id`
+- Any older note that describes multi-user partitioning as a future extension is historical only
+
+### One-Off Category Migration
+
+- Category data now lives under `users/{chat_id}/category_list` and `users/{chat_id}/category_map`.
+- Runtime reads and writes do not auto-migrate old category documents.
+- The migration script accepts either of the previous source shapes:
+  - legacy global top-level `category_list` / `category_map`
+  - top-level user-scoped docs such as `{chat_id}:{category_name}` and `{chat_id}:{item_key}`
+- To move source docs into the user subcollections and remove the old top-level copies, run:
+
+```bash
+python scripts/migrate_category_collections.py --chat-id <TELEGRAM_CHAT_ID> --database <FIRESTORE_DATABASE>
+```
+
+- To preview the exact migration counts without writing or deleting anything, run:
+
+```bash
+python scripts/migrate_category_collections.py --chat-id <TELEGRAM_CHAT_ID> --database <FIRESTORE_DATABASE> --dry-run
+```
+
+- To copy source docs without deleting the originals, run:
+
+```bash
+python scripts/migrate_category_collections.py --chat-id <TELEGRAM_CHAT_ID> --database <FIRESTORE_DATABASE> --keep-source
+```
 
 - All timestamps should be stored in **ISO 8601 format with timezone offset** (`+08:00` for Singapore)
 - The `/trigger-report` endpoint should be protected. Add a `X-Scheduler-Token` header check using a shared secret stored in `.env` as `SCHEDULER_SECRET`, and set the same header in Cloud Scheduler job configurations using `--headers X-Scheduler-Token=<secret>`

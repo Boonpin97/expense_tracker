@@ -85,9 +85,30 @@ if "fastapi" not in sys.modules:
     fastapi_stub = types.ModuleType("fastapi")
 
     class APIRouter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+
+            return decorator
+
         def post(self, *_args, **_kwargs):
             def decorator(fn):
                 return fn
+            return decorator
+
+        def patch(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+
+            return decorator
+
+        def delete(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+
             return decorator
 
     class HTTPException(Exception):
@@ -105,11 +126,15 @@ if "fastapi" not in sys.modules:
     class Request:
         pass
 
+    class Response:
+        pass
+
     fastapi_stub.APIRouter = APIRouter
     fastapi_stub.HTTPException = HTTPException
     fastapi_stub.Header = Header
     fastapi_stub.Query = Query
     fastapi_stub.Request = Request
+    fastapi_stub.Response = Response
     sys.modules["fastapi"] = fastapi_stub
 
 from routers.webhook import _build_monthly_report_buttons, _get_month_window, _parse_month_input_or_none

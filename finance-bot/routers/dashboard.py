@@ -186,7 +186,7 @@ async def get_dashboard_bootstrap(request: Request):
             "chat_id": session["chat_id"],
             "dashboard_url": _dashboard_url(),
         },
-        "categories": get_category_list(),
+        "categories": get_category_list(session["chat_id"]),
         "budgets": get_budgets(session["chat_id"]),
     }
 
@@ -259,20 +259,20 @@ async def delete_dashboard_transaction(transaction_id: str, request: Request):
 
 @router.get("/categories")
 async def list_dashboard_categories(request: Request):
-    _require_session(request)
-    return {"categories": get_category_list()}
+    session = _require_session(request)
+    return {"categories": get_category_list(session["chat_id"])}
 
 
 @router.post("/categories")
 async def create_dashboard_category(payload: CategoryCreateRequest, request: Request):
-    _require_session(request)
+    session = _require_session(request)
     name = payload.name.strip().title()
     if not name:
         raise HTTPException(status_code=400, detail="Category name cannot be empty.")
-    existing = {category["name"] for category in get_category_list()}
+    existing = {category["name"] for category in get_category_list(session["chat_id"])}
     if name in existing:
         raise HTTPException(status_code=400, detail=f"Category {name} already exists.")
-    add_category_to_list(name, payload.emoji.strip() or "🏷️")
+    add_category_to_list(session["chat_id"], name, payload.emoji.strip() or "🏷️")
     return {"ok": True}
 
 
@@ -282,7 +282,7 @@ async def update_dashboard_category(
     payload: CategoryUpdateRequest,
     request: Request,
 ):
-    _require_session(request)
+    session = _require_session(request)
     normalized_name = payload.name.strip().title()
     if not normalized_name:
         raise HTTPException(status_code=400, detail="Category name cannot be empty.")
@@ -290,31 +290,31 @@ async def update_dashboard_category(
         raise HTTPException(status_code=400, detail="The Other category cannot be renamed.")
 
     if normalized_name == category_name:
-        if not update_category_emoji(category_name, payload.emoji.strip() or "🏷️"):
+        if not update_category_emoji(session["chat_id"], category_name, payload.emoji.strip() or "🏷️"):
             raise HTTPException(status_code=404, detail="Category not found.")
         return {"ok": True}
 
-    existing = {category["name"] for category in get_category_list()}
+    existing = {category["name"] for category in get_category_list(session["chat_id"])}
     if normalized_name in existing:
         raise HTTPException(status_code=400, detail=f"Category {normalized_name} already exists.")
 
-    ok, tx_count, map_count = rename_category(category_name, normalized_name)
+    ok, tx_count, map_count = rename_category(session["chat_id"], category_name, normalized_name)
     if not ok:
         raise HTTPException(status_code=404, detail="Category not found.")
-    update_category_emoji(normalized_name, payload.emoji.strip() or "🏷️")
+    update_category_emoji(session["chat_id"], normalized_name, payload.emoji.strip() or "🏷️")
     return {"ok": True, "tx_count": tx_count, "map_count": map_count}
 
 
 @router.delete("/categories/{category_name}")
 async def delete_dashboard_category(category_name: str, request: Request):
-    _require_session(request)
+    session = _require_session(request)
     if category_name == "Other":
         raise HTTPException(status_code=400, detail="The Other category cannot be removed.")
-    reassigned = reassign_transactions_category(category_name, "Other")
+    reassigned = reassign_transactions_category(session["chat_id"], category_name, "Other")
     from services.firestore import delete_category
 
-    delete_category(category_name)
-    if not remove_category_from_list(category_name):
+    delete_category(session["chat_id"], category_name)
+    if not remove_category_from_list(session["chat_id"], category_name):
         raise HTTPException(status_code=404, detail="Category not found.")
     return {"ok": True, "reassigned": reassigned}
 
@@ -325,13 +325,13 @@ async def move_dashboard_category(
     payload: CategoryMoveRequest,
     request: Request,
 ):
-    _require_session(request)
+    session = _require_session(request)
     if category_name == "Other":
         raise HTTPException(status_code=400, detail="The Other category cannot be reordered.")
     if payload.direction not in {-1, 1}:
         raise HTTPException(status_code=400, detail="Direction must be -1 or 1.")
 
-    movable = [category for category in get_category_list() if category["name"] != "Other"]
+    movable = [category for category in get_category_list(session["chat_id"]) if category["name"] != "Other"]
     movable.sort(key=lambda category: category.get("order", 9998))
     index = next((i for i, category in enumerate(movable) if category["name"] == category_name), -1)
     if index == -1:
@@ -341,7 +341,7 @@ async def move_dashboard_category(
         return {"ok": True}
 
     target_order = target_index + 1
-    if not update_category_order(category_name, target_order):
+    if not update_category_order(session["chat_id"], category_name, target_order):
         raise HTTPException(status_code=404, detail="Category not found.")
     return {"ok": True}
 
