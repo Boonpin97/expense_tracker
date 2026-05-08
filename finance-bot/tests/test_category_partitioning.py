@@ -54,7 +54,7 @@ if "google.cloud" not in sys.modules:
     sys.modules["google.cloud.firestore"] = firestore_mod
 
 from services import firestore
-from services.category_migration import migrate_categories_to_user_subcollections
+from services.category_migration import clone_user_categories, migrate_categories_to_user_subcollections
 
 
 class _FakeSnapshot:
@@ -299,6 +299,41 @@ class CategoryPartitioningTests(unittest.TestCase):
             self.assertEqual(firestore.get_category_list(456)[0]["emoji"], "🥗")
             self.assertIn(("users/123/category_map", "coffee"), store)
             self.assertIn(("users/456/category_map", "coffee"), store)
+
+    def test_clone_user_categories_to_empty_target(self):
+        store = {
+            ("users/123/category_list", "Food%20%26%20Drink"): {
+                "name": "Food & Drink",
+                "emoji": "🍔",
+                "order": 1,
+            },
+            ("users/123/category_map", "coffee"): {
+                "item_key": "coffee",
+                "category": "Food & Drink",
+                "confirmed_by_user": True,
+                "created_at": "2026-05-01T00:00:00+08:00",
+            },
+        }
+
+        summary = clone_user_categories(123, 456, db=_FakeDb(store))
+
+        self.assertEqual(summary.cloned_category_list, 1)
+        self.assertEqual(summary.cloned_category_map, 1)
+        self.assertEqual(store[("users/456/category_list", "Food%20%26%20Drink")]["emoji"], "🍔")
+        self.assertEqual(store[("users/456/category_map", "coffee")]["category"], "Food & Drink")
+
+    def test_clone_user_categories_refuses_existing_target(self):
+        store = {
+            ("users/123/category_list", "Food%20%26%20Drink"): {
+                "name": "Food & Drink",
+                "emoji": "🍔",
+                "order": 1,
+            },
+            ("users/456/category_list", "Existing"): {"name": "Existing", "emoji": "📦", "order": 1},
+        }
+
+        with self.assertRaisesRegex(ValueError, "already has category data"):
+            clone_user_categories(123, 456, db=_FakeDb(store))
 
     def test_rename_delete_and_reassign_are_scoped_to_chat_id(self):
         store = {}

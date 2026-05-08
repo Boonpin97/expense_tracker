@@ -51,7 +51,9 @@
       "Bash(Remove-Item -Force \".flutter-plugins-dependencies\" -ErrorAction SilentlyContinue)",
       "Bash(echo \"EXIT: $?\")",
       "Bash(git mv *)",
-      "Bash(Get-ChildItem C:UserspohboFlutterexpense_tracker *)"
+      "Bash(Get-ChildItem C:UserspohboFlutterexpense_tracker *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\pohbo\\\\Flutter\\\\expense_tracker\" -Force)",
+      "Bash(Select-Object Name, Mode)"
     ]
   }
 }

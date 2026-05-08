@@ -23,6 +23,12 @@ class CategoryMigrationSummary:
     source_shape: str = "none"
 
 
+@dataclass
+class CategoryCloneSummary:
+    cloned_category_list: int = 0
+    cloned_category_map: int = 0
+
+
 def _is_legacy_doc(snapshot) -> bool:
     data = snapshot.to_dict() or {}
     return "chat_id" not in data or data.get("chat_id") in (None, "")
@@ -128,6 +134,60 @@ def migrate_categories_to_user_subcollections(
                 ops_in_batch += 1
             summary.deleted_source_category_map += 1
 
+        if not dry_run and ops_in_batch >= 400:
+            batch = _commit_batch(db, batch)
+            ops_in_batch = 0
+
+    if not dry_run and ops_in_batch > 0:
+        batch.commit()
+
+    return summary
+
+
+def clone_user_categories(
+    source_chat_id: int,
+    target_chat_id: int,
+    *,
+    db: Optional[firestore.Client] = None,
+    dry_run: bool = False,
+) -> CategoryCloneSummary:
+    db = db or get_db()
+    if source_chat_id == target_chat_id:
+        raise ValueError("Source and target chat_id must be different.")
+
+    _assert_target_is_clear(db, target_chat_id)
+
+    source_category_list = list(db.collection(_category_list_path(source_chat_id)).stream())
+    source_category_map = list(db.collection(_category_map_path(source_chat_id)).stream())
+
+    summary = CategoryCloneSummary()
+    batch = None if dry_run else db.batch()
+    ops_in_batch = 0
+    target_category_list = db.collection(_category_list_path(target_chat_id))
+    target_category_map = db.collection(_category_map_path(target_chat_id))
+
+    for doc in source_category_list:
+        data = doc.to_dict() or {}
+        name = str(data.get("name") or doc.id).strip()
+        if not name:
+            continue
+        if not dry_run:
+            batch.set(target_category_list.document(_category_doc_id(name)), dict(data))
+            ops_in_batch += 1
+        summary.cloned_category_list += 1
+        if not dry_run and ops_in_batch >= 400:
+            batch = _commit_batch(db, batch)
+            ops_in_batch = 0
+
+    for doc in source_category_map:
+        data = doc.to_dict() or {}
+        item_key = str(data.get("item_key") or doc.id).strip()
+        if not item_key:
+            continue
+        if not dry_run:
+            batch.set(target_category_map.document(_item_map_doc_id(item_key)), dict(data))
+            ops_in_batch += 1
+        summary.cloned_category_map += 1
         if not dry_run and ops_in_batch >= 400:
             batch = _commit_batch(db, batch)
             ops_in_batch = 0
