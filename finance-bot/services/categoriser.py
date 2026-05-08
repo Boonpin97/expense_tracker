@@ -68,7 +68,7 @@ async def handle_expense(
     transaction_date: Optional[str] = None,
 ) -> None:
     item_key = _normalise(item)
-    category = firestore.get_category(item_key)
+    category = firestore.get_category(chat_id, item_key)
     timestamp = build_transaction_timestamp(transaction_date)
     date_was_explicit = transaction_date is not None
 
@@ -146,7 +146,7 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
         tx_id = pending_change["tx_id"]
         item_key = pending_change["item_key"]
         firestore.update_transaction_category(tx_id, category)
-        firestore.save_category(item_key, category, confirmed_by_user=True)
+        firestore.save_category(chat_id, item_key, category, confirmed_by_user=True)
         firestore.delete_pending_change(chat_id)
         await telegram.answer_callback_query(callback_query_id, f"Changed to {category}")
         await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to <b>{category}</b>")
@@ -181,7 +181,7 @@ async def handle_category_selection(chat_id: int, category: str, callback_query_
         chat_id=chat_id,
     )
     tx_id = firestore.save_transaction(tx)
-    firestore.save_category(item_key, category, confirmed_by_user=True)
+    firestore.save_category(chat_id, item_key, category, confirmed_by_user=True)
     firestore.delete_pending(chat_id)
 
     await telegram.answer_callback_query(callback_query_id, f"Saved as {category}")
@@ -227,8 +227,8 @@ async def handle_custom_category_input(chat_id: int, category_name: str, emoji: 
         chat_id=chat_id,
     )
     tx_id = firestore.save_transaction(tx)
-    firestore.save_category(item_key, category, confirmed_by_user=True)
-    firestore.add_category_to_list(category, emoji)
+    firestore.save_category(chat_id, item_key, category, confirmed_by_user=True)
+    firestore.add_category_to_list(chat_id, category, emoji)
     firestore.delete_pending(chat_id)
 
     await telegram.send_transaction_confirmation(

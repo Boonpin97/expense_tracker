@@ -49,7 +49,7 @@ def _get_period_window(period: str) -> tuple[datetime, datetime, str]:
     return start, end, label
 
 
-def _format_report(label: str, transactions: list[dict]) -> str:
+def _format_report(chat_id: int, label: str, transactions: list[dict]) -> str:
     if not transactions:
         return f"📊 {label}\n─────────────────────────\nNo expenses recorded.\n─────────────────────────"
 
@@ -60,7 +60,7 @@ def _format_report(label: str, transactions: list[dict]) -> str:
     grand_total = sum(by_category.values())
     lines = [f"📊 {label}", "─────────────────────────"]
 
-    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
 
     for cat, total in sorted(by_category.items(), key=lambda x: -x[1]):
         emoji = category_emoji.get(cat, "📦")
@@ -73,11 +73,11 @@ def _format_report(label: str, transactions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _format_daily_report(label: str, transactions: list[dict]) -> str:
+def _format_daily_report(chat_id: int, label: str, transactions: list[dict]) -> str:
     if not transactions:
         return f"📊 {label}\n─────────────────────────\nNo expenses recorded.\n─────────────────────────"
 
-    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
 
     sorted_txs = sorted(transactions, key=lambda t: t.get("timestamp", ""))
 
@@ -117,7 +117,7 @@ async def trigger_report(
     for chat_id in chat_ids:
         transactions = get_transactions(chat_id, start, end)
         formatter = _format_daily_report if period == "daily" else _format_report
-        report = formatter(label, transactions)
+        report = formatter(chat_id, label, transactions)
         await send_message(chat_id, f"<pre>{report}</pre>")
         total_tx += len(transactions)
 
@@ -142,7 +142,7 @@ def _format_budget_report(chat_id: int) -> str:
     for tx in transactions:
         by_category[tx["category"]] += tx["amount"]
 
-    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
 
     lines = [
         f"📋 Budget Report ({now.strftime('%d/%m/%y')})",
