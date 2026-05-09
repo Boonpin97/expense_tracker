@@ -1003,9 +1003,11 @@ function TrendCard({
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
   const [selected, setSelected] = useState<string[]>([]);
+  const [isAllMode, setIsAllMode] = useState(true);
 
   useEffect(() => {
     setSelected(categories.map((category) => category.name));
+    setIsAllMode(true);
   }, [categories]);
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
@@ -1021,6 +1023,16 @@ function TrendCard({
         ? prev.filter((value) => value !== categoryName)
         : [...prev, categoryName],
     );
+  };
+
+  const toggleAll = (all: boolean) => {
+    if (all) {
+      setSelected(categories.map((c) => c.name));
+      setIsAllMode(true);
+    } else {
+      setSelected([]);
+      setIsAllMode(false);
+    }
   };
 
   return (
@@ -1039,6 +1051,8 @@ function TrendCard({
             selected={selected}
             catColorMap={catColorMap}
             onToggle={toggleCategory}
+            isAllMode={isAllMode}
+            onToggleAll={toggleAll}
           />
         </div>
       </CardHeader>
@@ -1105,6 +1119,7 @@ function TransactionsTab({
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [isCategoryAllMode, setIsCategoryAllMode] = useState(true);
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
   const [sortKey, setSortKey] = useState<TransactionSortKey>("date-desc");
@@ -1120,6 +1135,7 @@ function TransactionsTab({
 
   useEffect(() => {
     setSelectedCategories(categories.map((category) => category.name));
+    setIsCategoryAllMode(true);
   }, [categories]);
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
@@ -1174,6 +1190,16 @@ function TransactionsTab({
         ? prev.filter((value) => value !== categoryName)
         : [...prev, categoryName],
     );
+  };
+
+  const toggleAllCategories = (all: boolean) => {
+    if (all) {
+      setSelectedCategories(categories.map((c) => c.name));
+      setIsCategoryAllMode(true);
+    } else {
+      setSelectedCategories([]);
+      setIsCategoryAllMode(false);
+    }
   };
 
   function openEditDialog(transaction: DashboardTransaction) {
@@ -1296,6 +1322,8 @@ function TransactionsTab({
                 selected={selectedCategories}
                 catColorMap={catColorMap}
                 onToggle={toggleCategory}
+                isAllMode={isCategoryAllMode}
+                onToggleAll={toggleAllCategories}
               />
               <Select
                 value={sortKey}
@@ -1590,27 +1618,43 @@ function CategoryFilterPopover({
   selected,
   catColorMap,
   onToggle,
+  isAllMode,
+  onToggleAll,
 }: {
   categories: DashboardCategory[];
   selected: string[];
   catColorMap: Record<string, string>;
   onToggle: (categoryName: string) => void;
+  isAllMode: boolean;
+  onToggleAll: (all: boolean) => void;
 }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="h-9">
           <Filter className="mr-2 h-4 w-4" />
-          Categories ({selected.length}/{categories.length})
+          Categories ({isAllMode ? categories.length : selected.length}/{categories.length})
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-56" align="end">
         <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm cursor-pointer font-medium">
+            <Checkbox
+              checked={isAllMode}
+              onCheckedChange={(checked) => onToggleAll(!!checked)}
+            />
+            All
+          </label>
+          <hr className="border-border" />
           {categories.map((category) => (
-            <label key={category.name} className="flex items-center gap-2 text-sm cursor-pointer">
+            <label
+              key={category.name}
+              className={`flex items-center gap-2 text-sm ${isAllMode ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+            >
               <Checkbox
-                checked={selected.includes(category.name)}
-                onCheckedChange={() => onToggle(category.name)}
+                checked={isAllMode || selected.includes(category.name)}
+                onCheckedChange={() => !isAllMode && onToggle(category.name)}
+                disabled={isAllMode}
               />
               <span
                 className="h-2.5 w-2.5 rounded-sm shrink-0"
