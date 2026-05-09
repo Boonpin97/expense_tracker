@@ -474,6 +474,7 @@ function DashboardLayout({
     "month",
     "budget",
   ]);
+  const [txnJump, setTxnJump] = useState<{ category: string; version: number } | null>(null);
   const [editingBudgetCategory, setEditingBudgetCategory] = useState<string | null>(null);
   const [editingBudgetAmount, setEditingBudgetAmount] = useState("");
   const [savingBudget, setSavingBudget] = useState(false);
@@ -848,9 +849,16 @@ function DashboardLayout({
                       <div key={category.name} className="space-y-2">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2 min-w-0">
-                            <div className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
+                            <button
+                              className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none hover:bg-secondary/80 transition-colors cursor-pointer"
+                              aria-label={`View ${category.name} transactions`}
+                              onClick={() => {
+                                setTxnJump({ category: category.name, version: Date.now() });
+                                setActiveTab("transactions");
+                              }}
+                            >
                               {category.emoji}
-                            </div>
+                            </button>
                             <p className="font-medium text-sm">{category.name}</p>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
@@ -907,6 +915,7 @@ function DashboardLayout({
               loading={loading}
               onDeleteTransaction={onDeleteTransaction}
               onUpdateTransaction={onUpdateTransaction}
+              jump={txnJump}
             />
           </TabsContent>
         </Tabs>
@@ -1240,6 +1249,7 @@ function TransactionsTab({
   loading,
   onDeleteTransaction,
   onUpdateTransaction,
+  jump,
 }: {
   transactions: DashboardTransaction[];
   categories: DashboardCategory[];
@@ -1255,6 +1265,7 @@ function TransactionsTab({
       timestamp: Date;
     },
   ) => Promise<void>;
+  jump?: { category: string; version: number } | null;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
@@ -1277,6 +1288,14 @@ function TransactionsTab({
     setSelectedCategories(categories.map((category) => category.name));
     setIsCategoryAllMode(true);
   }, [categories]);
+
+  useEffect(() => {
+    if (!jump) return;
+    setRangeKey("current-month");
+    setCustom(undefined);
+    setSelectedCategories([jump.category]);
+    setIsCategoryAllMode(false);
+  }, [jump]);
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
   const minValue = minAmount.trim() === "" ? null : Number(minAmount);
