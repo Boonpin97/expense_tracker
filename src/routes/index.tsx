@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -73,6 +73,7 @@ import {
 } from "recharts";
 import {
   DashboardApiError,
+  deleteDashboardBudget,
   deleteDashboardTransaction,
   fetchDashboardBudgets,
   fetchDashboardCategories,
@@ -80,6 +81,7 @@ import {
   fetchDashboardTransactions,
   loginToDashboard,
   logoutFromDashboard,
+  updateDashboardBudget,
   updateDashboardTransaction,
   type DashboardCategory,
   type DashboardSession,
@@ -109,7 +111,7 @@ const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
 const TRANSACTIONS_PAGE_SIZE = 25;
 
 type DashboardTab = "overview" | "charts" | "budget" | "transactions";
-type RangeKey = "current-month" | "30d" | "90d" | "ytd" | "custom";
+type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
 type TransactionSortKey =
   | "date-desc"
   | "date-asc"
@@ -137,14 +139,21 @@ function formatDateTimeInputValue(value: Date) {
 function getRange(key: RangeKey, custom?: DateRange): { from: Date; to: Date } {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  if (key === "today") {
+    return { from: startOfDay(today), to: endOfDay(today) };
+  }
+  if (key === "yesterday") {
+    const yesterday = subDays(today, 1);
+    return { from: startOfDay(yesterday), to: endOfDay(yesterday) };
+  }
+  if (key === "weekly") {
+    return { from: startOfDay(subDays(today, 6)), to: endOfDay(today) };
+  }
   if (key === "current-month") {
     return { from: startOfMonth(today), to: endOfDay(today) };
   }
   if (key === "30d") {
     return { from: startOfDay(subDays(today, 29)), to: endOfDay(today) };
-  }
-  if (key === "90d") {
-    return { from: startOfDay(subDays(today, 89)), to: endOfDay(today) };
   }
   if (key === "ytd") {
     return { from: startOfYear(today), to: endOfDay(today) };
@@ -402,6 +411,15 @@ function DashboardShell({
     setTransactions((current) => current.filter((transaction) => transaction.id !== transactionId));
   }
 
+  const refreshBudgets = useCallback(async () => {
+    try {
+      const buds = await fetchDashboardBudgets();
+      setBudgets(buds);
+    } catch {
+      // silent — stale data remains visible
+    }
+  }, []);
+
   return (
     <DashboardLayout
       session={session}
@@ -413,6 +431,7 @@ function DashboardShell({
       onDeleteTransaction={handleDeleteTransaction}
       onLogout={() => void handleLogout()}
       onUpdateTransaction={handleUpdateTransaction}
+      onRefreshBudgets={refreshBudgets}
     />
   );
 }
@@ -427,6 +446,7 @@ function DashboardLayout({
   onDeleteTransaction,
   onLogout,
   onUpdateTransaction,
+  onRefreshBudgets,
 }: {
   session: DashboardSession;
   loading: boolean;
@@ -445,6 +465,7 @@ function DashboardLayout({
       timestamp: Date;
     },
   ) => Promise<void>;
+  onRefreshBudgets: () => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [visibleOverviewCards, setVisibleOverviewCards] = useState([
@@ -453,6 +474,11 @@ function DashboardLayout({
     "month",
     "budget",
   ]);
+  const [editingBudgetCategory, setEditingBudgetCategory] = useState<string | null>(null);
+  const [editingBudgetAmount, setEditingBudgetAmount] = useState("");
+  const [savingBudget, setSavingBudget] = useState(false);
+  const [deletingBudgetCategory, setDeletingBudgetCategory] = useState<string | null>(null);
+  const [budgetActionError, setBudgetActionError] = useState<string | null>(null);
 
   const catColorMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -540,6 +566,43 @@ function DashboardLayout({
       return { day: format(day, "EEE"), amount: Number(amount.toFixed(2)) };
     });
   }, [transactions]);
+
+  function openEditBudget(categoryName: string, currentAmount: number) {
+    setBudgetActionError(null);
+    setEditingBudgetCategory(categoryName);
+    setEditingBudgetAmount(currentAmount > 0 ? String(currentAmount) : "");
+  }
+
+  async function handleSaveBudgetEdit() {
+    if (!editingBudgetCategory) return;
+    const parsed = parseFloat(editingBudgetAmount);
+    if (isNaN(parsed) || parsed <= 0) {
+      setBudgetActionError("Enter a valid amount greater than 0.");
+      return;
+    }
+    setSavingBudget(true);
+    setBudgetActionError(null);
+    try {
+      await updateDashboardBudget(editingBudgetCategory, parsed);
+      await onRefreshBudgets();
+      setEditingBudgetCategory(null);
+    } catch (err) {
+      setBudgetActionError(err instanceof DashboardApiError ? err.message : "Failed to update budget.");
+    } finally {
+      setSavingBudget(false);
+    }
+  }
+
+  async function handleDeleteBudgetClick(categoryName: string) {
+    if (!window.confirm(`Remove budget for "${categoryName}"?`)) return;
+    setDeletingBudgetCategory(categoryName);
+    try {
+      await deleteDashboardBudget(categoryName);
+      await onRefreshBudgets();
+    } finally {
+      setDeletingBudgetCategory(null);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-secondary/40">
@@ -790,14 +853,39 @@ function DashboardLayout({
                             </div>
                             <p className="font-medium text-sm">{category.name}</p>
                           </div>
-                          <p
-                            className={`text-sm font-semibold shrink-0 ${over ? "text-destructive" : "text-foreground"}`}
-                          >
-                            {currency.format(spent)}{" "}
-                            <span className="text-muted-foreground font-normal">
-                              {budget > 0 ? `/ ${currency.format(budget)}` : ""}
-                            </span>
-                          </p>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <p
+                              className={`text-sm font-semibold ${over ? "text-destructive" : "text-foreground"}`}
+                            >
+                              {currency.format(spent)}{" "}
+                              <span className="text-muted-foreground font-normal">
+                                {budget > 0 ? `/ ${currency.format(budget)}` : ""}
+                              </span>
+                            </p>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              aria-label={`Edit budget for ${category.name}`}
+                              onClick={() => openEditBudget(category.name, budget)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-destructive hover:text-destructive"
+                              aria-label={`Delete budget for ${category.name}`}
+                              disabled={deletingBudgetCategory === category.name}
+                              onClick={() => void handleDeleteBudgetClick(category.name)}
+                            >
+                              {deletingBudgetCategory === category.name ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          </div>
                         </div>
                         <Progress
                           value={pct}
@@ -822,6 +910,58 @@ function DashboardLayout({
             />
           </TabsContent>
         </Tabs>
+
+        <Dialog
+          open={editingBudgetCategory !== null}
+          onOpenChange={(open) => {
+            if (!open && !savingBudget) setEditingBudgetCategory(null);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>
+                Edit Budget
+                {editingBudgetCategory
+                  ? ` — ${categories.find((c) => c.name === editingBudgetCategory)?.emoji ?? ""} ${editingBudgetCategory}`
+                  : ""}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
+              {budgetActionError && <p className="text-sm text-destructive">{budgetActionError}</p>}
+              <div className="space-y-2">
+                <Label>Budget Amount</Label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  min="0.01"
+                  step="0.01"
+                  value={editingBudgetAmount}
+                  onChange={(e) => setEditingBudgetAmount(e.target.value)}
+                  disabled={savingBudget}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setEditingBudgetCategory(null)}
+                disabled={savingBudget}
+              >
+                Cancel
+              </Button>
+              <Button onClick={() => void handleSaveBudgetEdit()} disabled={savingBudget}>
+                {savingBudget ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );
@@ -1571,11 +1711,13 @@ function RangeSelector({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
+          <SelectItem value="today">Today</SelectItem>
+          <SelectItem value="yesterday">Yesterday</SelectItem>
+          <SelectItem value="weekly">Weekly</SelectItem>
           <SelectItem value="current-month">Current Month</SelectItem>
           <SelectItem value="30d">Last 30 Days</SelectItem>
-          <SelectItem value="90d">Last 90 Days</SelectItem>
           <SelectItem value="ytd">Year to Date</SelectItem>
-          <SelectItem value="custom">Custom Range</SelectItem>
+          <SelectItem value="custom">Current Range</SelectItem>
         </SelectContent>
       </Select>
 

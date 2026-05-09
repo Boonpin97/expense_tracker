@@ -21,10 +21,12 @@ from services.firestore import (
     get_transaction_by_id,
     get_transactions_with_ids,
     get_web_session,
+    remove_budget,
     rename_category,
     reassign_transactions_category,
     remove_category_from_list,
     save_web_session,
+    set_budget,
     update_category_emoji,
     update_category_order,
 )
@@ -67,6 +69,10 @@ class CategoryUpdateRequest(BaseModel):
 
 class CategoryMoveRequest(BaseModel):
     direction: int
+
+
+class BudgetSetRequest(BaseModel):
+    amount: float
 
 
 def _dashboard_url() -> str:
@@ -350,4 +356,18 @@ async def move_dashboard_category(
 async def list_dashboard_budgets(request: Request):
     session = _require_session(request)
     return {"budgets": get_budgets(session["chat_id"])}
+
+
+@router.patch("/budgets/{category_name}")
+async def update_dashboard_budget(category_name: str, body: BudgetSetRequest, request: Request):
+    session = _require_session(request)
+    set_budget(session["chat_id"], category_name, body.amount)
+    return {"ok": True}
+
+
+@router.delete("/budgets/{category_name}")
+async def delete_dashboard_budget(category_name: str, request: Request):
+    session = _require_session(request)
+    remove_budget(session["chat_id"], category_name)
+    return {"ok": True}
 

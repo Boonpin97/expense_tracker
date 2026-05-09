@@ -250,3 +250,13 @@ export async function fetchDashboardBudgets() {
   }
   return budgets;
 }
+
+export async function updateDashboardBudget(categoryName: string, amount: number): Promise<void> {
+  await requestJson("PATCH", `/dashboard/budgets/${encodeURIComponent(categoryName)}`, {
+    body: { amount },
+  });
+}
+
+export async function deleteDashboardBudget(categoryName: string): Promise<void> {
+  await requestJson("DELETE", `/dashboard/budgets/${encodeURIComponent(categoryName)}`);
+}
