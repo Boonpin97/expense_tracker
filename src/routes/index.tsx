@@ -796,63 +796,12 @@ function DashboardLayout({
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">By Category</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-72 w-full">
-                    {loading || pieData.length === 0 ? (
-                      <CenteredChartMessage
-                        label={loading ? "Loading..." : "No data for this month."}
-                      />
-                    ) : (
-                      <ResponsiveContainer>
-                        <PieChart>
-                          <Pie
-                            data={pieData}
-                            dataKey="value"
-                            nameKey="name"
-                            innerRadius={50}
-                            outerRadius={85}
-                            paddingAngle={2}
-                            label={({ value }) => currency.format(Number(value ?? 0))}
-                            labelLine={false}
-                          >
-                            {pieData.map((entry) => (
-                              <Cell key={entry.name} fill={entry.color} />
-                            ))}
-                          </Pie>
-                          <Tooltip
-                            contentStyle={{
-                              borderRadius: 8,
-                              border: "1px solid oklch(0.92 0.01 256)",
-                            }}
-                            formatter={(value: number) => currency.format(value)}
-                          />
-                          <Legend
-                            layout="vertical"
-                            align="right"
-                            verticalAlign="middle"
-                            wrapperStyle={{ fontSize: 12 }}
-                            formatter={(value, entry: { payload?: { value?: number } }) => (
-                              <span className="text-foreground">
-                                {value}{" "}
-                                <span className="text-muted-foreground">
-                                  {Math.round(
-                                    ((entry?.payload?.value ?? 0) / Math.max(monthTotal, 1)) * 100,
-                                  )}
-                                  %
-                                </span>
-                              </span>
-                            )}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+              <CategoryPieCard
+                transactions={transactions}
+                categories={categories}
+                catColorMap={catColorMap}
+                loading={loading}
+              />
             </div>
           </TabsContent>
 
@@ -1197,6 +1146,101 @@ function OverviewInfoPopover({
   );
 }
 
+function CategoryPieCard({
+  transactions,
+  categories,
+  catColorMap,
+  loading,
+}: {
+  transactions: DashboardTransaction[];
+  categories: DashboardCategory[];
+  catColorMap: Record<string, string>;
+  loading: boolean;
+}) {
+  const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
+  const [custom, setCustom] = useState<DateRange | undefined>();
+
+  const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
+
+  const pieData = useMemo(() => {
+    const summaries: Record<string, number> = {};
+    transactions
+      .filter((tx) => tx.timestamp >= from && tx.timestamp <= to)
+      .forEach((tx) => {
+        summaries[tx.category] = (summaries[tx.category] ?? 0) + tx.amount;
+      });
+    return categories
+      .map((cat) => ({
+        name: `${cat.emoji} ${cat.name}`,
+        value: Number((summaries[cat.name] ?? 0).toFixed(2)),
+        color: catColorMap[cat.name],
+      }))
+      .filter((entry) => entry.value > 0);
+  }, [transactions, categories, catColorMap, from, to]);
+
+  const total = pieData.reduce((sum, entry) => sum + entry.value, 0);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 space-y-0">
+        <CardTitle className="text-lg">By Category</CardTitle>
+        <RangeSelector
+          rangeKey={rangeKey}
+          custom={custom}
+          onRangeKeyChange={setRangeKey}
+          onCustomChange={setCustom}
+        />
+      </CardHeader>
+      <CardContent>
+        <div className="h-72 w-full">
+          {loading ? (
+            <CenteredChartMessage label="Loading..." />
+          ) : pieData.length === 0 ? (
+            <CenteredChartMessage label="No data for this period." />
+          ) : (
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={50}
+                  outerRadius={85}
+                  paddingAngle={2}
+                  label={({ value }) => currency.format(Number(value ?? 0))}
+                  labelLine={false}
+                >
+                  {pieData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{ borderRadius: 8, border: "1px solid oklch(0.92 0.01 256)" }}
+                  formatter={(value: number) => currency.format(value)}
+                />
+                <Legend
+                  layout="vertical"
+                  align="right"
+                  verticalAlign="middle"
+                  wrapperStyle={{ fontSize: 12 }}
+                  formatter={(value, entry: { payload?: { value?: number } }) => (
+                    <span className="text-foreground">
+                      {value}{" "}
+                      <span className="text-muted-foreground">
+                        {Math.round(((entry?.payload?.value ?? 0) / Math.max(total, 1)) * 100)}%
+                      </span>
+                    </span>
+                  )}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function TrendCard({
   transactions,
   categories,
@@ -1504,7 +1548,17 @@ function TransactionsTab({
       <Card>
         <CardHeader className="space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <CardTitle className="text-lg">All Transactions</CardTitle>
+            <div>
+              <CardTitle className="text-lg">All Transactions</CardTitle>
+              {!loading && (
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  {filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? "s" : ""} &middot;{" "}
+                  <span className="font-semibold text-foreground">
+                    {currency.format(filteredTransactions.reduce((sum, tx) => sum + tx.amount, 0))}
+                  </span>
+                </p>
+              )}
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5">
                 <span className="text-sm text-muted-foreground">Min</span>
