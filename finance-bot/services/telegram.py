@@ -342,6 +342,24 @@ async def send_plan_delete_mode_keyboard(chat_id: int, plan_id: str, prompt: str
         return resp.json()
 
 
+async def send_split_plan_delete_confirm_keyboard(chat_id: int, plan_id: str, prompt: str) -> dict:
+    ts = datetime.now(SGT).isoformat()
+    keyboard = [[
+        {"text": "Stop + remove past charges", "callback_data": f"plandelmode:all:{plan_id}|{ts}"},
+    ]]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def send_plan_rewrite_keyboard(chat_id: int, prompt: str | None = None) -> dict:
     keyboard = [[
         {"text": "Future only", "callback_data": "planrewrite:future"},

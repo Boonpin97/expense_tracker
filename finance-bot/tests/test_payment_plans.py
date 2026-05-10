@@ -79,7 +79,7 @@ if "httpx" not in sys.modules:
     sys.modules["httpx"] = httpx_stub
 
 from services.payment_plans import clamp_day, compute_split_amounts, compute_next_due_date
-from services.plan_manager import process_due_plans
+from services.plan_manager import process_due_plans, rewrite_plan_history
 from services import telegram
 
 SGT = timezone(timedelta(hours=8))
@@ -146,6 +146,17 @@ class PaymentPlanHelperTests(unittest.TestCase):
             callback_data = captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
             self.assertRegex(callback_data, r"^editrecurring:plan-1\|")
 
+            asyncio.run(
+                telegram.send_plan_keyboard(
+                    123,
+                    [{"id": "plan-2", "plan_type": "split_payment", "item": "Sofa"}],
+                    "editsplit",
+                    "Select a plan:",
+                )
+            )
+            split_callback = captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+            self.assertRegex(split_callback, r"^editsplit:plan-2\|")
+
             asyncio.run(telegram.send_plan_delete_mode_keyboard(123, "plan-1", "Delete?"))
             delete_buttons = captured["reply_markup"]["inline_keyboard"][0]
             self.assertRegex(delete_buttons[0]["callback_data"], r"^plandelmode:future:plan-1\|")
@@ -180,6 +191,58 @@ class ProcessDuePlansTests(unittest.IsolatedAsyncioTestCase):
              patch("services.plan_manager._check_budget_exceeded", new=AsyncMock()):
             processed = await process_due_plans(due_at)
         self.assertEqual(processed, 1)
+
+    async def test_rewrite_split_plan_after_shortening_months_amends_past(self):
+        # User edits a $90/3-month split to $90/2-month with rewrite.
+        # Past $30 charge becomes $45; subsequent due date is now the final installment.
+        edited_plan = {
+            "id": "plan-1",
+            "chat_id": 123,
+            "plan_type": "split_payment",
+            "item": "Sofa",
+            "category": "Home",
+            "day_of_month": 15,
+            "status": "active",
+            "start_year": 2026,
+            "start_month": 5,
+            "next_due_date": datetime(2026, 6, 15, tzinfo=SGT).isoformat(),
+            "created_at": datetime(2026, 5, 15, tzinfo=SGT).isoformat(),
+            "total_amount": 90.0,
+            "installment_count": 2,
+            "current_installment_number": 1,
+            "base_installment_amount": 45.0,
+            "final_installment_amount": 45.0,
+        }
+        saved_transactions = []
+        update_kwargs = {}
+
+        def capture_save_tx(tx):
+            saved_transactions.append(tx)
+
+        def capture_update(_plan_id, **kwargs):
+            update_kwargs.update(kwargs)
+
+        class FakeDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 5, 20, 12, 0, 0, tzinfo=tz or SGT)
+
+        with patch("services.plan_manager.firestore.get_payment_plan", return_value=edited_plan), \
+             patch("services.plan_manager.firestore.delete_transactions_for_plan", return_value=1), \
+             patch("services.plan_manager.firestore.save_transaction", side_effect=capture_save_tx), \
+             patch("services.plan_manager.firestore.update_payment_plan", side_effect=capture_update), \
+             patch("services.plan_manager.datetime", FakeDateTime):
+            rewritten = await rewrite_plan_history("plan-1")
+
+        self.assertEqual(rewritten, 1)
+        self.assertEqual(len(saved_transactions), 1)
+        self.assertAlmostEqual(saved_transactions[0].amount, 45.0)
+        self.assertEqual(saved_transactions[0].occurrence_key, "2026-05")
+        self.assertEqual(update_kwargs["current_installment_number"], 1)
+        # Next due date should be the second (final) installment in June 2026.
+        next_due = datetime.fromisoformat(update_kwargs["next_due_date"])
+        self.assertEqual((next_due.year, next_due.month, next_due.day), (2026, 6, 15))
+        self.assertEqual(update_kwargs["status"], "active")
 
     async def test_process_due_plans_skips_duplicate_occurrence(self):
         due_at = datetime(2026, 6, 30, 0, 0, 0, tzinfo=SGT)

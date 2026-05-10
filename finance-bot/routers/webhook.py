@@ -507,6 +507,10 @@ async def _start_plan_delete(chat_id: int, plan_type: str) -> None:
 
 
 def _plan_delete_prompt(plan: dict) -> str:
+    if plan["plan_type"] == "split_payment":
+        return (
+            f"Stop this split payment and remove all its auto-generated charges?\n\n{plan_display_line(plan)}"
+        )
     return (
         f"What do you want to do with this plan?\n\n{plan_display_line(plan)}\n\n"
         "- <b>Stop future only</b>: keep past charges on record.\n"
@@ -1022,9 +1026,10 @@ async def webhook(request: Request):
                 prompt = f"Send the new order number for <b>{category_name}</b> (1 = first item, {max_order} = last item)"
             await telegram.send_message(chat_id, prompt)
 
-        elif callback_data.startswith("editrecurring:"):
+        elif callback_data.startswith("editrecurring:") or callback_data.startswith("editsplit:"):
             plan_id, ts = _split_expiring_callback(callback_data.split(":", 1)[1])
-            if await _reject_expired_callback(chat_id, callback_query_id, ts, "⏰ These plan edit options have expired. Please send /edit_recurring again."):
+            command = "/edit_recurring" if callback_data.startswith("editrecurring:") else "/edit_split_payment"
+            if await _reject_expired_callback(chat_id, callback_query_id, ts, f"⏰ These plan edit options have expired. Please send {command} again."):
                 return {"ok": True}
             plan = get_payment_plan(plan_id)
             if not plan:
@@ -1045,7 +1050,10 @@ async def webhook(request: Request):
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 return {"ok": True}
             await telegram.answer_callback_query(callback_query_id, "")
-            await telegram.send_plan_delete_mode_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
+            if plan["plan_type"] == "split_payment":
+                await telegram.send_split_plan_delete_confirm_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
+            else:
+                await telegram.send_plan_delete_mode_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
 
         elif callback_data.startswith("plandelmode:"):
             _, mode, plan_id_raw = callback_data.split(":", 2)
@@ -1264,6 +1272,8 @@ async def webhook(request: Request):
             await send_plan_list(chat_id, "split_payment")
         elif text == "/edit_recurring":
             await _start_plan_edit(chat_id, "recurring")
+        elif text == "/edit_split_payment":
+            await _start_plan_edit(chat_id, "split_payment")
         elif text == "/delete_recurring":
             await _start_plan_delete(chat_id, "recurring")
         elif text == "/delete_split_payment":
