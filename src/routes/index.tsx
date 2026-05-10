@@ -18,6 +18,7 @@ import {
   Filter,
   ListFilter,
   Pencil,
+  Repeat2,
   Trash2,
 } from "lucide-react";
 import {
@@ -74,16 +75,20 @@ import {
 import {
   DashboardApiError,
   deleteDashboardBudget,
+  deleteDashboardPlan,
   deleteDashboardTransaction,
   fetchDashboardBudgets,
   fetchDashboardCategories,
+  fetchDashboardPlans,
   fetchDashboardSession,
   fetchDashboardTransactions,
   loginToDashboard,
   logoutFromDashboard,
   updateDashboardBudget,
+  updateDashboardPlan,
   updateDashboardTransaction,
   type DashboardCategory,
+  type DashboardPlan,
   type DashboardSession,
   type DashboardTransaction,
 } from "@/lib/dashboard-api";
@@ -110,7 +115,7 @@ const currency = new Intl.NumberFormat("en-US", {
 const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
 const TRANSACTIONS_PAGE_SIZE = 25;
 
-type DashboardTab = "overview" | "charts" | "budget" | "transactions";
+type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "plans";
 type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
 type TransactionSortKey =
   | "date-desc"
@@ -348,6 +353,7 @@ function DashboardShell({
   const [categories, setCategories] = useState<DashboardCategory[]>([]);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
+  const [plans, setPlans] = useState<DashboardPlan[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -359,12 +365,14 @@ function DashboardShell({
       fetchDashboardCategories(),
       fetchDashboardBudgets(),
       fetchDashboardTransactions({ start: HISTORY_START, end: endOfDay(now) }),
+      fetchDashboardPlans(),
     ])
-      .then(([cats, buds, txns]) => {
+      .then(([cats, buds, txns, pls]) => {
         if (!active) return;
         setCategories(cats);
         setBudgets(buds);
         setTransactions(txns);
+        setPlans(pls);
         setLoading(false);
       })
       .catch((caught) => {
@@ -420,6 +428,34 @@ function DashboardShell({
     }
   }, []);
 
+  async function handleUpdatePlan(
+    planId: string,
+    payload: { item?: string; category?: string; dayOfMonth?: number; amount?: number },
+  ) {
+    await updateDashboardPlan(planId, payload);
+    setPlans((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan;
+        return {
+          ...plan,
+          ...(payload.item !== undefined ? { item: payload.item } : {}),
+          ...(payload.category !== undefined ? { category: payload.category } : {}),
+          ...(payload.dayOfMonth !== undefined ? { dayOfMonth: payload.dayOfMonth } : {}),
+          ...(payload.amount !== undefined ? { amount: payload.amount } : {}),
+        };
+      }),
+    );
+  }
+
+  async function handleDeletePlan(planId: string, mode: "future" | "all") {
+    await deleteDashboardPlan(planId, mode);
+    setPlans((current) =>
+      current.map((plan) =>
+        plan.id === planId ? { ...plan, status: "cancelled" as const } : plan,
+      ),
+    );
+  }
+
   return (
     <DashboardLayout
       session={session}
@@ -428,10 +464,13 @@ function DashboardShell({
       categories={categories}
       budgets={budgets}
       transactions={transactions}
+      plans={plans}
       onDeleteTransaction={handleDeleteTransaction}
       onLogout={() => void handleLogout()}
       onUpdateTransaction={handleUpdateTransaction}
       onRefreshBudgets={refreshBudgets}
+      onUpdatePlan={handleUpdatePlan}
+      onDeletePlan={handleDeletePlan}
     />
   );
 }
@@ -443,10 +482,13 @@ function DashboardLayout({
   categories,
   budgets,
   transactions,
+  plans,
   onDeleteTransaction,
   onLogout,
   onUpdateTransaction,
   onRefreshBudgets,
+  onUpdatePlan,
+  onDeletePlan,
 }: {
   session: DashboardSession;
   loading: boolean;
@@ -454,6 +496,7 @@ function DashboardLayout({
   categories: DashboardCategory[];
   budgets: Record<string, number>;
   transactions: DashboardTransaction[];
+  plans: DashboardPlan[];
   onDeleteTransaction: (transactionId: string) => Promise<void>;
   onLogout: () => void;
   onUpdateTransaction: (
@@ -466,6 +509,11 @@ function DashboardLayout({
     },
   ) => Promise<void>;
   onRefreshBudgets: () => Promise<void>;
+  onUpdatePlan: (
+    planId: string,
+    payload: { item?: string; category?: string; dayOfMonth?: number; amount?: number },
+  ) => Promise<void>;
+  onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [visibleOverviewCards, setVisibleOverviewCards] = useState([
@@ -639,11 +687,12 @@ function DashboardLayout({
           onValueChange={(value) => setActiveTab(value as DashboardTab)}
           className="space-y-6"
         >
-          <TabsList className="grid w-full grid-cols-2 sm:w-auto sm:grid-cols-4 sm:inline-grid">
+          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-5 sm:inline-grid">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
             <TabsTrigger value="transactions">Transactions</TabsTrigger>
+            <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
           <div className="flex justify-start">
             <OverviewInfoPopover
@@ -916,6 +965,16 @@ function DashboardLayout({
               onDeleteTransaction={onDeleteTransaction}
               onUpdateTransaction={onUpdateTransaction}
               jump={txnJump}
+            />
+          </TabsContent>
+
+          <TabsContent value="plans" className="space-y-6">
+            <PlansTab
+              plans={plans}
+              categories={categories}
+              loading={loading}
+              onUpdatePlan={onUpdatePlan}
+              onDeletePlan={onDeletePlan}
             />
           </TabsContent>
         </Tabs>
@@ -1705,6 +1764,352 @@ function TransactionsTab({
               {savingTransaction ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Save
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function PlansTab({
+  plans,
+  categories,
+  loading,
+  onUpdatePlan,
+  onDeletePlan,
+}: {
+  plans: DashboardPlan[];
+  categories: DashboardCategory[];
+  loading: boolean;
+  onUpdatePlan: (
+    planId: string,
+    payload: { item?: string; category?: string; dayOfMonth?: number; amount?: number },
+  ) => Promise<void>;
+  onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
+}) {
+  const [editingPlan, setEditingPlan] = useState<DashboardPlan | null>(null);
+  const [editItem, setEditItem] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [editDay, setEditDay] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [deletingPlan, setDeletingPlan] = useState<DashboardPlan | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const recurringPlans = plans.filter((p) => p.planType === "recurring");
+  const splitPlans = plans.filter((p) => p.planType === "split_payment");
+
+  function openEdit(plan: DashboardPlan) {
+    setEditError(null);
+    setEditingPlan(plan);
+    setEditItem(plan.item);
+    setEditCategory(plan.category);
+    setEditDay(String(plan.dayOfMonth));
+    setEditAmount(plan.planType === "recurring" ? String(plan.amount) : "");
+  }
+
+  function closeEdit() {
+    if (saving) return;
+    setEditingPlan(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!editingPlan) return;
+    const day = parseInt(editDay, 10);
+    if (Number.isNaN(day) || day < 1 || day > 31) {
+      setEditError("Day must be between 1 and 31.");
+      return;
+    }
+    if (!editItem.trim()) {
+      setEditError("Name cannot be empty.");
+      return;
+    }
+    let amount: number | undefined;
+    if (editingPlan.planType === "recurring") {
+      amount = parseFloat(editAmount);
+      if (Number.isNaN(amount) || amount <= 0) {
+        setEditError("Amount must be a positive number.");
+        return;
+      }
+    }
+    setSaving(true);
+    setEditError(null);
+    try {
+      await onUpdatePlan(editingPlan.id, {
+        item: editItem.trim(),
+        category: editCategory,
+        dayOfMonth: day,
+        ...(amount !== undefined ? { amount } : {}),
+      });
+      setEditingPlan(null);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Failed to update plan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteConfirm(mode: "future" | "all") {
+    if (!deletingPlan) return;
+    setDeletingId(deletingPlan.id);
+    try {
+      await onDeletePlan(deletingPlan.id, mode);
+      setDeletingPlan(null);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  function formatNextDue(plan: DashboardPlan) {
+    if (!plan.nextDueDate) return plan.status === "completed" ? "Completed" : "—";
+    try {
+      return format(new Date(plan.nextDueDate), "MMM d, yyyy");
+    } catch {
+      return "—";
+    }
+  }
+
+  function PlanRow({ plan }: { plan: DashboardPlan }) {
+    const isActive = plan.status === "active";
+    const emoji = categories.find((c) => c.name === plan.category)?.emoji ?? "🏷️";
+    const amountLabel =
+      plan.planType === "recurring"
+        ? `${currency.format(plan.amount)}/mo`
+        : `${currency.format(plan.totalAmount)} total`;
+    const progressLabel =
+      plan.planType === "split_payment"
+        ? `${plan.currentInstallmentNumber}/${plan.installmentCount} paid`
+        : null;
+
+    return (
+      <TableRow className={!isActive ? "opacity-50" : undefined}>
+        <TableCell>
+          <div className="flex items-center gap-2">
+            <span className="text-base">{emoji}</span>
+            <div>
+              <p className="font-medium text-sm">{plan.item}</p>
+              <p className="text-xs text-muted-foreground">{plan.category}</p>
+            </div>
+          </div>
+        </TableCell>
+        <TableCell className="text-sm">
+          <div>{amountLabel}</div>
+          {progressLabel ? (
+            <div className="text-xs text-muted-foreground">{progressLabel}</div>
+          ) : null}
+        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">Day {plan.dayOfMonth}</TableCell>
+        <TableCell className="text-sm text-muted-foreground">{formatNextDue(plan)}</TableCell>
+        <TableCell>
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+              plan.status === "active"
+                ? "bg-green-100 text-green-700"
+                : plan.status === "completed"
+                  ? "bg-blue-100 text-blue-700"
+                  : "bg-secondary text-muted-foreground"
+            }`}
+          >
+            {plan.status}
+          </span>
+        </TableCell>
+        <TableCell>
+          <div className="flex justify-end gap-1">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              disabled={!isActive}
+              aria-label={`Edit ${plan.item}`}
+              onClick={() => openEdit(plan)}
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 text-destructive hover:text-destructive"
+              disabled={!isActive || deletingId === plan.id}
+              aria-label={`Delete ${plan.item}`}
+              onClick={() => setDeletingPlan(plan)}
+            >
+              {deletingId === plan.id ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  function PlanTable({ title, items }: { title: string; items: DashboardPlan[] }) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Repeat2 className="h-4 w-4" />
+            {title}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <CenteredListMessage label="Loading plans..." />
+          ) : items.length === 0 ? (
+            <CenteredListMessage label="No plans found." />
+          ) : (
+            <div className="rounded-xl border border-border/70">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Day</TableHead>
+                    <TableHead>Next Due</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((plan) => (
+                    <PlanRow key={plan.id} plan={plan} />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      <PlanTable title="Recurring Plans" items={recurringPlans} />
+      <PlanTable title="Split Payment Plans" items={splitPlans} />
+
+      {/* Edit dialog */}
+      <Dialog open={editingPlan !== null} onOpenChange={(open) => { if (!open) closeEdit(); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit plan</DialogTitle>
+            <DialogDescription>Update name, category, day, or amount.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input value={editItem} onChange={(e) => setEditItem(e.target.value)} disabled={saving} />
+            </div>
+            <div className="space-y-2">
+              <Label>Category</Label>
+              <Select value={editCategory} onValueChange={setEditCategory} disabled={saving}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat.name} value={cat.name}>
+                      {cat.emoji} {cat.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Day of Month</Label>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max="31"
+                value={editDay}
+                onChange={(e) => setEditDay(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+            {editingPlan?.planType === "recurring" ? (
+              <div className="space-y-2">
+                <Label>Monthly Amount</Label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  min="0.01"
+                  step="0.01"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  disabled={saving}
+                />
+              </div>
+            ) : editingPlan ? (
+              <p className="text-xs text-muted-foreground">
+                To change the amount or number of months for a split plan, use the Telegram bot.
+              </p>
+            ) : null}
+            {editError ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {editError}
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeEdit} disabled={saving}>Cancel</Button>
+            <Button onClick={() => void handleSaveEdit()} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete dialog */}
+      <Dialog open={deletingPlan !== null} onOpenChange={(open) => { if (!open && !deletingId) setDeletingPlan(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete plan</DialogTitle>
+            <DialogDescription>
+              <strong>{deletingPlan?.item}</strong>
+              {deletingPlan?.planType === "split_payment"
+                ? " — this will cancel the plan and remove all auto-generated charges."
+                : " — choose how to stop this plan."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button variant="outline" onClick={() => setDeletingPlan(null)} disabled={!!deletingId}>
+              Cancel
+            </Button>
+            {deletingPlan?.planType === "recurring" ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => void handleDeleteConfirm("future")}
+                  disabled={!!deletingId}
+                >
+                  {deletingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  Stop future only
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => void handleDeleteConfirm("all")}
+                  disabled={!!deletingId}
+                >
+                  {deletingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  Stop + remove past
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="destructive"
+                onClick={() => void handleDeleteConfirm("all")}
+                disabled={!!deletingId}
+              >
+                {deletingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Stop + remove all charges
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

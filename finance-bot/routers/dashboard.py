@@ -13,14 +13,18 @@ from services.dashboard_auth import (
 )
 from services.firestore import (
     add_category_to_list,
+    cancel_payment_plan,
+    delete_transactions_for_plan,
     delete_web_session,
     delete_transaction,
     get_account_by_username,
     get_budgets,
     get_category_list,
+    get_payment_plan,
     get_transaction_by_id,
     get_transactions_with_ids,
     get_web_session,
+    list_payment_plans,
     remove_budget,
     rename_category,
     reassign_transactions_category,
@@ -29,6 +33,7 @@ from services.firestore import (
     set_budget,
     update_category_emoji,
     update_category_order,
+    update_payment_plan,
 )
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -370,4 +375,66 @@ async def delete_dashboard_budget(category_name: str, request: Request):
     session = _require_session(request)
     remove_budget(session["chat_id"], category_name)
     return {"ok": True}
+
+
+class PlanUpdateRequest(BaseModel):
+    item: Optional[str] = None
+    category: Optional[str] = None
+    day_of_month: Optional[int] = None
+    amount: Optional[float] = None
+
+
+@router.get("/plans")
+async def list_dashboard_plans(request: Request):
+    session = _require_session(request)
+    plans = list_payment_plans(session["chat_id"])
+    return {"plans": plans}
+
+
+@router.patch("/plans/{plan_id}")
+async def update_dashboard_plan(plan_id: str, payload: PlanUpdateRequest, request: Request):
+    session = _require_session(request)
+    plan = get_payment_plan(plan_id)
+    if not plan or plan.get("chat_id") != session["chat_id"]:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+
+    updates: dict = {}
+    if payload.item is not None:
+        item = payload.item.strip()
+        if not item:
+            raise HTTPException(status_code=400, detail="Item cannot be empty.")
+        updates["item"] = item
+    if payload.category is not None:
+        category = payload.category.strip()
+        if not category:
+            raise HTTPException(status_code=400, detail="Category cannot be empty.")
+        updates["category"] = category
+    if payload.day_of_month is not None:
+        if not 1 <= payload.day_of_month <= 31:
+            raise HTTPException(status_code=400, detail="Day must be between 1 and 31.")
+        updates["day_of_month"] = payload.day_of_month
+    if payload.amount is not None:
+        if plan.get("plan_type") != "recurring":
+            raise HTTPException(status_code=400, detail="Amount changes for split plans must be done via the bot.")
+        if payload.amount <= 0:
+            raise HTTPException(status_code=400, detail="Amount must be positive.")
+        updates["amount"] = payload.amount
+
+    if updates:
+        update_payment_plan(plan_id, **updates)
+    return {"ok": True}
+
+
+@router.delete("/plans/{plan_id}")
+async def delete_dashboard_plan(plan_id: str, request: Request, mode: str = "future"):
+    session = _require_session(request)
+    plan = get_payment_plan(plan_id)
+    if not plan or plan.get("chat_id") != session["chat_id"]:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+
+    cancel_payment_plan(plan_id)
+    deleted = 0
+    if mode == "all" or plan.get("plan_type") == "split_payment":
+        deleted = delete_transactions_for_plan(plan_id)
+    return {"ok": True, "deleted": deleted}
 

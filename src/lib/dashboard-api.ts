@@ -18,6 +18,26 @@ export type DashboardCategory = {
   order: number;
 };
 
+export type DashboardPlan = {
+  id: string;
+  planType: "recurring" | "split_payment";
+  item: string;
+  category: string;
+  dayOfMonth: number;
+  status: "active" | "cancelled" | "completed";
+  nextDueDate: string | null;
+  startYear: number;
+  startMonth: number;
+  // recurring only
+  amount: number;
+  // split only
+  totalAmount: number;
+  installmentCount: number;
+  currentInstallmentNumber: number;
+  baseInstallmentAmount: number;
+  finalInstallmentAmount: number;
+};
+
 export class DashboardApiError extends Error {
   constructor(message: string, readonly status?: number) {
     super(message);
@@ -259,4 +279,60 @@ export async function updateDashboardBudget(categoryName: string, amount: number
 
 export async function deleteDashboardBudget(categoryName: string): Promise<void> {
   await requestJson("DELETE", `/dashboard/budgets/${encodeURIComponent(categoryName)}`);
+}
+
+function parsePlan(data: Record<string, unknown>): DashboardPlan {
+  return {
+    id: String(data.id ?? data._doc_id ?? ""),
+    planType: data.plan_type === "split_payment" ? "split_payment" : "recurring",
+    item: String(data.item ?? ""),
+    category: String(data.category ?? ""),
+    dayOfMonth: typeof data.day_of_month === "number" ? data.day_of_month : 1,
+    status: (data.status as DashboardPlan["status"]) ?? "active",
+    nextDueDate: data.next_due_date ? String(data.next_due_date) : null,
+    startYear: typeof data.start_year === "number" ? data.start_year : 0,
+    startMonth: typeof data.start_month === "number" ? data.start_month : 0,
+    amount: typeof data.amount === "number" ? data.amount : 0,
+    totalAmount: typeof data.total_amount === "number" ? data.total_amount : 0,
+    installmentCount: typeof data.installment_count === "number" ? data.installment_count : 0,
+    currentInstallmentNumber:
+      typeof data.current_installment_number === "number" ? data.current_installment_number : 0,
+    baseInstallmentAmount:
+      typeof data.base_installment_amount === "number" ? data.base_installment_amount : 0,
+    finalInstallmentAmount:
+      typeof data.final_installment_amount === "number" ? data.final_installment_amount : 0,
+  };
+}
+
+export async function fetchDashboardPlans(): Promise<DashboardPlan[]> {
+  const data = await requestJson<{ plans?: Record<string, unknown>[] }>("GET", "/dashboard/plans");
+  return (data.plans ?? []).map(parsePlan);
+}
+
+export async function updateDashboardPlan(
+  planId: string,
+  payload: {
+    item?: string;
+    category?: string;
+    dayOfMonth?: number;
+    amount?: number;
+  },
+): Promise<void> {
+  await requestJson("PATCH", `/dashboard/plans/${planId}`, {
+    body: {
+      ...(payload.item !== undefined ? { item: payload.item } : {}),
+      ...(payload.category !== undefined ? { category: payload.category } : {}),
+      ...(payload.dayOfMonth !== undefined ? { day_of_month: payload.dayOfMonth } : {}),
+      ...(payload.amount !== undefined ? { amount: payload.amount } : {}),
+    },
+  });
+}
+
+export async function deleteDashboardPlan(
+  planId: string,
+  mode: "future" | "all",
+): Promise<void> {
+  await requestJson("DELETE", `/dashboard/plans/${planId}`, {
+    query: { mode },
+  });
 }
