@@ -141,7 +141,7 @@ async def send_budget_category_keyboard(chat_id: int, prompt: str) -> dict:
 
 async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prompt: str) -> dict:
     """Send an inline keyboard where each button is a transaction to delete."""
-    ts = datetime.now(SGT).isoformat()
+    ts = datetime.now(SGT).isoformat(timespec="seconds")
     keyboard = []
     for tx in transactions:
         label = f"❌ {tx['item']} — ${tx['amount']:.2f} ({tx['category']})"
@@ -162,7 +162,7 @@ async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prom
 
 
 async def send_monthly_report_keyboard(chat_id: int, buttons: list[tuple[str, str]], prompt: str) -> dict:
-    ts = datetime.now(SGT).isoformat()
+    ts = datetime.now(SGT).isoformat(timespec="seconds")
     keyboard = []
     row = []
     for label, callback_data in buttons:
@@ -187,7 +187,7 @@ async def send_monthly_report_keyboard(chat_id: int, buttons: list[tuple[str, st
 
 
 async def send_daily_report_keyboard(chat_id: int, prompt: str) -> dict:
-    ts = datetime.now(SGT).isoformat()
+    ts = datetime.now(SGT).isoformat(timespec="seconds")
     keyboard = [[
         {"text": "Today", "callback_data": f"dailyrep:today|{ts}"},
         {"text": "Past report", "callback_data": f"dailyrep:past|{ts}"},
@@ -208,7 +208,7 @@ async def send_daily_report_keyboard(chat_id: int, prompt: str) -> dict:
 
 async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) -> dict:
     """Send an inline keyboard for removing a category."""
-    ts = datetime.now(SGT).isoformat()
+    ts = datetime.now(SGT).isoformat(timespec="seconds")
     keyboard = []
     for cat in categories:
         label = f"❌ {cat['emoji']} {cat['name']}"
@@ -229,7 +229,7 @@ async def send_remove_category_keyboard(chat_id: int, categories: list[dict]) ->
 
 async def send_edit_category_keyboard(chat_id: int, categories: list[dict]) -> dict:
     """Send an inline keyboard for picking which category to edit."""
-    ts = datetime.now(SGT).isoformat()
+    ts = datetime.now(SGT).isoformat(timespec="seconds")
     keyboard = []
     row = []
     for cat in categories:
@@ -256,7 +256,7 @@ async def send_edit_category_keyboard(chat_id: int, categories: list[dict]) -> d
 
 async def send_edit_category_field_keyboard(chat_id: int, category_name: str, emoji: str) -> dict:
     """Send an inline keyboard with 3 fields: emoji, name, order."""
-    ts = datetime.now(SGT).isoformat()
+    ts = datetime.now(SGT).isoformat(timespec="seconds")
     keyboard = [[
         {"text": "😀 Emoji", "callback_data": f"editfield:emoji:{category_name}|{ts}"},
         {"text": "📝 Name", "callback_data": f"editfield:name:{category_name}|{ts}"},
@@ -276,7 +276,7 @@ async def send_edit_category_field_keyboard(chat_id: int, category_name: str, em
 
 
 async def send_plan_keyboard(chat_id: int, plans: list[dict], action: str, prompt: str) -> dict:
-    ts = datetime.now(SGT).isoformat()
+    ts = datetime.now(SGT).isoformat(timespec="seconds")
     keyboard = []
     for plan in plans:
         plan_type = "Recurring" if plan["plan_type"] == "recurring" else "Split"

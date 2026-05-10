@@ -171,6 +171,23 @@ class PaymentPlanHelperTests(unittest.TestCase):
             confirm_button = captured["reply_markup"]["inline_keyboard"][0][0]
             self.assertLessEqual(len(confirm_button["callback_data"].encode("utf-8")), 64)
             self.assertEqual(confirm_button["callback_data"], f"plandelmode:all:{firestore_id}")
+
+            # Plan-listing keyboards (with timestamp suffix) must also stay under 64 bytes
+            # for the longest prefix variant ("editrecurring:" = 14 chars).
+            for action in ("editrecurring", "delrecurring", "editsplit", "delsplit"):
+                asyncio.run(
+                    telegram.send_plan_keyboard(
+                        123,
+                        [{"id": firestore_id, "plan_type": "recurring", "item": "Netflix"}],
+                        action,
+                        "Select a plan:",
+                    )
+                )
+                cb = captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+                self.assertLessEqual(
+                    len(cb.encode("utf-8")), 64,
+                    msg=f"{action} callback_data too long: {cb!r} ({len(cb)} bytes)",
+                )
         finally:
             telegram.httpx.AsyncClient = original_client
 
