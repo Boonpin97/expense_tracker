@@ -324,10 +324,9 @@ async def send_plan_edit_field_keyboard(chat_id: int, plan_id: str, plan_type: s
 
 
 async def send_plan_delete_mode_keyboard(chat_id: int, plan_id: str, prompt: str) -> dict:
-    ts = datetime.now(SGT).isoformat()
     keyboard = [[
-        {"text": "Stop future only", "callback_data": f"plandelmode:future:{plan_id}|{ts}"},
-        {"text": "Stop future + remove past", "callback_data": f"plandelmode:all:{plan_id}|{ts}"},
+        {"text": "Stop future only", "callback_data": f"plandelmode:future:{plan_id}"},
+        {"text": "Stop future + remove past", "callback_data": f"plandelmode:all:{plan_id}"},
     ]]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -343,9 +342,8 @@ async def send_plan_delete_mode_keyboard(chat_id: int, plan_id: str, prompt: str
 
 
 async def send_split_plan_delete_confirm_keyboard(chat_id: int, plan_id: str, prompt: str) -> dict:
-    ts = datetime.now(SGT).isoformat()
     keyboard = [[
-        {"text": "Stop + remove past charges", "callback_data": f"plandelmode:all:{plan_id}|{ts}"},
+        {"text": "Stop + remove past charges", "callback_data": f"plandelmode:all:{plan_id}"},
     ]]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(

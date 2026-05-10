@@ -159,8 +159,18 @@ class PaymentPlanHelperTests(unittest.TestCase):
 
             asyncio.run(telegram.send_plan_delete_mode_keyboard(123, "plan-1", "Delete?"))
             delete_buttons = captured["reply_markup"]["inline_keyboard"][0]
-            self.assertRegex(delete_buttons[0]["callback_data"], r"^plandelmode:future:plan-1\|")
-            self.assertRegex(delete_buttons[1]["callback_data"], r"^plandelmode:all:plan-1\|")
+            self.assertEqual(delete_buttons[0]["callback_data"], "plandelmode:future:plan-1")
+            self.assertEqual(delete_buttons[1]["callback_data"], "plandelmode:all:plan-1")
+
+            # Confirm callback_data fits Telegram's 64-byte limit with a real 20-char Firestore ID.
+            firestore_id = "a" * 20
+            asyncio.run(telegram.send_plan_delete_mode_keyboard(123, firestore_id, "Delete?"))
+            for button in captured["reply_markup"]["inline_keyboard"][0]:
+                self.assertLessEqual(len(button["callback_data"].encode("utf-8")), 64)
+            asyncio.run(telegram.send_split_plan_delete_confirm_keyboard(123, firestore_id, "Delete?"))
+            confirm_button = captured["reply_markup"]["inline_keyboard"][0][0]
+            self.assertLessEqual(len(confirm_button["callback_data"].encode("utf-8")), 64)
+            self.assertEqual(confirm_button["callback_data"], f"plandelmode:all:{firestore_id}")
         finally:
             telegram.httpx.AsyncClient = original_client
 
