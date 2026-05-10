@@ -446,6 +446,7 @@ async def set_my_commands() -> dict:
         {"command": "delete_recurring", "description": "Delete a recurring payment plan"},
         {"command": "split_payment", "description": "Split one payment across monthly charges"},
         {"command": "list_split_payment", "description": "List split payment plans"},
+        {"command": "edit_split_payment", "description": "Edit a split payment plan"},
         {"command": "delete_split_payment", "description": "Delete a split payment plan"},
     ]
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:

@@ -93,7 +93,8 @@ def due_today(plan: dict, today: datetime) -> bool:
 
 
 def plan_display_line(plan: dict) -> str:
-    due = datetime.fromisoformat(plan["next_due_date"]).astimezone(SGT)
+    raw_due = plan.get("next_due_date") or ""
+    due_label = datetime.fromisoformat(raw_due).astimezone(SGT).strftime("%Y-%m-%d") if raw_due else "—"
     if plan["plan_type"] == "split_payment":
         progress = f"{plan.get('current_installment_number', 0)}/{plan['installment_count']}"
         amount_text = f"${plan['total_amount']:.2f} total"
@@ -103,5 +104,5 @@ def plan_display_line(plan: dict) -> str:
         extra = "open-ended"
     return (
         f"<b>{plan['item']}</b> · {plan['category']}\n"
-        f"{amount_text} · Day {plan['day_of_month']} · next {due.strftime('%Y-%m-%d')} · {extra}"
+        f"{amount_text} · Day {plan['day_of_month']} · next {due_label} · {extra}"
     )
