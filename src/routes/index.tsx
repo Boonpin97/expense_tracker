@@ -955,8 +955,7 @@ function DashboardLayout({
             <TabsTrigger value="transactions">Transactions</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
-          <div className="flex min-h-9 items-center justify-between gap-3">
-            <div />
+          <div className="flex min-h-9 items-center justify-start gap-2">
             <div className="flex items-center gap-2">
               <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
                 <Plus className="mr-2 h-4 w-4" />
@@ -2461,19 +2460,6 @@ function PlansTab({
         <TableCell className="text-sm text-muted-foreground">Day {plan.dayOfMonth}</TableCell>
         <TableCell className="text-sm text-muted-foreground">{formatNextDue(plan)}</TableCell>
         <TableCell>
-          <span
-            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-              plan.status === "active"
-                ? "bg-green-100 text-green-700"
-                : plan.status === "completed"
-                  ? "bg-blue-100 text-blue-700"
-                  : "bg-secondary text-muted-foreground"
-            }`}
-          >
-            {plan.status}
-          </span>
-        </TableCell>
-        <TableCell>
           <div className="flex justify-end gap-1">
             <Button
               size="icon"
@@ -2528,7 +2514,6 @@ function PlansTab({
                     <TableHead>Amount</TableHead>
                     <TableHead>Day</TableHead>
                     <TableHead>Next Due</TableHead>
-                    <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
