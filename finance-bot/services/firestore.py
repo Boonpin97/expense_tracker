@@ -568,6 +568,17 @@ def delete_web_sessions_for_chat(chat_id: int) -> int:
     return count
 
 
+def get_dashboard_preferences(chat_id: int) -> dict:
+    doc = get_db().collection("dashboard_preferences").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict() or {}
+    return {}
+
+
+def update_dashboard_preferences(chat_id: int, **fields) -> None:
+    get_db().collection("dashboard_preferences").document(str(chat_id)).set(fields, merge=True)
+
+
 def get_budgets(chat_id: int) -> dict[str, float]:
     doc = get_db().collection("budgets").document(str(chat_id)).get()
     if doc.exists:
@@ -608,6 +619,10 @@ def update_payment_plan(plan_id: str, **fields) -> None:
     get_db().collection("payment_plans").document(plan_id).update(fields)
 
 
+def delete_payment_plan(plan_id: str) -> None:
+    get_db().collection("payment_plans").document(plan_id).delete()
+
+
 def get_payment_plan(plan_id: str) -> Optional[dict]:
     doc = get_db().collection("payment_plans").document(plan_id).get()
     if doc.exists:
@@ -617,15 +632,20 @@ def get_payment_plan(plan_id: str) -> Optional[dict]:
     return None
 
 
-def list_payment_plans(chat_id: int, plan_type: Optional[str] = None, statuses: Optional[list[str]] = None) -> list[dict]:
+def list_payment_plans(
+    chat_id: int,
+    plan_type: Optional[str] = None,
+    statuses: Optional[list[str]] = None,
+) -> list[dict]:
     docs = get_db().collection("payment_plans").where("chat_id", "==", chat_id).stream()
     plans = []
+    allowed_statuses = statuses or ["active", "completed"]
     for doc in docs:
         data = doc.to_dict()
         data["id"] = doc.id
         if plan_type and data.get("plan_type") != plan_type:
             continue
-        if statuses and data.get("status") not in statuses:
+        if data.get("status") not in allowed_statuses:
             continue
         plans.append(data)
     plans.sort(key=lambda plan: (plan.get("status") != "active", plan.get("next_due_date", "")))
@@ -642,10 +662,6 @@ def list_due_payment_plans(today: datetime) -> list[dict]:
         if next_due.date() == today.date():
             due_plans.append(data)
     return due_plans
-
-
-def cancel_payment_plan(plan_id: str) -> None:
-    update_payment_plan(plan_id, status="cancelled")
 
 
 def recalculate_payment_plan_next_due(plan_id: str) -> Optional[str]:

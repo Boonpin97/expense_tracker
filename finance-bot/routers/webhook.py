@@ -22,12 +22,12 @@ from services.categoriser import (
 from services.dashboard_auth import hash_password, is_valid_username, validate_password
 from services.firestore import (
     add_category_to_list,
-    cancel_payment_plan,
     clear_user_state,
     delete_category,
     delete_pending,
     delete_pending_change,
     delete_pending_plan,
+    delete_payment_plan,
     delete_transactions_for_plan,
     delete_transaction,
     get_category_list,
@@ -1064,7 +1064,7 @@ async def webhook(request: Request):
             if not plan:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 return {"ok": True}
-            cancel_payment_plan(plan_id)
+            delete_payment_plan(plan_id)
             removed = 0
             if mode == "all":
                 removed = delete_transactions_for_plan(plan_id)
