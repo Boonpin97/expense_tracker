@@ -5,16 +5,25 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from models.transaction import PaymentPlan, Transaction
 from services.dashboard_auth import (
     build_session_token,
     normalize_username,
     session_expiry,
     verify_password,
 )
+from services.payment_plans import (
+    compute_next_due_date,
+    compute_split_amounts,
+    month_due_date,
+    next_month,
+    plan_occurrence_for_index,
+)
+from services.plan_manager import rewrite_plan_history
 from services.firestore import (
     add_category_to_list,
-    cancel_payment_plan,
     delete_transactions_for_plan,
+    delete_payment_plan,
     delete_web_session,
     delete_transaction,
     get_account_by_username,
@@ -29,6 +38,8 @@ from services.firestore import (
     rename_category,
     reassign_transactions_category,
     remove_category_from_list,
+    save_payment_plan,
+    save_transaction,
     save_web_session,
     set_budget,
     update_category_emoji,
@@ -60,6 +71,17 @@ class TransactionUpdateRequest(BaseModel):
     amount: float
     category: str
     timestamp: str
+
+
+class TransactionCreateRequest(BaseModel):
+    item: str
+    amount: float
+    category: str
+    timestamp: str
+    payment_type: str
+    day_of_month: Optional[int] = None
+    installment_count: Optional[int] = None
+    create_first_transaction_now: bool = True
 
 
 class CategoryCreateRequest(BaseModel):
@@ -137,6 +159,46 @@ def _parse_dashboard_datetime(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=SGT)
     return parsed.astimezone(SGT)
+
+
+def _scheduled_plan_start(timestamp: datetime, day_of_month: int) -> tuple[int, int]:
+    candidate_due = month_due_date(timestamp.year, timestamp.month, day_of_month)
+    if timestamp.date() <= candidate_due.date():
+        return timestamp.year, timestamp.month
+    return next_month(timestamp.year, timestamp.month)
+
+
+def _build_plan_creation_result(plan: dict, create_first_transaction_now: bool, timestamp: datetime) -> dict:
+    if not create_first_transaction_now:
+        next_due = compute_next_due_date(plan)
+        return {
+            "current_installment_number": 0,
+            "next_due_date": next_due.isoformat() if next_due else "",
+            "status": "completed" if next_due is None and plan["plan_type"] == "split_payment" else "active",
+        }
+
+    occurrence = plan_occurrence_for_index(plan, 0)
+    save_transaction(
+        Transaction(
+            item=plan["item"],
+            amount=occurrence.amount,
+            category=plan["category"],
+            timestamp=timestamp.isoformat(),
+            chat_id=plan["chat_id"],
+            source_type=plan["plan_type"],
+            source_plan_id=plan["id"],
+            occurrence_key=occurrence.occurrence_key,
+            auto_generated=True,
+        )
+    )
+    posted_count = 1
+    next_due = compute_next_due_date({**plan, "current_installment_number": posted_count})
+    status = "completed" if next_due is None and plan["plan_type"] == "split_payment" else "active"
+    return {
+        "current_installment_number": posted_count,
+        "next_due_date": next_due.isoformat() if next_due else "",
+        "status": status,
+    }
 
 
 @router.get("/auth/session", response_model=SessionResponse)
@@ -217,6 +279,85 @@ async def list_dashboard_transactions(
         transactions = [tx for tx in transactions if tx.get("category") == category]
     transactions.sort(key=lambda tx: tx.get("timestamp", ""), reverse=True)
     return {"transactions": transactions}
+
+
+@router.post("/transactions")
+async def create_dashboard_transaction(payload: TransactionCreateRequest, request: Request):
+    session = _require_session(request)
+    item = payload.item.strip()
+    category = payload.category.strip()
+    payment_type = payload.payment_type.strip()
+    timestamp = _parse_dashboard_datetime(payload.timestamp)
+
+    if not item:
+        raise HTTPException(status_code=400, detail="Item cannot be empty.")
+    if not category:
+        raise HTTPException(status_code=400, detail="Category cannot be empty.")
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive.")
+    if payment_type not in {"one_time", "recurring", "split_payment"}:
+        raise HTTPException(status_code=400, detail="Invalid payment type.")
+
+    if payment_type == "one_time":
+        save_transaction(
+            Transaction(
+                item=item,
+                amount=payload.amount,
+                category=category,
+                timestamp=timestamp.isoformat(),
+                chat_id=session["chat_id"],
+            )
+        )
+        return {"ok": True}
+
+    if payload.day_of_month is None or not 1 <= payload.day_of_month <= 31:
+        raise HTTPException(status_code=400, detail="Day must be between 1 and 31.")
+
+    if payload.create_first_transaction_now:
+        start_year = timestamp.year
+        start_month = timestamp.month
+    else:
+        start_year, start_month = _scheduled_plan_start(timestamp, payload.day_of_month)
+
+    if payment_type == "split_payment":
+        if payload.installment_count is None or payload.installment_count < 1:
+            raise HTTPException(status_code=400, detail="Months must be a positive integer.")
+        base_amount, final_amount = compute_split_amounts(payload.amount, payload.installment_count)
+        plan = PaymentPlan(
+            chat_id=session["chat_id"],
+            plan_type="split_payment",
+            item=item,
+            category=category,
+            day_of_month=payload.day_of_month,
+            start_year=start_year,
+            start_month=start_month,
+            next_due_date=timestamp.isoformat(),
+            created_at=datetime.now(SGT).isoformat(),
+            total_amount=payload.amount,
+            installment_count=payload.installment_count,
+            current_installment_number=0,
+            base_installment_amount=base_amount,
+            final_installment_amount=final_amount,
+        )
+    else:
+        plan = PaymentPlan(
+            chat_id=session["chat_id"],
+            plan_type="recurring",
+            item=item,
+            category=category,
+            day_of_month=payload.day_of_month,
+            start_year=start_year,
+            start_month=start_month,
+            next_due_date=timestamp.isoformat(),
+            created_at=datetime.now(SGT).isoformat(),
+            amount=payload.amount,
+            current_installment_number=0,
+        )
+
+    plan_id = save_payment_plan(plan)
+    stored_plan = get_payment_plan(plan_id)
+    update_payment_plan(plan_id, **_build_plan_creation_result(stored_plan, payload.create_first_transaction_now, timestamp))
+    return {"ok": True}
 
 
 @router.patch("/transactions/{transaction_id}")
@@ -382,6 +523,8 @@ class PlanUpdateRequest(BaseModel):
     category: Optional[str] = None
     day_of_month: Optional[int] = None
     amount: Optional[float] = None
+    total_amount: Optional[float] = None
+    installment_count: Optional[int] = None
 
 
 @router.get("/plans")
@@ -415,13 +558,54 @@ async def update_dashboard_plan(plan_id: str, payload: PlanUpdateRequest, reques
         updates["day_of_month"] = payload.day_of_month
     if payload.amount is not None:
         if plan.get("plan_type") != "recurring":
-            raise HTTPException(status_code=400, detail="Amount changes for split plans must be done via the bot.")
+            raise HTTPException(status_code=400, detail="Use total_amount for split payment plans.")
         if payload.amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be positive.")
         updates["amount"] = payload.amount
+    if payload.total_amount is not None:
+        if plan.get("plan_type") != "split_payment":
+            raise HTTPException(status_code=400, detail="total_amount is only supported for split payment plans.")
+        if payload.total_amount <= 0:
+            raise HTTPException(status_code=400, detail="Total amount must be positive.")
+        updates["total_amount"] = payload.total_amount
+    if payload.installment_count is not None:
+        if plan.get("plan_type") != "split_payment":
+            raise HTTPException(
+                status_code=400,
+                detail="installment_count is only supported for split payment plans.",
+            )
+        posted = int(plan.get("current_installment_number", 0))
+        if payload.installment_count < max(1, posted):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Installment count cannot be less than already posted installments ({posted}).",
+            )
+        updates["installment_count"] = payload.installment_count
+
+    merged = {**plan, **updates}
+    if merged.get("plan_type") == "split_payment" and (
+        "total_amount" in updates or "installment_count" in updates
+    ):
+        base, final_amount = compute_split_amounts(
+            float(merged["total_amount"]),
+            int(merged["installment_count"]),
+        )
+        updates["base_installment_amount"] = base
+        updates["final_installment_amount"] = final_amount
+        merged["base_installment_amount"] = base
+        merged["final_installment_amount"] = final_amount
 
     if updates:
+        next_due = compute_next_due_date(merged)
+        updates["next_due_date"] = next_due.isoformat() if next_due else ""
+        if next_due is None and merged["plan_type"] == "split_payment":
+            updates["status"] = "completed"
+        elif merged["plan_type"] == "split_payment":
+            updates["status"] = "active"
+
         update_payment_plan(plan_id, **updates)
+        if merged["plan_type"] == "split_payment":
+            await rewrite_plan_history(plan_id)
     return {"ok": True}
 
 
@@ -432,7 +616,7 @@ async def delete_dashboard_plan(plan_id: str, request: Request, mode: str = "fut
     if not plan or plan.get("chat_id") != session["chat_id"]:
         raise HTTPException(status_code=404, detail="Plan not found.")
 
-    cancel_payment_plan(plan_id)
+    delete_payment_plan(plan_id)
     deleted = 0
     if mode == "all" or plan.get("plan_type") == "split_payment":
         deleted = delete_transactions_for_plan(plan_id)

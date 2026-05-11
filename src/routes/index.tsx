@@ -18,6 +18,7 @@ import {
   Filter,
   ListFilter,
   Pencil,
+  Plus,
   Repeat2,
   Trash2,
 } from "lucide-react";
@@ -74,6 +75,7 @@ import {
 } from "recharts";
 import {
   DashboardApiError,
+  createDashboardTransaction,
   deleteDashboardBudget,
   deleteDashboardPlan,
   deleteDashboardTransaction,
@@ -88,6 +90,7 @@ import {
   updateDashboardPlan,
   updateDashboardTransaction,
   type DashboardCategory,
+  type DashboardPaymentType,
   type DashboardPlan,
   type DashboardSession,
   type DashboardTransaction,
@@ -419,6 +422,26 @@ function DashboardShell({
     setTransactions((current) => current.filter((transaction) => transaction.id !== transactionId));
   }
 
+  async function handleCreateTransaction(payload: {
+    item: string;
+    amount: number;
+    category: string;
+    timestamp: Date;
+    paymentType: DashboardPaymentType;
+    dayOfMonth?: number;
+    installmentCount?: number;
+    createFirstTransactionNow?: boolean;
+  }) {
+    await createDashboardTransaction(payload);
+    const end = endOfDay(new Date(Math.max(Date.now(), payload.timestamp.getTime())));
+    const [txns, pls] = await Promise.all([
+      fetchDashboardTransactions({ start: HISTORY_START, end }),
+      fetchDashboardPlans(),
+    ]);
+    setTransactions(txns);
+    setPlans(pls);
+  }
+
   const refreshBudgets = useCallback(async () => {
     try {
       const buds = await fetchDashboardBudgets();
@@ -430,30 +453,22 @@ function DashboardShell({
 
   async function handleUpdatePlan(
     planId: string,
-    payload: { item?: string; category?: string; dayOfMonth?: number; amount?: number },
+    payload: {
+      item?: string;
+      category?: string;
+      dayOfMonth?: number;
+      amount?: number;
+      totalAmount?: number;
+      installmentCount?: number;
+    },
   ) {
     await updateDashboardPlan(planId, payload);
-    setPlans((current) =>
-      current.map((plan) => {
-        if (plan.id !== planId) return plan;
-        return {
-          ...plan,
-          ...(payload.item !== undefined ? { item: payload.item } : {}),
-          ...(payload.category !== undefined ? { category: payload.category } : {}),
-          ...(payload.dayOfMonth !== undefined ? { dayOfMonth: payload.dayOfMonth } : {}),
-          ...(payload.amount !== undefined ? { amount: payload.amount } : {}),
-        };
-      }),
-    );
+    setPlans(await fetchDashboardPlans());
   }
 
   async function handleDeletePlan(planId: string, mode: "future" | "all") {
     await deleteDashboardPlan(planId, mode);
-    setPlans((current) =>
-      current.map((plan) =>
-        plan.id === planId ? { ...plan, status: "cancelled" as const } : plan,
-      ),
-    );
+    setPlans((current) => current.filter((plan) => plan.id !== planId));
   }
 
   return (
@@ -468,6 +483,7 @@ function DashboardShell({
       onDeleteTransaction={handleDeleteTransaction}
       onLogout={() => void handleLogout()}
       onUpdateTransaction={handleUpdateTransaction}
+      onCreateTransaction={handleCreateTransaction}
       onRefreshBudgets={refreshBudgets}
       onUpdatePlan={handleUpdatePlan}
       onDeletePlan={handleDeletePlan}
@@ -486,6 +502,7 @@ function DashboardLayout({
   onDeleteTransaction,
   onLogout,
   onUpdateTransaction,
+  onCreateTransaction,
   onRefreshBudgets,
   onUpdatePlan,
   onDeletePlan,
@@ -508,10 +525,27 @@ function DashboardLayout({
       timestamp: Date;
     },
   ) => Promise<void>;
+  onCreateTransaction: (payload: {
+    item: string;
+    amount: number;
+    category: string;
+    timestamp: Date;
+    paymentType: DashboardPaymentType;
+    dayOfMonth?: number;
+    installmentCount?: number;
+    createFirstTransactionNow?: boolean;
+  }) => Promise<void>;
   onRefreshBudgets: () => Promise<void>;
   onUpdatePlan: (
     planId: string,
-    payload: { item?: string; category?: string; dayOfMonth?: number; amount?: number },
+    payload: {
+      item?: string;
+      category?: string;
+      dayOfMonth?: number;
+      amount?: number;
+      totalAmount?: number;
+      installmentCount?: number;
+    },
   ) => Promise<void>;
   onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
 }) {
@@ -528,6 +562,17 @@ function DashboardLayout({
   const [savingBudget, setSavingBudget] = useState(false);
   const [deletingBudgetCategory, setDeletingBudgetCategory] = useState<string | null>(null);
   const [budgetActionError, setBudgetActionError] = useState<string | null>(null);
+  const [addTransactionOpen, setAddTransactionOpen] = useState(false);
+  const [newItem, setNewItem] = useState("");
+  const [newCategory, setNewCategory] = useState("");
+  const [newAmount, setNewAmount] = useState("");
+  const [newTimestamp, setNewTimestamp] = useState(formatDateTimeInputValue(new Date()));
+  const [newPaymentType, setNewPaymentType] = useState<DashboardPaymentType>("one_time");
+  const [newDayOfMonth, setNewDayOfMonth] = useState("");
+  const [newInstallmentCount, setNewInstallmentCount] = useState("");
+  const [createFirstTransactionNow, setCreateFirstTransactionNow] = useState(true);
+  const [creatingTransaction, setCreatingTransaction] = useState(false);
+  const [createTransactionError, setCreateTransactionError] = useState<string | null>(null);
 
   const catColorMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -616,6 +661,29 @@ function DashboardLayout({
     });
   }, [transactions]);
 
+  function resetAddTransactionForm() {
+    setNewItem("");
+    setNewCategory(categories[0]?.name ?? "");
+    setNewAmount("");
+    setNewTimestamp(formatDateTimeInputValue(new Date()));
+    setNewPaymentType("one_time");
+    setNewDayOfMonth("");
+    setNewInstallmentCount("");
+    setCreateFirstTransactionNow(true);
+    setCreateTransactionError(null);
+  }
+
+  function openAddTransactionDialog() {
+    resetAddTransactionForm();
+    setAddTransactionOpen(true);
+  }
+
+  function closeAddTransactionDialog() {
+    if (creatingTransaction) return;
+    setAddTransactionOpen(false);
+    setCreateTransactionError(null);
+  }
+
   function openEditBudget(categoryName: string, currentAmount: number) {
     setBudgetActionError(null);
     setEditingBudgetCategory(categoryName);
@@ -639,6 +707,72 @@ function DashboardLayout({
       setBudgetActionError(err instanceof DashboardApiError ? err.message : "Failed to update budget.");
     } finally {
       setSavingBudget(false);
+    }
+  }
+
+  async function handleCreateTransactionSubmit() {
+    const item = newItem.trim();
+    const category = newCategory.trim();
+    const amount = Number(newAmount);
+    const timestamp = new Date(newTimestamp);
+    const needsPlanFields = newPaymentType !== "one_time";
+    const dayOfMonth = needsPlanFields ? parseInt(newDayOfMonth, 10) : undefined;
+    const installmentCount =
+      newPaymentType === "split_payment" ? parseInt(newInstallmentCount, 10) : undefined;
+
+    if (!item) {
+      setCreateTransactionError("Item is required.");
+      return;
+    }
+    if (!category) {
+      setCreateTransactionError("Category is required.");
+      return;
+    }
+    if (Number.isNaN(amount) || amount <= 0) {
+      setCreateTransactionError(
+        newPaymentType === "split_payment"
+          ? "Total amount must be a positive number."
+          : "Amount must be a positive number.",
+      );
+      return;
+    }
+    if (Number.isNaN(timestamp.getTime())) {
+      setCreateTransactionError("Date is invalid.");
+      return;
+    }
+    if (needsPlanFields && (dayOfMonth === undefined || Number.isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31)) {
+      setCreateTransactionError("Day of month must be between 1 and 31.");
+      return;
+    }
+    if (
+      newPaymentType === "split_payment" &&
+      (installmentCount === undefined || Number.isNaN(installmentCount) || installmentCount < 1)
+    ) {
+      setCreateTransactionError("Number of months must be at least 1.");
+      return;
+    }
+
+    setCreatingTransaction(true);
+    setCreateTransactionError(null);
+    try {
+      await onCreateTransaction({
+        item,
+        amount,
+        category,
+        timestamp,
+        paymentType: newPaymentType,
+        ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
+        ...(installmentCount !== undefined ? { installmentCount } : {}),
+        ...(needsPlanFields ? { createFirstTransactionNow } : {}),
+      });
+      setAddTransactionOpen(false);
+      resetAddTransactionForm();
+    } catch (caught) {
+      setCreateTransactionError(
+        caught instanceof Error ? caught.message : "Unable to create transaction.",
+      );
+    } finally {
+      setCreatingTransaction(false);
     }
   }
 
@@ -694,11 +828,19 @@ function DashboardLayout({
             <TabsTrigger value="transactions">Transactions</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
-          <div className="flex justify-start">
-            <OverviewInfoPopover
-              visible={visibleOverviewCards}
-              onVisibleChange={setVisibleOverviewCards}
-            />
+          <div className="flex min-h-9 items-center justify-between gap-3">
+            <div>
+              {activeTab === "overview" ? (
+                <OverviewInfoPopover
+                  visible={visibleOverviewCards}
+                  onVisibleChange={setVisibleOverviewCards}
+                />
+              ) : null}
+            </div>
+            <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
+              <Plus className="mr-2 h-4 w-4" />
+              Add Transaction
+            </Button>
           </div>
 
           <TabsContent value="overview" className="space-y-6">
@@ -929,6 +1071,165 @@ function DashboardLayout({
         </Tabs>
 
         <Dialog
+          open={addTransactionOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              closeAddTransactionDialog();
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add Transaction</DialogTitle>
+              <DialogDescription>
+                Create a one-time expense or set up a recurring or split payment plan.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="new-item">Item</Label>
+                <Input
+                  id="new-item"
+                  value={newItem}
+                  onChange={(e) => setNewItem(e.target.value)}
+                  disabled={creatingTransaction}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-category">Category</Label>
+                <Select
+                  value={newCategory}
+                  onValueChange={setNewCategory}
+                  disabled={creatingTransaction}
+                >
+                  <SelectTrigger id="new-category">
+                    <SelectValue placeholder="Select a category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((category) => (
+                      <SelectItem key={category.name} value={category.name}>
+                        {category.emoji} {category.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-payment-type">Payment Type</Label>
+                <Select
+                  value={newPaymentType}
+                  onValueChange={(value) => setNewPaymentType(value as DashboardPaymentType)}
+                  disabled={creatingTransaction}
+                >
+                  <SelectTrigger id="new-payment-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="one_time">One-time</SelectItem>
+                    <SelectItem value="split_payment">Split payment</SelectItem>
+                    <SelectItem value="recurring">Recurring</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-amount">
+                  {newPaymentType === "split_payment" ? "Total Amount" : "Amount"}
+                </Label>
+                <Input
+                  id="new-amount"
+                  type="number"
+                  inputMode="decimal"
+                  min="0.01"
+                  step="0.01"
+                  value={newAmount}
+                  onChange={(e) => setNewAmount(e.target.value)}
+                  disabled={creatingTransaction}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-date">Date</Label>
+                <Input
+                  id="new-date"
+                  type="datetime-local"
+                  value={newTimestamp}
+                  onChange={(e) => setNewTimestamp(e.target.value)}
+                  disabled={creatingTransaction}
+                />
+              </div>
+              {newPaymentType !== "one_time" ? (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-day-of-month">Monthly Charge Day</Label>
+                    <Input
+                      id="new-day-of-month"
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max="31"
+                      value={newDayOfMonth}
+                      onChange={(e) => setNewDayOfMonth(e.target.value)}
+                      disabled={creatingTransaction}
+                    />
+                  </div>
+                  {newPaymentType === "split_payment" ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="new-installment-count">Number of Months</Label>
+                      <Input
+                        id="new-installment-count"
+                        type="number"
+                        inputMode="numeric"
+                        min="1"
+                        step="1"
+                        value={newInstallmentCount}
+                        onChange={(e) => setNewInstallmentCount(e.target.value)}
+                        disabled={creatingTransaction}
+                      />
+                    </div>
+                  ) : null}
+                  <div className="rounded-xl border border-border/70 bg-secondary/30 px-4 py-3">
+                    <label className="flex items-start gap-3 text-sm">
+                      <Checkbox
+                        checked={createFirstTransactionNow}
+                        onCheckedChange={(checked) => setCreateFirstTransactionNow(!!checked)}
+                        disabled={creatingTransaction}
+                      />
+                      <span className="leading-5 text-muted-foreground">
+                        Create the first transaction now.
+                        <span className="block">
+                          If unchecked, only the plan is created and the first charge will post on
+                          the next assigned monthly day.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                </>
+              ) : null}
+              {createTransactionError ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {createTransactionError}
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={closeAddTransactionDialog}
+                disabled={creatingTransaction}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void handleCreateTransactionSubmit()}
+                disabled={creatingTransaction}
+              >
+                {creatingTransaction ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Create
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
           open={editingBudgetCategory !== null}
           onOpenChange={(open) => {
             if (!open && !savingBudget) setEditingBudgetCategory(null);
@@ -1126,7 +1427,7 @@ function OverviewInfoPopover({
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="h-9 text-left">
           <Filter className="mr-2 h-4 w-4" />
-          Info
+          Show
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-56" align="start">
@@ -1837,7 +2138,14 @@ function PlansTab({
   loading: boolean;
   onUpdatePlan: (
     planId: string,
-    payload: { item?: string; category?: string; dayOfMonth?: number; amount?: number },
+    payload: {
+      item?: string;
+      category?: string;
+      dayOfMonth?: number;
+      amount?: number;
+      totalAmount?: number;
+      installmentCount?: number;
+    },
   ) => Promise<void>;
   onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
 }) {
@@ -1846,6 +2154,7 @@ function PlansTab({
   const [editCategory, setEditCategory] = useState("");
   const [editDay, setEditDay] = useState("");
   const [editAmount, setEditAmount] = useState("");
+  const [editMonths, setEditMonths] = useState("");
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -1861,7 +2170,10 @@ function PlansTab({
     setEditItem(plan.item);
     setEditCategory(plan.category);
     setEditDay(String(plan.dayOfMonth));
-    setEditAmount(plan.planType === "recurring" ? String(plan.amount) : "");
+    setEditAmount(
+      plan.planType === "recurring" ? String(plan.amount) : String(plan.totalAmount),
+    );
+    setEditMonths(plan.planType === "split_payment" ? String(plan.installmentCount) : "");
   }
 
   function closeEdit() {
@@ -1881,10 +2193,29 @@ function PlansTab({
       return;
     }
     let amount: number | undefined;
+    let totalAmount: number | undefined;
+    let installmentCount: number | undefined;
     if (editingPlan.planType === "recurring") {
       amount = parseFloat(editAmount);
       if (Number.isNaN(amount) || amount <= 0) {
         setEditError("Amount must be a positive number.");
+        return;
+      }
+    } else {
+      totalAmount = parseFloat(editAmount);
+      installmentCount = parseInt(editMonths, 10);
+      if (Number.isNaN(totalAmount) || totalAmount <= 0) {
+        setEditError("Total amount must be a positive number.");
+        return;
+      }
+      if (Number.isNaN(installmentCount) || installmentCount < 1) {
+        setEditError("Months must be at least 1.");
+        return;
+      }
+      if (installmentCount < editingPlan.currentInstallmentNumber) {
+        setEditError(
+          `Months cannot be less than already posted installments (${editingPlan.currentInstallmentNumber}).`,
+        );
         return;
       }
     }
@@ -1896,6 +2227,8 @@ function PlansTab({
         category: editCategory,
         dayOfMonth: day,
         ...(amount !== undefined ? { amount } : {}),
+        ...(totalAmount !== undefined ? { totalAmount } : {}),
+        ...(installmentCount !== undefined ? { installmentCount } : {}),
       });
       setEditingPlan(null);
     } catch (err) {
@@ -2051,7 +2384,11 @@ function PlansTab({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit plan</DialogTitle>
-            <DialogDescription>Update name, category, day, or amount.</DialogDescription>
+            <DialogDescription>
+              {editingPlan?.planType === "split_payment"
+                ? "Update name, category, day, total amount, or number of months."
+                : "Update name, category, day, or amount."}
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
@@ -2099,9 +2436,36 @@ function PlansTab({
                 />
               </div>
             ) : editingPlan ? (
-              <p className="text-xs text-muted-foreground">
-                To change the amount or number of months for a split plan, use the Telegram bot.
-              </p>
+              <>
+                <div className="space-y-2">
+                  <Label>Total Amount</Label>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min="0.01"
+                    step="0.01"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    disabled={saving}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Months</Label>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={Math.max(1, editingPlan.currentInstallmentNumber)}
+                    step="1"
+                    value={editMonths}
+                    onChange={(e) => setEditMonths(e.target.value)}
+                    disabled={saving}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Saving a split-plan edit recalculates the schedule and rewrites this plan&apos;s
+                  auto-generated charges to stay consistent.
+                </p>
+              </>
             ) : null}
             {editError ? (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

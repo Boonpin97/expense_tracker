@@ -38,6 +38,8 @@ export type DashboardPlan = {
   finalInstallmentAmount: number;
 };
 
+export type DashboardPaymentType = "one_time" | "split_payment" | "recurring";
+
 export class DashboardApiError extends Error {
   constructor(message: string, readonly status?: number) {
     super(message);
@@ -316,6 +318,8 @@ export async function updateDashboardPlan(
     category?: string;
     dayOfMonth?: number;
     amount?: number;
+    totalAmount?: number;
+    installmentCount?: number;
   },
 ): Promise<void> {
   await requestJson("PATCH", `/dashboard/plans/${planId}`, {
@@ -324,6 +328,38 @@ export async function updateDashboardPlan(
       ...(payload.category !== undefined ? { category: payload.category } : {}),
       ...(payload.dayOfMonth !== undefined ? { day_of_month: payload.dayOfMonth } : {}),
       ...(payload.amount !== undefined ? { amount: payload.amount } : {}),
+      ...(payload.totalAmount !== undefined ? { total_amount: payload.totalAmount } : {}),
+      ...(payload.installmentCount !== undefined
+        ? { installment_count: payload.installmentCount }
+        : {}),
+    },
+  });
+}
+
+export async function createDashboardTransaction(payload: {
+  item: string;
+  amount: number;
+  category: string;
+  timestamp: Date;
+  paymentType: DashboardPaymentType;
+  dayOfMonth?: number;
+  installmentCount?: number;
+  createFirstTransactionNow?: boolean;
+}) {
+  await requestJson("POST", "/dashboard/transactions", {
+    body: {
+      item: payload.item,
+      amount: payload.amount,
+      category: payload.category,
+      timestamp: payload.timestamp.toISOString(),
+      payment_type: payload.paymentType,
+      ...(payload.dayOfMonth !== undefined ? { day_of_month: payload.dayOfMonth } : {}),
+      ...(payload.installmentCount !== undefined
+        ? { installment_count: payload.installmentCount }
+        : {}),
+      ...(payload.createFirstTransactionNow !== undefined
+        ? { create_first_transaction_now: payload.createFirstTransactionNow }
+        : {}),
     },
   });
 }
