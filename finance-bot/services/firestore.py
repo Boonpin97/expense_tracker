@@ -568,6 +568,17 @@ def delete_web_sessions_for_chat(chat_id: int) -> int:
     return count
 
 
+def get_dashboard_preferences(chat_id: int) -> dict:
+    doc = get_db().collection("dashboard_preferences").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict() or {}
+    return {}
+
+
+def update_dashboard_preferences(chat_id: int, **fields) -> None:
+    get_db().collection("dashboard_preferences").document(str(chat_id)).set(fields, merge=True)
+
+
 def get_budgets(chat_id: int) -> dict[str, float]:
     doc = get_db().collection("budgets").document(str(chat_id)).get()
     if doc.exists:

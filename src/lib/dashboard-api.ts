@@ -10,6 +10,8 @@ export type DashboardTransaction = {
   category: string;
   timestamp: Date;
   chatId: number;
+  sourceType: string;
+  sourcePlanId: string | null;
 };
 
 export type DashboardCategory = {
@@ -39,6 +41,10 @@ export type DashboardPlan = {
 };
 
 export type DashboardPaymentType = "one_time" | "split_payment" | "recurring";
+
+export type DashboardPreferences = {
+  overviewVisibleCards: string[];
+};
 
 export class DashboardApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -161,6 +167,8 @@ function parseTransaction(data: Record<string, unknown>): DashboardTransaction {
     category: String(data.category ?? "Other"),
     timestamp: new Date(String(data.timestamp ?? "")),
     chatId: typeof data.chat_id === "number" ? data.chat_id : 0,
+    sourceType: String(data.source_type ?? "manual"),
+    sourcePlanId: data.source_plan_id ? String(data.source_plan_id) : null,
   };
 }
 
@@ -169,6 +177,18 @@ function parseCategory(data: Record<string, unknown>): DashboardCategory {
     name: String(data.name ?? ""),
     emoji: String(data.emoji ?? "Tag"),
     order: typeof data.order === "number" ? data.order : 9998,
+  };
+}
+
+function parsePreferences(data: Record<string, unknown> | undefined): DashboardPreferences {
+  const rawCards = data?.overview_visible_cards;
+  return {
+    overviewVisibleCards:
+      rawCards === undefined
+        ? ["today", "week", "month", "budget"]
+        : Array.isArray(rawCards)
+          ? rawCards.filter((value): value is string => typeof value === "string")
+          : ["today", "week", "month", "budget"],
   };
 }
 
@@ -332,6 +352,24 @@ export async function updateDashboardPlan(
       ...(payload.installmentCount !== undefined
         ? { installment_count: payload.installmentCount }
         : {}),
+    },
+  });
+}
+
+export async function fetchDashboardPreferences(): Promise<DashboardPreferences> {
+  const data = await requestJson<{ preferences?: Record<string, unknown> }>(
+    "GET",
+    "/dashboard/preferences",
+  );
+  return parsePreferences(data.preferences);
+}
+
+export async function updateDashboardPreferences(payload: {
+  overviewVisibleCards: string[];
+}): Promise<void> {
+  await requestJson("PATCH", "/dashboard/preferences", {
+    body: {
+      overview_visible_cards: payload.overviewVisibleCards,
     },
   });
 }

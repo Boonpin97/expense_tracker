@@ -82,15 +82,18 @@ import {
   fetchDashboardBudgets,
   fetchDashboardCategories,
   fetchDashboardPlans,
+  fetchDashboardPreferences,
   fetchDashboardSession,
   fetchDashboardTransactions,
   loginToDashboard,
   logoutFromDashboard,
   updateDashboardBudget,
+  updateDashboardPreferences,
   updateDashboardPlan,
   updateDashboardTransaction,
   type DashboardCategory,
   type DashboardPaymentType,
+  type DashboardPreferences,
   type DashboardPlan,
   type DashboardSession,
   type DashboardTransaction,
@@ -357,6 +360,9 @@ function DashboardShell({
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
   const [plans, setPlans] = useState<DashboardPlan[]>([]);
+  const [preferences, setPreferences] = useState<DashboardPreferences>({
+    overviewVisibleCards: [],
+  });
 
   useEffect(() => {
     let active = true;
@@ -369,13 +375,15 @@ function DashboardShell({
       fetchDashboardBudgets(),
       fetchDashboardTransactions({ start: HISTORY_START, end: endOfDay(now) }),
       fetchDashboardPlans(),
+      fetchDashboardPreferences(),
     ])
-      .then(([cats, buds, txns, pls]) => {
+      .then(([cats, buds, txns, pls, prefs]) => {
         if (!active) return;
         setCategories(cats);
         setBudgets(buds);
         setTransactions(txns);
         setPlans(pls);
+        setPreferences(prefs);
         setLoading(false);
       })
       .catch((caught) => {
@@ -471,6 +479,13 @@ function DashboardShell({
     setPlans((current) => current.filter((plan) => plan.id !== planId));
   }
 
+  async function handleUpdatePreferences(next: DashboardPreferences) {
+    setPreferences(next);
+    await updateDashboardPreferences({
+      overviewVisibleCards: next.overviewVisibleCards,
+    });
+  }
+
   return (
     <DashboardLayout
       session={session}
@@ -480,6 +495,7 @@ function DashboardShell({
       budgets={budgets}
       transactions={transactions}
       plans={plans}
+      preferences={preferences}
       onDeleteTransaction={handleDeleteTransaction}
       onLogout={() => void handleLogout()}
       onUpdateTransaction={handleUpdateTransaction}
@@ -487,6 +503,7 @@ function DashboardShell({
       onRefreshBudgets={refreshBudgets}
       onUpdatePlan={handleUpdatePlan}
       onDeletePlan={handleDeletePlan}
+      onUpdatePreferences={handleUpdatePreferences}
     />
   );
 }
@@ -499,6 +516,7 @@ function DashboardLayout({
   budgets,
   transactions,
   plans,
+  preferences,
   onDeleteTransaction,
   onLogout,
   onUpdateTransaction,
@@ -506,6 +524,7 @@ function DashboardLayout({
   onRefreshBudgets,
   onUpdatePlan,
   onDeletePlan,
+  onUpdatePreferences,
 }: {
   session: DashboardSession;
   loading: boolean;
@@ -514,6 +533,7 @@ function DashboardLayout({
   budgets: Record<string, number>;
   transactions: DashboardTransaction[];
   plans: DashboardPlan[];
+  preferences: DashboardPreferences;
   onDeleteTransaction: (transactionId: string) => Promise<void>;
   onLogout: () => void;
   onUpdateTransaction: (
@@ -548,14 +568,10 @@ function DashboardLayout({
     },
   ) => Promise<void>;
   onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
+  onUpdatePreferences: (next: DashboardPreferences) => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
-  const [visibleOverviewCards, setVisibleOverviewCards] = useState([
-    "today",
-    "week",
-    "month",
-    "budget",
-  ]);
+  const [visibleOverviewCards, setVisibleOverviewCards] = useState<string[]>([]);
   const [txnJump, setTxnJump] = useState<{ category: string; version: number } | null>(null);
   const [editingBudgetCategory, setEditingBudgetCategory] = useState<string | null>(null);
   const [editingBudgetAmount, setEditingBudgetAmount] = useState("");
@@ -573,6 +589,14 @@ function DashboardLayout({
   const [createFirstTransactionNow, setCreateFirstTransactionNow] = useState(true);
   const [creatingTransaction, setCreatingTransaction] = useState(false);
   const [createTransactionError, setCreateTransactionError] = useState<string | null>(null);
+  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
+  const [planEditItem, setPlanEditItem] = useState("");
+  const [planEditCategory, setPlanEditCategory] = useState("");
+  const [planEditDay, setPlanEditDay] = useState("");
+  const [planEditAmount, setPlanEditAmount] = useState("");
+  const [planEditMonths, setPlanEditMonths] = useState("");
+  const [savingPlanEdit, setSavingPlanEdit] = useState(false);
+  const [planEditError, setPlanEditError] = useState<string | null>(null);
 
   const catColorMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -661,6 +685,15 @@ function DashboardLayout({
     });
   }, [transactions]);
 
+  useEffect(() => {
+    setVisibleOverviewCards(preferences.overviewVisibleCards);
+  }, [preferences]);
+
+  const editingPlan = useMemo(
+    () => plans.find((plan) => plan.id === editingPlanId) ?? null,
+    [plans, editingPlanId],
+  );
+
   function resetAddTransactionForm() {
     setNewItem("");
     setNewCategory(categories[0]?.name ?? "");
@@ -682,6 +715,100 @@ function DashboardLayout({
     if (creatingTransaction) return;
     setAddTransactionOpen(false);
     setCreateTransactionError(null);
+  }
+
+  async function handleOverviewVisibleCardsChange(next: string[]) {
+    setVisibleOverviewCards(next);
+    try {
+      await onUpdatePreferences({ overviewVisibleCards: next });
+    } catch {
+      // keep optimistic state visible; next reload will reconcile if needed
+    }
+  }
+
+  function openPlanEditDialog(plan: DashboardPlan) {
+    setPlanEditError(null);
+    setEditingPlanId(plan.id);
+    setPlanEditItem(plan.item);
+    setPlanEditCategory(plan.category);
+    setPlanEditDay(String(plan.dayOfMonth));
+    setPlanEditAmount(plan.planType === "recurring" ? String(plan.amount) : String(plan.totalAmount));
+    setPlanEditMonths(plan.planType === "split_payment" ? String(plan.installmentCount) : "");
+  }
+
+  function openPlanEditById(planId: string) {
+    const plan = plans.find((entry) => entry.id === planId);
+    if (!plan || plan.status !== "active") {
+      return false;
+    }
+    openPlanEditDialog(plan);
+    return true;
+  }
+
+  function closePlanEditDialog() {
+    if (savingPlanEdit) return;
+    setEditingPlanId(null);
+    setPlanEditError(null);
+  }
+
+  async function handleSavePlanEdit() {
+    if (!editingPlan) return;
+    const day = parseInt(planEditDay, 10);
+    if (Number.isNaN(day) || day < 1 || day > 31) {
+      setPlanEditError("Day must be between 1 and 31.");
+      return;
+    }
+    if (!planEditItem.trim()) {
+      setPlanEditError("Name cannot be empty.");
+      return;
+    }
+
+    let amount: number | undefined;
+    let totalAmount: number | undefined;
+    let installmentCount: number | undefined;
+
+    if (editingPlan.planType === "recurring") {
+      amount = parseFloat(planEditAmount);
+      if (Number.isNaN(amount) || amount <= 0) {
+        setPlanEditError("Amount must be a positive number.");
+        return;
+      }
+    } else {
+      totalAmount = parseFloat(planEditAmount);
+      installmentCount = parseInt(planEditMonths, 10);
+      if (Number.isNaN(totalAmount) || totalAmount <= 0) {
+        setPlanEditError("Total amount must be a positive number.");
+        return;
+      }
+      if (Number.isNaN(installmentCount) || installmentCount < 1) {
+        setPlanEditError("Months must be at least 1.");
+        return;
+      }
+      if (installmentCount < editingPlan.currentInstallmentNumber) {
+        setPlanEditError(
+          `Months cannot be less than already posted installments (${editingPlan.currentInstallmentNumber}).`,
+        );
+        return;
+      }
+    }
+
+    setSavingPlanEdit(true);
+    setPlanEditError(null);
+    try {
+      await onUpdatePlan(editingPlan.id, {
+        item: planEditItem.trim(),
+        category: planEditCategory,
+        dayOfMonth: day,
+        ...(amount !== undefined ? { amount } : {}),
+        ...(totalAmount !== undefined ? { totalAmount } : {}),
+        ...(installmentCount !== undefined ? { installmentCount } : {}),
+      });
+      closePlanEditDialog();
+    } catch (err) {
+      setPlanEditError(err instanceof Error ? err.message : "Failed to update plan.");
+    } finally {
+      setSavingPlanEdit(false);
+    }
   }
 
   function openEditBudget(categoryName: string, currentAmount: number) {
@@ -829,18 +956,19 @@ function DashboardLayout({
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
           <div className="flex min-h-9 items-center justify-between gap-3">
-            <div>
+            <div />
+            <div className="flex items-center gap-2">
+              <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
+                <Plus className="mr-2 h-4 w-4" />
+                Add Transaction
+              </Button>
               {activeTab === "overview" ? (
                 <OverviewInfoPopover
                   visible={visibleOverviewCards}
-                  onVisibleChange={setVisibleOverviewCards}
+                  onVisibleChange={handleOverviewVisibleCardsChange}
                 />
               ) : null}
             </div>
-            <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
-              <Plus className="mr-2 h-4 w-4" />
-              Add Transaction
-            </Button>
           </div>
 
           <TabsContent value="overview" className="space-y-6">
@@ -1055,6 +1183,7 @@ function DashboardLayout({
               loading={loading}
               onDeleteTransaction={onDeleteTransaction}
               onUpdateTransaction={onUpdateTransaction}
+              onEditPlanTransaction={openPlanEditById}
               jump={txnJump}
             />
           </TabsContent>
@@ -1064,7 +1193,7 @@ function DashboardLayout({
               plans={plans}
               categories={categories}
               loading={loading}
-              onUpdatePlan={onUpdatePlan}
+              onEditPlan={openPlanEditDialog}
               onDeletePlan={onDeletePlan}
             />
           </TabsContent>
@@ -1224,6 +1353,130 @@ function DashboardLayout({
               >
                 {creatingTransaction ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Create
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={editingPlan !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              closePlanEditDialog();
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit plan</DialogTitle>
+              <DialogDescription>
+                {editingPlan?.planType === "split_payment"
+                  ? "Update name, category, day, total amount, or number of months."
+                  : "Update name, category, day, or amount."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  value={planEditItem}
+                  onChange={(e) => setPlanEditItem(e.target.value)}
+                  disabled={savingPlanEdit}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Category</Label>
+                <Select
+                  value={planEditCategory}
+                  onValueChange={setPlanEditCategory}
+                  disabled={savingPlanEdit}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((category) => (
+                      <SelectItem key={category.name} value={category.name}>
+                        {category.emoji} {category.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Day of Month</Label>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  max="31"
+                  value={planEditDay}
+                  onChange={(e) => setPlanEditDay(e.target.value)}
+                  disabled={savingPlanEdit}
+                />
+              </div>
+              {editingPlan?.planType === "recurring" ? (
+                <div className="space-y-2">
+                  <Label>Monthly Amount</Label>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min="0.01"
+                    step="0.01"
+                    value={planEditAmount}
+                    onChange={(e) => setPlanEditAmount(e.target.value)}
+                    disabled={savingPlanEdit}
+                  />
+                </div>
+              ) : editingPlan ? (
+                <>
+                  <div className="space-y-2">
+                    <Label>Total Amount</Label>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min="0.01"
+                      step="0.01"
+                      value={planEditAmount}
+                      onChange={(e) => setPlanEditAmount(e.target.value)}
+                      disabled={savingPlanEdit}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Months</Label>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min={Math.max(1, editingPlan.currentInstallmentNumber)}
+                      step="1"
+                      value={planEditMonths}
+                      onChange={(e) => setPlanEditMonths(e.target.value)}
+                      disabled={savingPlanEdit}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Saving a split-plan edit recalculates the schedule and rewrites this plan&apos;s
+                    auto-generated charges to stay consistent.
+                  </p>
+                </>
+              ) : null}
+              {planEditError ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {planEditError}
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={closePlanEditDialog}
+                disabled={savingPlanEdit}
+              >
+                Cancel
+              </Button>
+              <Button onClick={() => void handleSavePlanEdit()} disabled={savingPlanEdit}>
+                {savingPlanEdit ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Save
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1405,7 +1658,7 @@ function OverviewInfoPopover({
   onVisibleChange,
 }: {
   visible: string[];
-  onVisibleChange: (value: string[]) => void;
+  onVisibleChange: (value: string[]) => void | Promise<void>;
 }) {
   const statCards = [
     { key: "today", label: "Today" },
@@ -1653,6 +1906,7 @@ function TransactionsTab({
   loading,
   onDeleteTransaction,
   onUpdateTransaction,
+  onEditPlanTransaction,
   jump,
 }: {
   transactions: DashboardTransaction[];
@@ -1669,6 +1923,7 @@ function TransactionsTab({
       timestamp: Date;
     },
   ) => Promise<void>;
+  onEditPlanTransaction: (planId: string) => boolean;
   jump?: { category: string; version: number } | null;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
@@ -1767,6 +2022,15 @@ function TransactionsTab({
 
   function openEditDialog(transaction: DashboardTransaction) {
     setActionError(null);
+    if (
+      (transaction.sourceType === "recurring" || transaction.sourceType === "split_payment") &&
+      transaction.sourcePlanId
+    ) {
+      if (!onEditPlanTransaction(transaction.sourcePlanId)) {
+        setActionError("Linked plan not found.");
+      }
+      return;
+    }
     setEditingTransactionId(transaction.id);
     setEditingItem(transaction.item);
     setEditingAmount(String(transaction.amount));
@@ -2130,113 +2394,20 @@ function PlansTab({
   plans,
   categories,
   loading,
-  onUpdatePlan,
+  onEditPlan,
   onDeletePlan,
 }: {
   plans: DashboardPlan[];
   categories: DashboardCategory[];
   loading: boolean;
-  onUpdatePlan: (
-    planId: string,
-    payload: {
-      item?: string;
-      category?: string;
-      dayOfMonth?: number;
-      amount?: number;
-      totalAmount?: number;
-      installmentCount?: number;
-    },
-  ) => Promise<void>;
+  onEditPlan: (plan: DashboardPlan) => void;
   onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
 }) {
-  const [editingPlan, setEditingPlan] = useState<DashboardPlan | null>(null);
-  const [editItem, setEditItem] = useState("");
-  const [editCategory, setEditCategory] = useState("");
-  const [editDay, setEditDay] = useState("");
-  const [editAmount, setEditAmount] = useState("");
-  const [editMonths, setEditMonths] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-
   const [deletingPlan, setDeletingPlan] = useState<DashboardPlan | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const recurringPlans = plans.filter((p) => p.planType === "recurring");
   const splitPlans = plans.filter((p) => p.planType === "split_payment");
-
-  function openEdit(plan: DashboardPlan) {
-    setEditError(null);
-    setEditingPlan(plan);
-    setEditItem(plan.item);
-    setEditCategory(plan.category);
-    setEditDay(String(plan.dayOfMonth));
-    setEditAmount(
-      plan.planType === "recurring" ? String(plan.amount) : String(plan.totalAmount),
-    );
-    setEditMonths(plan.planType === "split_payment" ? String(plan.installmentCount) : "");
-  }
-
-  function closeEdit() {
-    if (saving) return;
-    setEditingPlan(null);
-  }
-
-  async function handleSaveEdit() {
-    if (!editingPlan) return;
-    const day = parseInt(editDay, 10);
-    if (Number.isNaN(day) || day < 1 || day > 31) {
-      setEditError("Day must be between 1 and 31.");
-      return;
-    }
-    if (!editItem.trim()) {
-      setEditError("Name cannot be empty.");
-      return;
-    }
-    let amount: number | undefined;
-    let totalAmount: number | undefined;
-    let installmentCount: number | undefined;
-    if (editingPlan.planType === "recurring") {
-      amount = parseFloat(editAmount);
-      if (Number.isNaN(amount) || amount <= 0) {
-        setEditError("Amount must be a positive number.");
-        return;
-      }
-    } else {
-      totalAmount = parseFloat(editAmount);
-      installmentCount = parseInt(editMonths, 10);
-      if (Number.isNaN(totalAmount) || totalAmount <= 0) {
-        setEditError("Total amount must be a positive number.");
-        return;
-      }
-      if (Number.isNaN(installmentCount) || installmentCount < 1) {
-        setEditError("Months must be at least 1.");
-        return;
-      }
-      if (installmentCount < editingPlan.currentInstallmentNumber) {
-        setEditError(
-          `Months cannot be less than already posted installments (${editingPlan.currentInstallmentNumber}).`,
-        );
-        return;
-      }
-    }
-    setSaving(true);
-    setEditError(null);
-    try {
-      await onUpdatePlan(editingPlan.id, {
-        item: editItem.trim(),
-        category: editCategory,
-        dayOfMonth: day,
-        ...(amount !== undefined ? { amount } : {}),
-        ...(totalAmount !== undefined ? { totalAmount } : {}),
-        ...(installmentCount !== undefined ? { installmentCount } : {}),
-      });
-      setEditingPlan(null);
-    } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Failed to update plan.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function handleDeleteConfirm(mode: "future" | "all") {
     if (!deletingPlan) return;
@@ -2310,7 +2481,7 @@ function PlansTab({
               className="h-8 w-8"
               disabled={!isActive}
               aria-label={`Edit ${plan.item}`}
-              onClick={() => openEdit(plan)}
+              onClick={() => onEditPlan(plan)}
             >
               <Pencil className="h-4 w-4" />
             </Button>
@@ -2378,110 +2549,6 @@ function PlansTab({
     <>
       <PlanTable title="Recurring Plans" items={recurringPlans} />
       <PlanTable title="Split Payment Plans" items={splitPlans} />
-
-      {/* Edit dialog */}
-      <Dialog open={editingPlan !== null} onOpenChange={(open) => { if (!open) closeEdit(); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit plan</DialogTitle>
-            <DialogDescription>
-              {editingPlan?.planType === "split_payment"
-                ? "Update name, category, day, total amount, or number of months."
-                : "Update name, category, day, or amount."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-2">
-            <div className="space-y-2">
-              <Label>Name</Label>
-              <Input value={editItem} onChange={(e) => setEditItem(e.target.value)} disabled={saving} />
-            </div>
-            <div className="space-y-2">
-              <Label>Category</Label>
-              <Select value={editCategory} onValueChange={setEditCategory} disabled={saving}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categories.map((cat) => (
-                    <SelectItem key={cat.name} value={cat.name}>
-                      {cat.emoji} {cat.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Day of Month</Label>
-              <Input
-                type="number"
-                inputMode="numeric"
-                min="1"
-                max="31"
-                value={editDay}
-                onChange={(e) => setEditDay(e.target.value)}
-                disabled={saving}
-              />
-            </div>
-            {editingPlan?.planType === "recurring" ? (
-              <div className="space-y-2">
-                <Label>Monthly Amount</Label>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  min="0.01"
-                  step="0.01"
-                  value={editAmount}
-                  onChange={(e) => setEditAmount(e.target.value)}
-                  disabled={saving}
-                />
-              </div>
-            ) : editingPlan ? (
-              <>
-                <div className="space-y-2">
-                  <Label>Total Amount</Label>
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    min="0.01"
-                    step="0.01"
-                    value={editAmount}
-                    onChange={(e) => setEditAmount(e.target.value)}
-                    disabled={saving}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Months</Label>
-                  <Input
-                    type="number"
-                    inputMode="numeric"
-                    min={Math.max(1, editingPlan.currentInstallmentNumber)}
-                    step="1"
-                    value={editMonths}
-                    onChange={(e) => setEditMonths(e.target.value)}
-                    disabled={saving}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Saving a split-plan edit recalculates the schedule and rewrites this plan&apos;s
-                  auto-generated charges to stay consistent.
-                </p>
-              </>
-            ) : null}
-            {editError ? (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {editError}
-              </div>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={closeEdit} disabled={saving}>Cancel</Button>
-            <Button onClick={() => void handleSaveEdit()} disabled={saving}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Delete dialog */}
       <Dialog open={deletingPlan !== null} onOpenChange={(open) => { if (!open && !deletingId) setDeletingPlan(null); }}>

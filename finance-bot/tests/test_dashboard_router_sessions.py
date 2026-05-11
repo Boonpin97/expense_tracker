@@ -228,6 +228,22 @@ class DashboardRouterSessionTests(unittest.TestCase):
         mock_delete_plan.assert_called_once_with("plan-1")
         mock_delete_tx.assert_not_called()
 
+    def test_update_dashboard_preferences_persists_overview_cards(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        session = {"chat_id": 123}
+        payload = dashboard.DashboardPreferencesUpdateRequest(
+            overview_visible_cards=["today", "month"],
+        )
+
+        with (
+            patch.object(dashboard, "_require_session", return_value=session),
+            patch.object(dashboard, "update_dashboard_preferences") as mock_update,
+        ):
+            result = asyncio.run(dashboard.update_dashboard_user_preferences(payload, request))
+
+        self.assertEqual(result, {"ok": True})
+        mock_update.assert_called_once_with(123, overview_visible_cards=["today", "month"])
+
     def test_create_dashboard_one_time_transaction_saves_manual_transaction(self):
         request = SimpleNamespace(cookies={}, headers={})
         session = {"chat_id": 123}

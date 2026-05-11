@@ -29,6 +29,7 @@ from services.firestore import (
     get_account_by_username,
     get_budgets,
     get_category_list,
+    get_dashboard_preferences,
     get_payment_plan,
     get_transaction_by_id,
     get_transactions_with_ids,
@@ -42,6 +43,7 @@ from services.firestore import (
     save_transaction,
     save_web_session,
     set_budget,
+    update_dashboard_preferences,
     update_category_emoji,
     update_category_order,
     update_payment_plan,
@@ -100,6 +102,10 @@ class CategoryMoveRequest(BaseModel):
 
 class BudgetSetRequest(BaseModel):
     amount: float
+
+
+class DashboardPreferencesUpdateRequest(BaseModel):
+    overview_visible_cards: list[str]
 
 
 def _dashboard_url() -> str:
@@ -261,6 +267,7 @@ async def get_dashboard_bootstrap(request: Request):
         },
         "categories": get_category_list(session["chat_id"]),
         "budgets": get_budgets(session["chat_id"]),
+        "preferences": get_dashboard_preferences(session["chat_id"]),
     }
 
 
@@ -515,6 +522,25 @@ async def update_dashboard_budget(category_name: str, body: BudgetSetRequest, re
 async def delete_dashboard_budget(category_name: str, request: Request):
     session = _require_session(request)
     remove_budget(session["chat_id"], category_name)
+    return {"ok": True}
+
+
+@router.get("/preferences")
+async def get_dashboard_user_preferences(request: Request):
+    session = _require_session(request)
+    return {"preferences": get_dashboard_preferences(session["chat_id"])}
+
+
+@router.patch("/preferences")
+async def update_dashboard_user_preferences(
+    payload: DashboardPreferencesUpdateRequest,
+    request: Request,
+):
+    session = _require_session(request)
+    update_dashboard_preferences(
+        session["chat_id"],
+        overview_visible_cards=payload.overview_visible_cards,
+    )
     return {"ok": True}
 
 
