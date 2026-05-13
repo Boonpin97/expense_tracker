@@ -1745,7 +1745,7 @@ function CategoryPieCard({
         />
       </CardHeader>
       <CardContent>
-        <div className="h-72 w-full">
+        <div className="h-80 w-full">
           {loading ? (
             <CenteredChartMessage label="Loading..." />
           ) : pieData.length === 0 ? (
@@ -1760,8 +1760,6 @@ function CategoryPieCard({
                   innerRadius={50}
                   outerRadius={85}
                   paddingAngle={2}
-                  label={({ value }) => currency.format(Number(value ?? 0))}
-                  labelLine={false}
                 >
                   {pieData.map((entry) => (
                     <Cell key={entry.name} fill={entry.color} />
@@ -1772,10 +1770,10 @@ function CategoryPieCard({
                   formatter={(value: number) => currency.format(value)}
                 />
                 <Legend
-                  layout="vertical"
-                  align="right"
-                  verticalAlign="middle"
-                  wrapperStyle={{ fontSize: 12 }}
+                  layout="horizontal"
+                  align="center"
+                  verticalAlign="bottom"
+                  wrapperStyle={{ fontSize: 12, paddingTop: 12 }}
                   formatter={(value, entry: { payload?: { value?: number } }) => (
                     <span className="text-foreground">
                       {value}{" "}
