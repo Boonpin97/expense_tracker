@@ -32,6 +32,8 @@ dist-ssr
 .vinxi
 .tanstack/**
 .nitro
+.firebase/
+.env.local
 *.local
 npm-debug.log*
 yarn-debug.log*
@@ -39,6 +41,11 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 .npm-cache/
+
+# Flutter generated
+.dart_tool/
+build/
+.flutter-plugins-dependencies
 
 # Wrangler / Cloudflare
 .wrangler/

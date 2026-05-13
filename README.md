@@ -1,8 +1,8 @@
-# Telegram Finance & Budgeting Bot — Copilot Prompt
+# Telegram Finance Bot & Web Dashboard
 
-## Project Overview
+A Telegram bot that tracks personal expenses with a React web dashboard for browsing and managing financial data.
 
-Build a Telegram bot that tracks personal finances and sends spending reports. Users send messages like `Coffee $10` and the bot categorises the expense, stores it, and sends daily, weekly, and monthly summaries.
+Users send messages like `Coffee $10` and the bot categorises the expense, stores it in Firestore, manages recurring payment plans, and sends daily, weekly, and monthly spending summaries.
 
 ---
 
@@ -11,352 +11,253 @@ Build a Telegram bot that tracks personal finances and sends spending reports. U
 | Layer | Technology |
 |---|---|
 | Bot interface | Telegram Bot API (webhook mode) |
-| Backend | FastAPI (Python) |
-| Hosting | Google Cloud Run (backend) · Firebase Hosting (web dashboard) |
+| Backend | FastAPI (Python), Cloud Run |
 | Database | Google Cloud Firestore |
 | Scheduler | Google Cloud Scheduler |
 | Web dashboard | React 19 + TanStack Router + Vite + Tailwind CSS v4 + shadcn/ui |
+| Hosting | Firebase Hosting (web dashboard) |
+| CI/CD | Cloud Build (auto-deploy on git push) |
 
 ---
 
-## ⚙️ Required Credentials & Where to Put Them
-
-Before writing any code, complete the following setup steps and collect the values listed. All values go into a `.env` file at the project root. **Do not hardcode any of these into source files.**
-
----
-
-### 1. Telegram Bot — get your Bot Token
-
-1. Open Telegram and message **@BotFather**
-2. Send `/newbot` and follow the prompts to name your bot
-3. BotFather will give you a token that looks like: `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ`
-
-```env
-# .env
-TELEGRAM_BOT_TOKEN=<paste your BotFather token here>
-```
-
-After deploying to Cloud Run (step 3), come back and register your webhook:
-```
-https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://<your-cloud-run-url>/webhook
-```
-
----
-
-### 2. Firestore — get your project credentials
-
-#### 2a. Create the Firestore database
-
-1. Go to [https://console.firebase.google.com](https://console.firebase.google.com)
-2. Create a new project (or use an existing GCP project)
-3. Navigate to **Firestore Database → Create database**
-4. Choose **Native mode** and select a region close to your users (e.g. `asia-southeast1` for Singapore)
-
-#### 2b. Create a service account
-
-1. In the GCP Console, go to **IAM & Admin → Service Accounts**
-2. Click **Create Service Account**
-3. Give it a name (e.g. `finance-bot-sa`)
-4. Assign the role: **Cloud Datastore User**
-5. Click **Done**, then open the service account → **Keys → Add Key → JSON**
-6. Download the JSON file and save it as `serviceAccountKey.json` in the project root
-7. **Add `serviceAccountKey.json` to `.gitignore` immediately**
-
-```env
-# .env
-GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
-FIRESTORE_PROJECT_ID=<your GCP project ID, found in the JSON file under "project_id">
-```
-
-#### 2c. Firestore collections to create manually (optional, auto-created on first write)
-
-| Collection | Purpose |
-|---|---|
-| `transactions` | Every expense logged by the user |
-| `category_map` | Learned item→category mappings |
-
----
-
-### 3. Cloud Run — deploy the backend
-
-#### 3a. Install prerequisites
-
-```bash
-# Install Google Cloud CLI: https://cloud.google.com/sdk/docs/install
-gcloud auth login
-gcloud config set project <YOUR_GCP_PROJECT_ID>
-```
-
-#### 3b. Deploy command (run from project root)
-
-```bash
-gcloud run deploy finance-bot \
-  --source . \
-  --region asia-southeast1 \
-  --allow-unauthenticated \
-  --set-env-vars TELEGRAM_BOT_TOKEN=<your-token>,FIRESTORE_PROJECT_ID=<your-project-id>
-```
-
-After deployment, GCP will output a URL like:
-```
-https://finance-bot-<hash>-as.a.run.app
-```
-
-```env
-# .env
-CLOUD_RUN_URL=<paste the full Cloud Run service URL here>
-```
-
-Use this URL to register the Telegram webhook (see step 1).
-
----
-
-### 4. Cloud Scheduler — set up cron jobs
-
-Run these three commands to create the daily, weekly, and monthly report triggers. Replace `<CLOUD_RUN_URL>` with your deployed service URL and `<YOUR_GCP_PROJECT_ID>` with your project ID.
-
-```bash
-# Daily report — every day at 9 PM Singapore time (UTC+8 = 13:00 UTC)
-gcloud scheduler jobs create http finance-bot-daily \
-  --schedule="0 13 * * *" \
-  --uri="<CLOUD_RUN_URL>/trigger-report?period=daily" \
-  --http-method=POST \
-  --location=asia-southeast1
-
-# Weekly report — every Monday at 9 AM Singapore time
-gcloud scheduler jobs create http finance-bot-weekly \
-  --schedule="0 1 * * 1" \
-  --uri="<CLOUD_RUN_URL>/trigger-report?period=weekly" \
-  --http-method=POST \
-  --location=asia-southeast1
-
-# Monthly report — 1st of every month at 9 AM Singapore time
-gcloud scheduler jobs create http finance-bot-monthly \
-  --schedule="0 1 1 * *" \
-  --uri="<CLOUD_RUN_URL>/trigger-report?period=monthly" \
-  --http-method=POST \
-  --location=asia-southeast1
-```
-
-```env
-# .env — add the Telegram user/chat ID so the scheduler knows who to message
-TELEGRAM_CHAT_ID=<your Telegram user ID — get it by messaging @userinfobot>
-```
-
----
-
-## 🌐 Web Dashboard
-
-A React web dashboard is served at the Firebase Hosting URLs below. It connects to the same backend API as the bot.
-
-| Environment | URL |
-|---|---|
-| Production | https://budget-bot-123.web.app |
-| Development | https://budget-bot-123-dev.web.app |
-
-### Dashboard structure
+## Project Structure
 
 ```
-lovable/
-├── src/
+expense_tracker/
+├── finance-bot/                  # FastAPI backend (Telegram bot + dashboard API)
+│   ├── main.py                   # App entry point, lifespan, CORS, router registration
+│   ├── routers/
+│   │   ├── webhook.py            # POST /webhook — handles all Telegram updates
+│   │   ├── reports.py            # POST /trigger-report — called by Cloud Scheduler
+│   │   └── dashboard.py          # /dashboard/* — web dashboard REST API
+│   ├── services/
+│   │   ├── firestore.py          # All Firestore read/write operations
+│   │   ├── categoriser.py        # Category lookup and inline keyboard prompt flow
+│   │   ├── telegram.py           # Telegram Bot API wrappers and keyboard builders
+│   │   ├── interaction_sessions.py  # Shared multi-step flow state management
+│   │   ├── payment_plans.py      # Recurring/split payment calculations
+│   │   ├── plan_manager.py       # Payment plan lifecycle and due-plan processing
+│   │   ├── dashboard_auth.py     # Web account password hashing and session tokens
+│   │   └── category_migration.py # One-off category data migration helpers
+│   ├── models/
+│   │   └── transaction.py        # Pydantic models (Transaction, PaymentPlan, FlowSession, …)
+│   ├── tests/                    # unittest test suite
+│   ├── Dockerfile
+│   └── requirements.txt
+├── src/                          # React web dashboard
 │   ├── routes/
-│   │   ├── __root.tsx          # App shell (head, body, Scripts)
-│   │   └── index.tsx           # Dashboard + sign-in page
+│   │   ├── __root.tsx            # App shell
+│   │   └── index.tsx             # Main dashboard + sign-in page
 │   ├── lib/
-│   │   ├── dashboard-api.ts    # API client (auth, transactions, categories, budgets)
-│   │   └── dashboard-analytics.ts  # Analytics helpers (date presets, summaries)
-│   ├── components/ui/          # shadcn/ui component library
+│   │   ├── dashboard-api.ts      # API client (auth, transactions, categories, budgets)
+│   │   └── dashboard-analytics.ts  # Date presets and aggregation helpers
+│   ├── components/ui/            # shadcn/ui component library
 │   └── styles.css
+├── scripts/
+│   ├── migrate_category_collections.py  # One-off category subcollection migration
+│   └── clone_category_collections.py   # Copy categories from one user to another
 ├── public/
-│   └── logo.png                # App icon shown on the sign-in screen
-└── package.json
+│   └── logo.png
+├── firebase.json                 # Hosting config (prod + dev targets)
+├── firestore.rules
+├── firestore.indexes.json
+├── package.json
+└── vite.config.ts
 ```
 
-### Build & deploy
+---
+
+## Environments
+
+GCP project: `budget-bot-123`
+
+| Resource | Production (`main`) | Development (`development`) |
+|---|---|---|
+| Cloud Run | `finance-bot` | `finance-bot-dev` |
+| Cloud Run URL | `https://finance-bot-jrpmzkxwoa-as.a.run.app` | `https://finance-bot-dev-jrpmzkxwoa-as.a.run.app` |
+| Firestore DB | `(default)` | `developer` |
+| Firebase Hosting | `https://budget-bot-123.web.app` | `https://budget-bot-123-dev.web.app` |
+
+All resources are in region `asia-southeast1`.
+
+---
+
+## Environment Variables
+
+The backend reads these at runtime (Cloud Run env vars or local `.env`):
+
+```env
+TELEGRAM_BOT_TOKEN=          # BotFather token
+TELEGRAM_CHAT_IDS=           # Comma-separated allowlist of authorised Telegram user IDs
+FIRESTORE_PROJECT_ID=        # GCP project ID (budget-bot-123)
+FIRESTORE_DATABASE=          # Firestore database name: (default) for prod, developer for dev
+CLOUD_RUN_URL=               # Full Cloud Run service URL (used for webhook registration)
+SCHEDULER_SECRET=            # Shared secret — Cloud Scheduler sends this in X-Scheduler-Token
+TELEGRAM_WEBHOOK_SECRET=     # Shared secret — Telegram sends this in X-Telegram-Bot-Api-Secret-Token
+DASHBOARD_DEV_ORIGIN=        # Allowed CORS origin for dev (e.g. http://localhost:5173)
+```
+
+For local development, create `finance-bot/.env` and add a `serviceAccountKey.json` (Cloud Datastore User role) to authenticate Firestore.
+
+---
+
+## Local Development
+
+### Backend
 
 ```powershell
-# Build
-cd lovable
+cd finance-bot
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8080
+```
+
+Run tests:
+
+```powershell
+cd finance-bot
+python -m unittest
+```
+
+### Frontend
+
+```powershell
+npm install
+npm run dev        # Vite dev server at http://localhost:5173
+```
+
+---
+
+## Deployment
+
+### Backend (Cloud Run)
+
+Never deploy manually. Cloud Build triggers handle all Cloud Run deployments automatically on git push:
+
+- Push to `development` → deploys to `finance-bot-dev`
+- Push to `main` → deploys to `finance-bot`
+
+### Web Dashboard
+
+```powershell
+# Build from project root
 npm run build
 
-# Deploy to dev (default)
+# Deploy to dev (default — always use unless explicitly deploying to prod)
 firebase deploy --only hosting:dev
 
 # Deploy to prod (explicit instruction required)
 firebase deploy --only hosting:prod
 ```
 
-> **Note:** Cloud Run (backend) is deployed automatically by Cloud Build on git push — never run `gcloud run deploy` manually.
+If a prod deploy fails with a Firebase uploader `paths[1] undefined` error:
 
----
-
-## 📁 Project Structure to Generate
-
-```
-finance-bot/
-├── main.py                  # FastAPI app entry point
-├── routers/
-│   ├── webhook.py           # POST /webhook — handles Telegram updates
-│   └── reports.py           # POST /trigger-report — called by Cloud Scheduler
-├── services/
-│   ├── parser.py            # Parses "Coffee $10" into {item, amount}
-│   ├── categoriser.py       # Looks up category_map, prompts user if unknown
-│   ├── firestore.py         # All Firestore read/write operations
-│   └── telegram.py          # Wrapper for Telegram Bot API calls
-├── models/
-│   └── transaction.py       # Pydantic models for Transaction and CategoryMap
-├── .env                     # ← All secrets go here (never commit this)
-├── .env.example             # Safe template with placeholder values
-├── .gitignore               # Must include .env and serviceAccountKey.json
-├── Dockerfile               # For Cloud Run deployment
-├── requirements.txt
-└── README.md
+```powershell
+Remove-Item .firebase\hosting.*.cache -ErrorAction SilentlyContinue
+npm run build
+firebase deploy --only hosting:prod
 ```
 
 ---
 
-## 🗃️ Firestore Data Models
+## Firestore Collections
 
-### Collection: `transactions`
-
-```python
-# Each document represents one expense entry
-{
-    "id": "auto-generated",
-    "item": "Coffee",           # Original item name as typed by user
-    "amount": 10.00,            # Float, in SGD (or user's local currency)
-    "category": "Food & Drink", # Resolved category
-    "timestamp": "2024-01-15T21:00:00+08:00",  # ISO 8601 with timezone
-    "chat_id": 123456789        # Telegram chat ID of the user
-}
-```
-
-### Collection: `category_map`
-
-```python
-# Document ID = item name lowercased and stripped (e.g. "coffee", "grab")
-{
-    "item_key": "coffee",       # Normalised item name (document ID)
-    "category": "Food & Drink", # User-confirmed category
-    "confirmed_by_user": True,  # False if auto-guessed, True if user picked it
-    "created_at": "2024-01-15T21:00:00+08:00"
-}
-```
+| Collection | Purpose |
+|---|---|
+| `transactions` | All expense entries (chat_id, item, amount, category, timestamp, source_type) |
+| `users/{chat_id}/category_list` | Per-user categories (name, emoji, order) |
+| `users/{chat_id}/category_map` | Learned item→category mappings |
+| `users/{chat_id}/budgets` | Monthly budget limits per category |
+| `users/{chat_id}/payment_plans` | Recurring and split payment plan definitions |
+| `users/{chat_id}/pending_plans` | In-progress plan creation state |
+| `pending` | Temporary transactions awaiting category selection (keyed by chat_id) |
+| `pending_change` | Temporary transaction edit state |
+| `web_accounts` | Dashboard login credentials (username, password_hash, chat_id) |
+| `web_sessions` | Active dashboard sessions (token hash, expires_at) |
+| `interaction_sessions` | Multi-step flow state for bot interactions (flow_type, step, payload, expires_at) |
 
 ---
 
-## 🤖 Core Logic to Implement
+## Core Features
 
-### Message parsing (`services/parser.py`)
+### Expense Logging
 
-- Accept freeform text like `Coffee $10`, `Grab $15.50`, `electricity bill 120`
-- Extract the item name and dollar amount using regex
-- Return `{"item": "Coffee", "amount": 10.00}` or `None` if unparseable
-- Reply with a friendly error if the format is unrecognised
+Users send freeform text (`Coffee $10`, `Grab $15.50`, `electricity 120`). The parser extracts item and amount, then the categoriser:
 
-### Category engine (`services/categoriser.py`)
+1. Normalises the item name and looks up the user's `category_map`
+2. **Known item**: saves the transaction immediately and confirms to the user
+3. **Unknown item**: saves to `pending` and sends an inline category keyboard; user taps a category to confirm
 
-1. Normalise the item name (lowercase, strip punctuation)
-2. Query `category_map` collection for an exact match on the document ID
-3. **If found**: use the stored category, save the transaction, confirm to the user
-4. **If not found**: send a Telegram inline keyboard with preset categories:
-   - 🍔 Food & Drink
-   - 🚗 Transport
-   - 🏠 Housing
-   - 💊 Health
-   - 🎬 Entertainment
-   - 🛍️ Shopping
-   - 💡 Utilities
-   - ➕ Other (prompts user to type a custom category)
-5. On user selection: save both the transaction and the new `category_map` entry
+### Category Management
 
-### Webhook handler (`routers/webhook.py`)
+Users have a personal `category_list` with custom names, emojis, and display order. The bot supports adding, renaming, reordering, and deleting categories via inline keyboards.
 
-- Handle two types of Telegram updates:
-  - `message` — a new expense text from the user
-  - `callback_query` — a category button tap from the inline keyboard
-- On `callback_query`, retrieve the pending transaction from a temporary Firestore document (keyed by `chat_id`), apply the chosen category, save the final transaction, and delete the temp document
+### Payment Plans
 
-### Report generator (`routers/reports.py`)
+Two plan types:
+- **Recurring**: charges a fixed amount on the same day each month indefinitely
+- **Split payment**: splits a total across N monthly installments
 
-- Accept `?period=daily|weekly|monthly` query parameter
-- Query `transactions` where `timestamp` falls within the period window
-- Group results by `category` and sum amounts
-- Format and send a Telegram message like:
+Due plans are processed automatically by Cloud Scheduler. Past installments can be rewritten if a plan is edited or deleted.
 
-```
-📊 Weekly Report (13–19 Jan)
-─────────────────────────
-🍔 Food & Drink     $142.50
-🚗 Transport         $38.00
-🛍️ Shopping          $95.00
-─────────────────────────
-💰 Total            $275.50
-```
+### Budget Tracking
+
+Users set per-category monthly budget limits. The bot sends a warning after any transaction that causes a category to exceed its budget.
+
+### Reports
+
+Cloud Scheduler triggers three report types:
+- **Daily** (9 PM SGT): itemised list of today's transactions
+- **Weekly** (Monday 9 AM SGT): category breakdown for the past week
+- **Monthly** (1st of month 9 AM SGT): category breakdown + budget comparison
+
+### Web Dashboard
+
+React SPA deployed on Firebase Hosting. Features:
+- Sign-in with username + password (account created via Telegram bot)
+- Expense table with pagination, date range filtering, inline edit and delete
+- Charts: pie (by category), bar (daily/weekly), line (trend)
+- Category editor (rename, emoji, reorder)
+- Budget manager
 
 ---
 
-## 🐳 Dockerfile
+## Scripts
 
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+### Category Migration
+
+Migrates category data from legacy global or top-level user-scoped documents into the current `users/{chat_id}/...` subcollection structure.
+
+```bash
+# Dry run — preview counts without writing
+python scripts/migrate_category_collections.py --chat-id <CHAT_ID> --database <DB>  --dry-run
+
+# Migrate and delete source documents
+python scripts/migrate_category_collections.py --chat-id <CHAT_ID> --database <DB>
+
+# Migrate without deleting source documents
+python scripts/migrate_category_collections.py --chat-id <CHAT_ID> --database <DB> --keep-source
 ```
 
-> Cloud Run expects the app to listen on port **8080**.
+### Category Clone
 
----
+Copies all categories from one user to another (useful for seeding a new account).
 
-## 📦 requirements.txt
+```bash
+# Dry run
+python scripts/clone_category_collections.py \
+  --source-chat-id <SOURCE> --target-chat-id <TARGET> --database <DB> --dry-run
 
-```
-fastapi
-uvicorn[standard]
-python-telegram-bot==20.*
-google-cloud-firestore
-python-dotenv
-pydantic
-httpx
+# Execute
+python scripts/clone_category_collections.py \
+  --source-chat-id <SOURCE> --target-chat-id <TARGET> --database <DB>
 ```
 
----
-
-## 🔒 .env.example (commit this, not .env)
-
-```env
-TELEGRAM_BOT_TOKEN=your-telegram-bot-token-here
-TELEGRAM_CHAT_ID=your-telegram-user-id-here
-FIRESTORE_PROJECT_ID=your-gcp-project-id-here
-GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
-CLOUD_RUN_URL=https://your-service-url.a.run.app
-```
-
----
-
-## ✅ Implementation Checklist for Copilot
-
-Generate the files in this order:
-
-1. `models/transaction.py` — Pydantic schemas
-2. `services/firestore.py` — all DB reads and writes
-3. `services/parser.py` — message parsing logic
-4. `services/telegram.py` — send message and inline keyboard helpers
-5. `services/categoriser.py` — category lookup and user prompt flow
-6. `routers/webhook.py` — Telegram webhook endpoint
-7. `routers/reports.py` — scheduled report endpoint
-8. `main.py` — FastAPI app setup, router registration, health check endpoint
-9. `Dockerfile` and `requirements.txt`
-10. `.env.example` and `.gitignore`
+Both scripts read `FIRESTORE_PROJECT_ID` from the environment.
 
 ---
 
 ## Notes
 
-- All timestamps should be stored in **ISO 8601 format with timezone offset** (`+08:00` for Singapore)
-- The `/trigger-report` endpoint should be protected. Add a `X-Scheduler-Token` header check using a shared secret stored in `.env` as `SCHEDULER_SECRET`, and set the same header in Cloud Scheduler job configurations using `--headers X-Scheduler-Token=<secret>`
-- The bot is single-user by default. The `TELEGRAM_CHAT_ID` env var acts as an allowlist — reject webhook updates from any other chat ID
-- If you extend this to multi-user later, partition all Firestore queries by `chat_id`
+- All timestamps are stored in ISO 8601 format with `+08:00` (Singapore time)
+- The bot enforces a single-user allowlist via `TELEGRAM_CHAT_IDS`; updates from any other chat ID are rejected
+- The `interaction_sessions` collection is the canonical store for all multi-step bot flows; do not create ad-hoc pending collections for new features

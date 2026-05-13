@@ -38,7 +38,7 @@ def start_pending_plan(chat_id: int, plan_type: str) -> None:
 
 
 async def send_plan_list(chat_id: int, plan_type: str) -> None:
-    plans = firestore.list_payment_plans(chat_id, plan_type=plan_type, statuses=["active", "completed", "cancelled"])
+    plans = firestore.list_payment_plans(chat_id, plan_type=plan_type, statuses=["active", "completed"])
     if not plans:
         label = "recurring payments" if plan_type == "recurring" else "split payments"
         await telegram.send_message(chat_id, f"No {label} found.")

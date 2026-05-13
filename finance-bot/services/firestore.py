@@ -1,23 +1,48 @@
-import os
 import hashlib
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from google.cloud import firestore
 
 from models.transaction import (
-    Transaction,
-    PendingTransaction,
     CategoryMapping,
+    FlowSession,
     PaymentPlan,
     PendingPlan,
-    FlowSession,
+    PendingTransaction,
+    Transaction,
 )
 from services.payment_plans import compute_next_due_date
 
 SGT = timezone(timedelta(hours=8))
 
 _db: Optional[firestore.Client] = None
+
+
+def _category_doc_id(name: str) -> str:
+    return quote(name.strip(), safe="")
+
+
+def _item_map_doc_id(item_key: str) -> str:
+    return quote(item_key.strip(), safe="")
+
+
+def _category_list_path(chat_id: int) -> str:
+    return f"users/{chat_id}/category_list"
+
+
+def _category_map_path(chat_id: int) -> str:
+    return f"users/{chat_id}/category_map"
+
+
+def _category_list_collection(chat_id: int):
+    return get_db().collection(_category_list_path(chat_id))
+
+
+def _category_map_collection(chat_id: int):
+    return get_db().collection(_category_map_path(chat_id))
 
 
 def get_db() -> firestore.Client:
@@ -29,16 +54,14 @@ def get_db() -> firestore.Client:
     return _db
 
 
-# ── Category Map ──────────────────────────────────────────────
-
-def get_category(item_key: str) -> Optional[str]:
-    doc = get_db().collection("category_map").document(item_key).get()
+def get_category(chat_id: int, item_key: str) -> Optional[str]:
+    doc = _category_map_collection(chat_id).document(_item_map_doc_id(item_key)).get()
     if doc.exists:
         return doc.to_dict().get("category")
     return None
 
 
-def save_category(item_key: str, category: str, confirmed_by_user: bool = True) -> None:
+def save_category(chat_id: int, item_key: str, category: str, confirmed_by_user: bool = True) -> None:
     now = datetime.now(SGT).isoformat()
     mapping = CategoryMapping(
         item_key=item_key,
@@ -46,10 +69,8 @@ def save_category(item_key: str, category: str, confirmed_by_user: bool = True) 
         confirmed_by_user=confirmed_by_user,
         created_at=now,
     )
-    get_db().collection("category_map").document(item_key).set(mapping.model_dump())
+    _category_map_collection(chat_id).document(_item_map_doc_id(item_key)).set(mapping.model_dump())
 
-
-# ── Transactions ──────────────────────────────────────────────
 
 def save_transaction(tx: Transaction) -> str:
     doc_ref = get_db().collection("transactions").document()
@@ -59,12 +80,7 @@ def save_transaction(tx: Transaction) -> str:
 
 
 def delete_transactions_for_plan(plan_id: str) -> int:
-    docs = (
-        get_db()
-        .collection("transactions")
-        .where("source_plan_id", "==", plan_id)
-        .stream()
-    )
+    docs = get_db().collection("transactions").where("source_plan_id", "==", plan_id).stream()
     count = 0
     for doc in docs:
         doc.reference.delete()
@@ -89,21 +105,16 @@ def find_transaction_by_plan_occurrence(plan_id: str, occurrence_key: str) -> Op
 
 
 def get_transactions(chat_id: int, start: datetime, end: datetime) -> list[dict]:
-    start_iso = start.isoformat()
-    end_iso = end.isoformat()
-
     docs = (
         get_db()
         .collection("transactions")
         .where("chat_id", "==", chat_id)
-        .where("timestamp", ">=", start_iso)
-        .where("timestamp", "<", end_iso)
+        .where("timestamp", ">=", start.isoformat())
+        .where("timestamp", "<", end.isoformat())
         .stream()
     )
     return [doc.to_dict() for doc in docs]
 
-
-# ── Pending Transactions (temp storage for category selection) ─
 
 def save_pending(
     chat_id: int,
@@ -174,8 +185,6 @@ def delete_interaction_session(chat_id: int) -> None:
     get_db().collection("interaction_sessions").document(str(chat_id)).delete()
 
 
-# ── Transactions (extended) ───────────────────────────────────
-
 def get_transactions_with_ids(chat_id: int, start: datetime, end: datetime) -> list[dict]:
     docs = (
         get_db()
@@ -187,9 +196,9 @@ def get_transactions_with_ids(chat_id: int, start: datetime, end: datetime) -> l
     )
     result = []
     for doc in docs:
-        d = doc.to_dict()
-        d["_doc_id"] = doc.id
-        result.append(d)
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        result.append(data)
     return result
 
 
@@ -203,18 +212,18 @@ def get_last_transaction(chat_id: int) -> Optional[dict]:
         .stream()
     )
     for doc in docs:
-        d = doc.to_dict()
-        d["_doc_id"] = doc.id
-        return d
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        return data
     return None
 
 
 def get_transaction_by_id(doc_id: str) -> Optional[dict]:
     doc = get_db().collection("transactions").document(doc_id).get()
     if doc.exists:
-        d = doc.to_dict()
-        d["_doc_id"] = doc.id
-        return d
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        return data
     return None
 
 
@@ -230,21 +239,16 @@ def update_transaction_timestamp(doc_id: str, new_timestamp: str) -> None:
     get_db().collection("transactions").document(doc_id).update({"timestamp": new_timestamp})
 
 
-def reassign_transactions_category(old_category: str, new_category: str) -> int:
-    docs = (
-        get_db()
-        .collection("transactions")
-        .where("category", "==", old_category)
-        .stream()
-    )
+def reassign_transactions_category(chat_id: int, old_category: str, new_category: str) -> int:
+    docs = get_db().collection("transactions").where("chat_id", "==", chat_id).stream()
     count = 0
     for doc in docs:
-        doc.reference.update({"category": new_category})
-        count += 1
+        data = doc.to_dict() or {}
+        if data.get("category") == old_category:
+            doc.reference.update({"category": new_category})
+            count += 1
     return count
 
-
-# ── User State ────────────────────────────────────────────────
 
 def set_user_state(chat_id: int, state: str) -> None:
     get_db().collection("user_state").document(str(chat_id)).set({"state": state})
@@ -266,14 +270,14 @@ def is_awaiting_custom_category(chat_id: int) -> bool:
     return state is not None and "awaiting" in state
 
 
-# ── Pending Category Change ───────────────────────────────────
-
 def save_pending_change(chat_id: int, tx_id: str, item_key: str) -> None:
-    get_db().collection("pending_change").document(str(chat_id)).set({
-        "tx_id": tx_id,
-        "item_key": item_key,
-        "timestamp": datetime.now(SGT).isoformat(),
-    })
+    get_db().collection("pending_change").document(str(chat_id)).set(
+        {
+            "tx_id": tx_id,
+            "item_key": item_key,
+            "timestamp": datetime.now(SGT).isoformat(),
+        }
+    )
 
 
 def get_pending_change(chat_id: int) -> Optional[dict]:
@@ -287,8 +291,6 @@ def delete_pending_change(chat_id: int) -> None:
     get_db().collection("pending_change").document(str(chat_id)).delete()
 
 
-# ── Category List ─────────────────────────────────────────────
-
 DEFAULT_CATEGORIES = [
     {"name": "Food & Drink", "emoji": "🍔", "order": 1},
     {"name": "Transport", "emoji": "🚗", "order": 2},
@@ -301,32 +303,22 @@ DEFAULT_CATEGORIES = [
 ]
 
 
-def _seed_category_list() -> None:
-    coll = get_db().collection("category_list")
-    existing = list(coll.limit(1).stream())
-    if existing:
-        return
-    for cat in DEFAULT_CATEGORIES:
-        coll.document(cat["name"]).set(cat)
-
-
-def get_category_list() -> list[dict]:
-    _seed_category_list()
-    docs = get_db().collection("category_list").stream()
-    categories = [doc.to_dict() for doc in docs]
-    categories.sort(key=lambda c: c.get("order", 9998))
+def get_category_list(chat_id: int) -> list[dict]:
+    categories = [doc.to_dict() for doc in _category_list_collection(chat_id).stream()]
+    categories.sort(key=lambda category: category.get("order", 9998))
     return categories
 
 
-def add_category_to_list(name: str, emoji: str = "🏷️") -> None:
-    coll = get_db().collection("category_list")
-    all_cats = get_category_list()
+def add_category_to_list(chat_id: int, name: str, emoji: str = "🏷️") -> None:
+    all_cats = get_category_list(chat_id)
     max_order = max((c.get("order", 0) for c in all_cats if c.get("order", 0) < 9999), default=100)
-    coll.document(name).set({"name": name, "emoji": emoji, "order": max_order + 1})
+    _category_list_collection(chat_id).document(_category_doc_id(name)).set(
+        {"name": name, "emoji": emoji, "order": max_order + 1}
+    )
 
 
-def remove_category_from_list(name: str) -> bool:
-    doc_ref = get_db().collection("category_list").document(name)
+def remove_category_from_list(chat_id: int, name: str) -> bool:
+    doc_ref = _category_list_collection(chat_id).document(_category_doc_id(name))
     doc = doc_ref.get()
     if doc.exists:
         doc_ref.delete()
@@ -334,22 +326,18 @@ def remove_category_from_list(name: str) -> bool:
     return False
 
 
-def delete_category(category_name: str) -> int:
-    docs = (
-        get_db()
-        .collection("category_map")
-        .where("category", "==", category_name)
-        .stream()
-    )
+def delete_category(chat_id: int, category_name: str) -> int:
     count = 0
-    for doc in docs:
-        doc.reference.delete()
-        count += 1
+    for doc in _category_map_collection(chat_id).stream():
+        data = doc.to_dict() or {}
+        if data.get("category") == category_name:
+            doc.reference.delete()
+            count += 1
     return count
 
 
-def update_category_emoji(name: str, emoji: str) -> bool:
-    doc_ref = get_db().collection("category_list").document(name)
+def update_category_emoji(chat_id: int, name: str, emoji: str) -> bool:
+    doc_ref = _category_list_collection(chat_id).document(_category_doc_id(name))
     doc = doc_ref.get()
     if not doc.exists:
         return False
@@ -357,65 +345,64 @@ def update_category_emoji(name: str, emoji: str) -> bool:
     return True
 
 
-def update_category_order(name: str, order: int) -> bool:
-    """Move *name* to position *order*, shifting only the categories between the
-    old and new position. "Other" stays at 9999 and is never shifted."""
-    db = get_db()
-    target_ref = db.collection("category_list").document(name)
+def update_category_order(chat_id: int, name: str, order: int) -> bool:
+    categories = _category_list_collection(chat_id)
+    target_ref = categories.document(_category_doc_id(name))
     target_doc = target_ref.get()
     if not target_doc.exists:
         return False
+
     old_order = target_doc.to_dict().get("order", 9998)
     if old_order == order:
         return True
 
-    batch = db.batch()
-    for doc in db.collection("category_list").stream():
-        data = doc.to_dict()
+    batch = get_db().batch()
+    for doc in categories.stream():
+        data = doc.to_dict() or {}
         if data.get("name") == "Other" or data.get("name") == name:
             continue
         current = data.get("order", 9998)
         if order < old_order and order <= current < old_order:
-            # Moving target up: bump categories in [order, old_order-1] down by 1
             batch.update(doc.reference, {"order": current + 1})
         elif order > old_order and old_order < current <= order:
-            # Moving target down: pull categories in [old_order+1, order] up by 1
             batch.update(doc.reference, {"order": current - 1})
     batch.update(target_ref, {"order": order})
     batch.commit()
     return True
 
 
-def rename_category(old_name: str, new_name: str) -> tuple[bool, int, int]:
-    """Rename a category. Doc ID in category_list is the name, so delete+recreate.
-    Also updates transactions and category_map entries. Returns (ok, tx_count, map_count)."""
-    db = get_db()
-    old_ref = db.collection("category_list").document(old_name)
+def rename_category(chat_id: int, old_name: str, new_name: str) -> tuple[bool, int, int]:
+    categories = _category_list_collection(chat_id)
+    old_ref = categories.document(_category_doc_id(old_name))
     old_doc = old_ref.get()
     if not old_doc.exists:
         return False, 0, 0
-    new_ref = db.collection("category_list").document(new_name)
+
+    new_ref = categories.document(_category_doc_id(new_name))
     if new_ref.get().exists:
         return False, 0, 0
+
     data = old_doc.to_dict()
     data["name"] = new_name
     new_ref.set(data)
     old_ref.delete()
 
     tx_count = 0
-    for doc in db.collection("transactions").where("category", "==", old_name).stream():
-        doc.reference.update({"category": new_name})
-        tx_count += 1
+    for doc in get_db().collection("transactions").where("chat_id", "==", chat_id).stream():
+        tx_data = doc.to_dict() or {}
+        if tx_data.get("category") == old_name:
+            doc.reference.update({"category": new_name})
+            tx_count += 1
 
     map_count = 0
-    for doc in db.collection("category_map").where("category", "==", old_name).stream():
-        doc.reference.update({"category": new_name})
-        map_count += 1
+    for doc in _category_map_collection(chat_id).stream():
+        map_data = doc.to_dict() or {}
+        if map_data.get("category") == old_name:
+            doc.reference.update({"category": new_name})
+            map_count += 1
 
     return True, tx_count, map_count
 
-
-# ── Authorized Chat IDs ───────────────────────────────────────
 
 _allowed_chat_ids: set[int] = set()
 _chat_ids_listener = None
@@ -451,12 +438,8 @@ def remove_authorized_chat(chat_id: int) -> None:
     get_db().collection("authorized_chats").document(str(chat_id)).delete()
 
 
-# ── Dashboard Web Accounts ─────────────────────────────────────
-
 def save_pending_dashboard_account(chat_id: int, username: str | None = None) -> None:
-    payload = {
-        "timestamp": datetime.now(SGT).isoformat(),
-    }
+    payload = {"timestamp": datetime.now(SGT).isoformat()}
     if username is not None:
         payload["username"] = username
     get_db().collection("pending_dashboard_accounts").document(str(chat_id)).set(payload, merge=True)
@@ -512,9 +495,7 @@ def upsert_web_account(chat_id: int, username: str, password_hash: str) -> None:
     existing_username_doc = username_ref.get()
     if existing_username_doc.exists:
         existing_chat_id = _extract_chat_id(existing_username_doc.to_dict())
-        if existing_chat_id is None:
-            raise ValueError("That username is already taken.")
-        if existing_chat_id != chat_id:
+        if existing_chat_id is None or existing_chat_id != chat_id:
             raise ValueError("That username is already taken.")
 
     current_account_doc = account_ref.get()
@@ -536,11 +517,7 @@ def upsert_web_account(chat_id: int, username: str, password_hash: str) -> None:
     )
     batch.set(
         username_ref,
-        {
-            "chat_id": chat_id,
-            "username": username.strip(),
-            "updated_at": now,
-        },
+        {"chat_id": chat_id, "username": username.strip(), "updated_at": now},
     )
     if old_username and old_username != normalized:
         batch.delete(db.collection("web_usernames").document(old_username))
@@ -583,12 +560,7 @@ def delete_web_session(token: str) -> None:
 
 
 def delete_web_sessions_for_chat(chat_id: int) -> int:
-    docs = (
-        get_db()
-        .collection("web_sessions")
-        .where("chat_id", "==", chat_id)
-        .stream()
-    )
+    docs = get_db().collection("web_sessions").where("chat_id", "==", chat_id).stream()
     count = 0
     for doc in docs:
         doc.reference.delete()
@@ -596,10 +568,18 @@ def delete_web_sessions_for_chat(chat_id: int) -> int:
     return count
 
 
-# ── Budgets ───────────────────────────────────────────────────
+def get_dashboard_preferences(chat_id: int) -> dict:
+    doc = get_db().collection("dashboard_preferences").document(str(chat_id)).get()
+    if doc.exists:
+        return doc.to_dict() or {}
+    return {}
+
+
+def update_dashboard_preferences(chat_id: int, **fields) -> None:
+    get_db().collection("dashboard_preferences").document(str(chat_id)).set(fields, merge=True)
+
 
 def get_budgets(chat_id: int) -> dict[str, float]:
-    """Return {category_name: monthly_amount} for a chat, or empty dict."""
     doc = get_db().collection("budgets").document(str(chat_id)).get()
     if doc.exists:
         return doc.to_dict() or {}
@@ -607,14 +587,10 @@ def get_budgets(chat_id: int) -> dict[str, float]:
 
 
 def set_budget(chat_id: int, category: str, amount: float) -> None:
-    """Set (or update) the monthly budget for a single category."""
-    get_db().collection("budgets").document(str(chat_id)).set(
-        {category: amount}, merge=True
-    )
+    get_db().collection("budgets").document(str(chat_id)).set({category: amount}, merge=True)
 
 
 def remove_budget(chat_id: int, category: str) -> bool:
-    """Remove a single category budget. Returns False when it does not exist."""
     doc_ref = get_db().collection("budgets").document(str(chat_id))
     doc = doc_ref.get()
     if not doc.exists:
@@ -632,8 +608,6 @@ def remove_budget(chat_id: int, category: str) -> bool:
     return True
 
 
-# —— Payment Plans ———————————————————————————————————————————————————————————————
-
 def save_payment_plan(plan: PaymentPlan) -> str:
     doc_ref = get_db().collection("payment_plans").document()
     plan.id = doc_ref.id
@@ -645,6 +619,10 @@ def update_payment_plan(plan_id: str, **fields) -> None:
     get_db().collection("payment_plans").document(plan_id).update(fields)
 
 
+def delete_payment_plan(plan_id: str) -> None:
+    get_db().collection("payment_plans").document(plan_id).delete()
+
+
 def get_payment_plan(plan_id: str) -> Optional[dict]:
     doc = get_db().collection("payment_plans").document(plan_id).get()
     if doc.exists:
@@ -654,29 +632,28 @@ def get_payment_plan(plan_id: str) -> Optional[dict]:
     return None
 
 
-def list_payment_plans(chat_id: int, plan_type: Optional[str] = None, statuses: Optional[list[str]] = None) -> list[dict]:
-    query = get_db().collection("payment_plans").where("chat_id", "==", chat_id)
-    docs = query.stream()
+def list_payment_plans(
+    chat_id: int,
+    plan_type: Optional[str] = None,
+    statuses: Optional[list[str]] = None,
+) -> list[dict]:
+    docs = get_db().collection("payment_plans").where("chat_id", "==", chat_id).stream()
     plans = []
+    allowed_statuses = statuses or ["active", "completed"]
     for doc in docs:
         data = doc.to_dict()
         data["id"] = doc.id
         if plan_type and data.get("plan_type") != plan_type:
             continue
-        if statuses and data.get("status") not in statuses:
+        if data.get("status") not in allowed_statuses:
             continue
         plans.append(data)
-    plans.sort(key=lambda p: (p.get("status") != "active", p.get("next_due_date", "")))
+    plans.sort(key=lambda plan: (plan.get("status") != "active", plan.get("next_due_date", "")))
     return plans
 
 
 def list_due_payment_plans(today: datetime) -> list[dict]:
-    docs = (
-        get_db()
-        .collection("payment_plans")
-        .where("status", "==", "active")
-        .stream()
-    )
+    docs = get_db().collection("payment_plans").where("status", "==", "active").stream()
     due_plans = []
     for doc in docs:
         data = doc.to_dict()
@@ -687,20 +664,14 @@ def list_due_payment_plans(today: datetime) -> list[dict]:
     return due_plans
 
 
-def cancel_payment_plan(plan_id: str) -> None:
-    update_payment_plan(plan_id, status="cancelled")
-
-
 def recalculate_payment_plan_next_due(plan_id: str) -> Optional[str]:
     plan = get_payment_plan(plan_id)
     if not plan:
         return None
+
     next_due = compute_next_due_date(plan)
     status = "completed" if next_due is None and plan["plan_type"] == "split_payment" else plan.get("status", "active")
     payload = {"status": status}
-    if next_due is not None:
-        payload["next_due_date"] = next_due.isoformat()
-    else:
-        payload["next_due_date"] = ""
+    payload["next_due_date"] = next_due.isoformat() if next_due is not None else ""
     update_payment_plan(plan_id, **payload)
     return payload["next_due_date"]

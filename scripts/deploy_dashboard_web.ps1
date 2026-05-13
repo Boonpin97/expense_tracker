@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$flutter = "C:\Users\pohbo\develop\flutter\bin\flutter.bat"
+$npm = "C:\Program Files\nodejs\npm.cmd"
 $firebase = "C:\Users\pohbo\AppData\Roaming\npm\firebase.cmd"
 
 $config = @{
@@ -30,5 +30,5 @@ if (-not $Environment) {
 
 $selected = $config[$Environment]
 
-& $flutter build web --release --pwa-strategy=none --no-wasm-dry-run
+& $npm run build
 & $firebase deploy --only "hosting:$($selected.HostingTarget)" --project budget-bot-123

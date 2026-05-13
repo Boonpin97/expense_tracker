@@ -22,12 +22,12 @@ from services.categoriser import (
 from services.dashboard_auth import hash_password, is_valid_username, validate_password
 from services.firestore import (
     add_category_to_list,
-    cancel_payment_plan,
     clear_user_state,
     delete_category,
     delete_pending,
     delete_pending_change,
     delete_pending_plan,
+    delete_payment_plan,
     delete_transactions_for_plan,
     delete_transaction,
     get_category_list,
@@ -162,7 +162,7 @@ def _format_budget_list(chat_id: int) -> str:
     if not budgets:
         return "No monthly budgets found. Use <code>/set_budget Category 100</code> to add one."
 
-    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list()}
+    category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
     lines = ["<b>Monthly Budgets</b>"]
     for category, amount in sorted(budgets.items(), key=lambda item: item[0].lower()):
         emoji = category_emoji.get(category, "📦")
@@ -507,6 +507,10 @@ async def _start_plan_delete(chat_id: int, plan_type: str) -> None:
 
 
 def _plan_delete_prompt(plan: dict) -> str:
+    if plan["plan_type"] == "split_payment":
+        return (
+            f"Stop this split payment and remove all its auto-generated charges?\n\n{plan_display_line(plan)}"
+        )
     return (
         f"What do you want to do with this plan?\n\n{plan_display_line(plan)}\n\n"
         "- <b>Stop future only</b>: keep past charges on record.\n"
@@ -822,7 +826,7 @@ async def webhook(request: Request):
                 await telegram.send_message(chat_id, "✅ Budget setup finished.")
                 return {"ok": True}
 
-            categories = {c["name"] for c in get_category_list()}
+            categories = {c["name"] for c in get_category_list(chat_id)}
             if category not in categories:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 await telegram.send_message(chat_id, "⚠️ That category is no longer available. Send /set_budget again.")
@@ -886,9 +890,9 @@ async def webhook(request: Request):
                     return {"ok": True}
             else:
                 category_name = remainder
-            removed = remove_category_from_list(category_name)
-            count = delete_category(category_name)
-            tx_count = reassign_transactions_category(category_name, "Other")
+            removed = remove_category_from_list(chat_id, category_name)
+            count = delete_category(chat_id, category_name)
+            tx_count = reassign_transactions_category(chat_id, category_name, "Other")
             if removed:
                 await telegram.answer_callback_query(callback_query_id, f"Removed {category_name}")
                 msg = f"🗑️ Removed category <b>{category_name}</b> and {count} item mapping(s)."
@@ -949,7 +953,7 @@ async def webhook(request: Request):
 
             start, end, label = _get_month_window(year, month)
             transactions = get_transactions(chat_id, start, end)
-            report = _format_report(label, transactions)
+            report = _format_report(chat_id, label, transactions)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
 
         elif callback_data.startswith("dailyrep:"):
@@ -975,7 +979,7 @@ async def webhook(request: Request):
 
             start, end, label = _get_period_window("daily")
             transactions = get_transactions(chat_id, start, end)
-            report = _format_daily_report(label, transactions)
+            report = _format_daily_report(chat_id, label, transactions)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
 
         elif callback_data.startswith("editcat:"):
@@ -988,7 +992,7 @@ async def webhook(request: Request):
                     return {"ok": True}
             else:
                 category_name = remainder
-            cat = next((c for c in get_category_list() if c["name"] == category_name), None)
+            cat = next((c for c in get_category_list(chat_id) if c["name"] == category_name), None)
             if not cat:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 await telegram.send_message(chat_id, f"⚠️ Category <b>{category_name}</b> not found.")
@@ -1018,13 +1022,14 @@ async def webhook(request: Request):
             elif field == "name":
                 prompt = f"Send the new name for <b>{category_name}</b>:"
             else:
-                max_order = len([c for c in get_category_list() if c["name"] != "Other"])
+                max_order = len([c for c in get_category_list(chat_id) if c["name"] != "Other"])
                 prompt = f"Send the new order number for <b>{category_name}</b> (1 = first item, {max_order} = last item)"
             await telegram.send_message(chat_id, prompt)
 
-        elif callback_data.startswith("editrecurring:"):
+        elif callback_data.startswith("editrecurring:") or callback_data.startswith("editsplit:"):
             plan_id, ts = _split_expiring_callback(callback_data.split(":", 1)[1])
-            if await _reject_expired_callback(chat_id, callback_query_id, ts, "⏰ These plan edit options have expired. Please send /edit_recurring again."):
+            command = "/edit_recurring" if callback_data.startswith("editrecurring:") else "/edit_split_payment"
+            if await _reject_expired_callback(chat_id, callback_query_id, ts, f"⏰ These plan edit options have expired. Please send {command} again."):
                 return {"ok": True}
             plan = get_payment_plan(plan_id)
             if not plan:
@@ -1045,7 +1050,10 @@ async def webhook(request: Request):
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 return {"ok": True}
             await telegram.answer_callback_query(callback_query_id, "")
-            await telegram.send_plan_delete_mode_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
+            if plan["plan_type"] == "split_payment":
+                await telegram.send_split_plan_delete_confirm_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
+            else:
+                await telegram.send_plan_delete_mode_keyboard(chat_id, plan_id, _plan_delete_prompt(plan))
 
         elif callback_data.startswith("plandelmode:"):
             _, mode, plan_id_raw = callback_data.split(":", 2)
@@ -1056,7 +1064,7 @@ async def webhook(request: Request):
             if not plan:
                 await telegram.answer_callback_query(callback_query_id, "Not found")
                 return {"ok": True}
-            cancel_payment_plan(plan_id)
+            delete_payment_plan(plan_id)
             removed = 0
             if mode == "all":
                 removed = delete_transactions_for_plan(plan_id)
@@ -1147,7 +1155,7 @@ async def webhook(request: Request):
         elif text.startswith("/weekly"):
             start, end, label = _get_period_window("weekly")
             transactions = get_transactions(chat_id, start, end)
-            report = _format_report(label, transactions)
+            report = _format_report(chat_id, label, transactions)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         elif text.startswith("/set_budget"):
             start_session(chat_id, "set_budget", "choosing_category")
@@ -1171,7 +1179,7 @@ async def webhook(request: Request):
                     "Usage: <code>/remove_budget Food & Drink</code>",
                 )
             else:
-                categories = {c["name"] for c in get_category_list()}
+                categories = {c["name"] for c in get_category_list(chat_id)}
                 if category not in categories:
                     await telegram.send_message(
                         chat_id,
@@ -1234,14 +1242,14 @@ async def webhook(request: Request):
             set_user_state(chat_id, f"awaiting_new_cat_name|{datetime.now(SGT).isoformat()}")
             await telegram.send_message(chat_id, "✏️ Type the name of the new category:")
         elif text == "/remove_category":
-            categories = get_category_list()
+            categories = get_category_list(chat_id)
             removable = [c for c in categories if c["name"] != "Other"]
             if not removable:
                 await telegram.send_message(chat_id, "No categories to remove.")
             else:
                 await telegram.send_remove_category_keyboard(chat_id, removable)
         elif text == "/edit_category":
-            categories = get_category_list()
+            categories = get_category_list(chat_id)
             if not categories:
                 await telegram.send_message(chat_id, "No categories to edit.")
             else:
@@ -1264,6 +1272,8 @@ async def webhook(request: Request):
             await send_plan_list(chat_id, "split_payment")
         elif text == "/edit_recurring":
             await _start_plan_edit(chat_id, "recurring")
+        elif text == "/edit_split_payment":
+            await _start_plan_edit(chat_id, "split_payment")
         elif text == "/delete_recurring":
             await _start_plan_delete(chat_id, "recurring")
         elif text == "/delete_split_payment":
@@ -1285,7 +1295,7 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, "⏰ The /new_category request has expired. Please send /new_category again.")
             return {"ok": True}
         name = text.strip().title()
-        existing = [c["name"] for c in get_category_list()]
+        existing = [c["name"] for c in get_category_list(chat_id)]
         if name in existing:
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"⚠️ Category <b>{name}</b> already exists.")
@@ -1304,7 +1314,7 @@ async def webhook(request: Request):
                 return {"ok": True}
         else:
             name = remainder
-        add_category_to_list(name, text.strip())
+        add_category_to_list(chat_id, name, text.strip())
         clear_user_state(chat_id)
         await telegram.send_message(chat_id, f"✅ Category {text.strip()} <b>{name}</b> added!")
         return {"ok": True}
@@ -1317,10 +1327,10 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, "⏰ This flow has expired. Please resend the expense to try again.")
             return {"ok": True}
         name = text.strip().title()
-        existing = [c["name"] for c in get_category_list()]
+        existing = [c["name"] for c in get_category_list(chat_id)]
         if name in existing:
             clear_user_state(chat_id)
-            await handle_custom_category_input(chat_id, name, next(c["emoji"] for c in get_category_list() if c["name"] == name))
+            await handle_custom_category_input(chat_id, name, next(c["emoji"] for c in get_category_list(chat_id) if c["name"] == name))
             return {"ok": True}
         set_user_state(chat_id, f"awaiting_inline_cat_emoji:{name}")
         await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
@@ -1348,10 +1358,10 @@ async def webhook(request: Request):
         remainder = user_state[len("awaiting_change_new_name:"):]
         tx_id, item_key = remainder.split(":", 1)
         name = text.strip().title()
-        existing = [c["name"] for c in get_category_list()]
+        existing = [c["name"] for c in get_category_list(chat_id)]
         if name in existing:
             update_transaction_category(tx_id, name)
-            save_category(item_key, name, confirmed_by_user=True)
+            save_category(chat_id, item_key, name, confirmed_by_user=True)
             delete_pending_change(chat_id)
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to <b>{name}</b>")
@@ -1404,7 +1414,7 @@ async def webhook(request: Request):
         clear_user_state(chat_id)
         start, end, label = _get_month_window(year, month)
         transactions = get_transactions(chat_id, start, end)
-        report = _format_report(label, transactions)
+        report = _format_report(chat_id, label, transactions)
         await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         return {"ok": True}
 
@@ -1424,7 +1434,7 @@ async def webhook(request: Request):
         label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
         transactions = get_transactions(chat_id, day_start, day_end)
         clear_user_state(chat_id)
-        report = _format_daily_report(label, transactions)
+        report = _format_daily_report(chat_id, label, transactions)
         await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         return {"ok": True}
 
@@ -1439,8 +1449,8 @@ async def webhook(request: Request):
         name, tx_id, item_key = remainder.split(":", 2)
         emoji = text.strip()
         update_transaction_category(tx_id, name)
-        save_category(item_key, name, confirmed_by_user=True)
-        add_category_to_list(name, emoji)
+        save_category(chat_id, item_key, name, confirmed_by_user=True)
+        add_category_to_list(chat_id, name, emoji)
         delete_pending_change(chat_id)
         clear_user_state(chat_id)
         await telegram.send_message(chat_id, f"🔄 <b>{item_key}</b> recategorised to {emoji} <b>{name}</b> (new category saved)")
@@ -1456,7 +1466,7 @@ async def webhook(request: Request):
                 return {"ok": True}
         else:
             category_name = remainder
-        ok = update_category_emoji(category_name, text.strip())
+        ok = update_category_emoji(chat_id, category_name, text.strip())
         clear_user_state(chat_id)
         await telegram.send_message(chat_id, f"✅ Updated emoji for <b>{category_name}</b> → {text.strip()}" if ok else f"⚠️ Category <b>{category_name}</b> not found.")
         return {"ok": True}
@@ -1480,12 +1490,12 @@ async def webhook(request: Request):
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, "⚠️ Name cannot be empty.")
             return {"ok": True}
-        existing = [c["name"] for c in get_category_list()]
+        existing = [c["name"] for c in get_category_list(chat_id)]
         if new_name in existing:
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"⚠️ Category <b>{new_name}</b> already exists.")
             return {"ok": True}
-        ok, tx_count, map_count = rename_category(category_name, new_name)
+        ok, tx_count, map_count = rename_category(chat_id, category_name, new_name)
         clear_user_state(chat_id)
         if ok:
             msg = f"✅ Renamed <b>{category_name}</b> → <b>{new_name}</b>"
@@ -1511,13 +1521,13 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, "⚠️ The <b>Other</b> category's order cannot be changed.")
             return {"ok": True}
         order = _valid_months(text)
-        non_other = [c for c in get_category_list() if c["name"] != "Other"]
+        non_other = [c for c in get_category_list(chat_id) if c["name"] != "Other"]
         max_order = len(non_other)
         if order is None or order < 1 or order > max_order:
             clear_user_state(chat_id)
             await telegram.send_message(chat_id, f"⚠️ Order must be between <b>1</b> and <b>{max_order}</b>. Try /edit_category again.")
             return {"ok": True}
-        ok = update_category_order(category_name, order)
+        ok = update_category_order(chat_id, category_name, order)
         clear_user_state(chat_id)
         await telegram.send_message(chat_id, f"✅ Updated order for <b>{category_name}</b> → {order}" if ok else f"⚠️ Category <b>{category_name}</b> not found.")
         return {"ok": True}
@@ -1613,7 +1623,7 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, "⏰ This plan flow has expired. Start the command again.")
             return {"ok": True}
         name = text.strip().title()
-        existing = [c["name"] for c in get_category_list()]
+        existing = [c["name"] for c in get_category_list(chat_id)]
         if name in existing:
             update_pending_plan(chat_id, category=name)
             if pending.get("edit_field") == "category":
@@ -1637,7 +1647,7 @@ async def webhook(request: Request):
             return {"ok": True}
         name = user_state[len("awaiting_plan_new_cat_emoji:"):]
         emoji = text.strip()
-        add_category_to_list(name, emoji)
+        add_category_to_list(chat_id, name, emoji)
         if pending.get("edit_field") == "category":
             update_pending_plan(chat_id, edit_value=name)
             set_user_state(chat_id, "awaiting_plan_edit_rewrite")

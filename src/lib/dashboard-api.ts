@@ -10,12 +10,40 @@ export type DashboardTransaction = {
   category: string;
   timestamp: Date;
   chatId: number;
+  sourceType: string;
+  sourcePlanId: string | null;
 };
 
 export type DashboardCategory = {
   name: string;
   emoji: string;
   order: number;
+};
+
+export type DashboardPlan = {
+  id: string;
+  planType: "recurring" | "split_payment";
+  item: string;
+  category: string;
+  dayOfMonth: number;
+  status: "active" | "cancelled" | "completed";
+  nextDueDate: string | null;
+  startYear: number;
+  startMonth: number;
+  // recurring only
+  amount: number;
+  // split only
+  totalAmount: number;
+  installmentCount: number;
+  currentInstallmentNumber: number;
+  baseInstallmentAmount: number;
+  finalInstallmentAmount: number;
+};
+
+export type DashboardPaymentType = "one_time" | "split_payment" | "recurring";
+
+export type DashboardPreferences = {
+  overviewVisibleCards: string[];
 };
 
 export class DashboardApiError extends Error {
@@ -59,7 +87,12 @@ export function getDashboardApiBaseUrl() {
 
   if (typeof window !== "undefined") {
     const host = window.location.host.toLowerCase();
-    if (host === "budget-bot-123-dev.web.app" || host === "budget-bot-123-dev.firebaseapp.com") {
+    if (
+      host === "budget-bot-123-dev.web.app" ||
+      host === "budget-bot-123-dev.firebaseapp.com" ||
+      host.startsWith("localhost") ||
+      host.startsWith("127.0.0.1")
+    ) {
       return DEV_API_BASE_URL;
     }
   }
@@ -134,6 +167,8 @@ function parseTransaction(data: Record<string, unknown>): DashboardTransaction {
     category: String(data.category ?? "Other"),
     timestamp: new Date(String(data.timestamp ?? "")),
     chatId: typeof data.chat_id === "number" ? data.chat_id : 0,
+    sourceType: String(data.source_type ?? "manual"),
+    sourcePlanId: data.source_plan_id ? String(data.source_plan_id) : null,
   };
 }
 
@@ -142,6 +177,18 @@ function parseCategory(data: Record<string, unknown>): DashboardCategory {
     name: String(data.name ?? ""),
     emoji: String(data.emoji ?? "Tag"),
     order: typeof data.order === "number" ? data.order : 9998,
+  };
+}
+
+function parsePreferences(data: Record<string, unknown> | undefined): DashboardPreferences {
+  const rawCards = data?.overview_visible_cards;
+  return {
+    overviewVisibleCards:
+      rawCards === undefined
+        ? ["today", "week", "month", "budget"]
+        : Array.isArray(rawCards)
+          ? rawCards.filter((value): value is string => typeof value === "string")
+          : ["today", "week", "month", "budget"],
   };
 }
 
@@ -199,6 +246,29 @@ export async function fetchDashboardTransactions(options: {
   return (data.transactions ?? []).map(parseTransaction);
 }
 
+export async function updateDashboardTransaction(
+  transactionId: string,
+  payload: {
+    item: string;
+    amount: number;
+    category: string;
+    timestamp: Date;
+  },
+) {
+  await requestJson("PATCH", `/dashboard/transactions/${transactionId}`, {
+    body: {
+      item: payload.item,
+      amount: payload.amount,
+      category: payload.category,
+      timestamp: payload.timestamp.toISOString(),
+    },
+  });
+}
+
+export async function deleteDashboardTransaction(transactionId: string) {
+  await requestJson("DELETE", `/dashboard/transactions/${transactionId}`);
+}
+
 export async function fetchDashboardCategories() {
   const data = await requestJson<{ categories?: Record<string, unknown>[] }>(
     "GET",
@@ -221,4 +291,122 @@ export async function fetchDashboardBudgets() {
     }
   }
   return budgets;
+}
+
+export async function updateDashboardBudget(categoryName: string, amount: number): Promise<void> {
+  await requestJson("PATCH", `/dashboard/budgets/${encodeURIComponent(categoryName)}`, {
+    body: { amount },
+  });
+}
+
+export async function deleteDashboardBudget(categoryName: string): Promise<void> {
+  await requestJson("DELETE", `/dashboard/budgets/${encodeURIComponent(categoryName)}`);
+}
+
+function parsePlan(data: Record<string, unknown>): DashboardPlan {
+  return {
+    id: String(data.id ?? data._doc_id ?? ""),
+    planType: data.plan_type === "split_payment" ? "split_payment" : "recurring",
+    item: String(data.item ?? ""),
+    category: String(data.category ?? ""),
+    dayOfMonth: typeof data.day_of_month === "number" ? data.day_of_month : 1,
+    status: (data.status as DashboardPlan["status"]) ?? "active",
+    nextDueDate: data.next_due_date ? String(data.next_due_date) : null,
+    startYear: typeof data.start_year === "number" ? data.start_year : 0,
+    startMonth: typeof data.start_month === "number" ? data.start_month : 0,
+    amount: typeof data.amount === "number" ? data.amount : 0,
+    totalAmount: typeof data.total_amount === "number" ? data.total_amount : 0,
+    installmentCount: typeof data.installment_count === "number" ? data.installment_count : 0,
+    currentInstallmentNumber:
+      typeof data.current_installment_number === "number" ? data.current_installment_number : 0,
+    baseInstallmentAmount:
+      typeof data.base_installment_amount === "number" ? data.base_installment_amount : 0,
+    finalInstallmentAmount:
+      typeof data.final_installment_amount === "number" ? data.final_installment_amount : 0,
+  };
+}
+
+export async function fetchDashboardPlans(): Promise<DashboardPlan[]> {
+  const data = await requestJson<{ plans?: Record<string, unknown>[] }>("GET", "/dashboard/plans");
+  return (data.plans ?? []).map(parsePlan);
+}
+
+export async function updateDashboardPlan(
+  planId: string,
+  payload: {
+    item?: string;
+    category?: string;
+    dayOfMonth?: number;
+    amount?: number;
+    totalAmount?: number;
+    installmentCount?: number;
+  },
+): Promise<void> {
+  await requestJson("PATCH", `/dashboard/plans/${planId}`, {
+    body: {
+      ...(payload.item !== undefined ? { item: payload.item } : {}),
+      ...(payload.category !== undefined ? { category: payload.category } : {}),
+      ...(payload.dayOfMonth !== undefined ? { day_of_month: payload.dayOfMonth } : {}),
+      ...(payload.amount !== undefined ? { amount: payload.amount } : {}),
+      ...(payload.totalAmount !== undefined ? { total_amount: payload.totalAmount } : {}),
+      ...(payload.installmentCount !== undefined
+        ? { installment_count: payload.installmentCount }
+        : {}),
+    },
+  });
+}
+
+export async function fetchDashboardPreferences(): Promise<DashboardPreferences> {
+  const data = await requestJson<{ preferences?: Record<string, unknown> }>(
+    "GET",
+    "/dashboard/preferences",
+  );
+  return parsePreferences(data.preferences);
+}
+
+export async function updateDashboardPreferences(payload: {
+  overviewVisibleCards: string[];
+}): Promise<void> {
+  await requestJson("PATCH", "/dashboard/preferences", {
+    body: {
+      overview_visible_cards: payload.overviewVisibleCards,
+    },
+  });
+}
+
+export async function createDashboardTransaction(payload: {
+  item: string;
+  amount: number;
+  category: string;
+  timestamp: Date;
+  paymentType: DashboardPaymentType;
+  dayOfMonth?: number;
+  installmentCount?: number;
+  createFirstTransactionNow?: boolean;
+}) {
+  await requestJson("POST", "/dashboard/transactions", {
+    body: {
+      item: payload.item,
+      amount: payload.amount,
+      category: payload.category,
+      timestamp: payload.timestamp.toISOString(),
+      payment_type: payload.paymentType,
+      ...(payload.dayOfMonth !== undefined ? { day_of_month: payload.dayOfMonth } : {}),
+      ...(payload.installmentCount !== undefined
+        ? { installment_count: payload.installmentCount }
+        : {}),
+      ...(payload.createFirstTransactionNow !== undefined
+        ? { create_first_transaction_now: payload.createFirstTransactionNow }
+        : {}),
+    },
+  });
+}
+
+export async function deleteDashboardPlan(
+  planId: string,
+  mode: "future" | "all",
+): Promise<void> {
+  await requestJson("DELETE", `/dashboard/plans/${planId}`, {
+    query: { mode },
+  });
 }
