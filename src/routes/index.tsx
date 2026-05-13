@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -123,6 +124,12 @@ const TRANSACTIONS_PAGE_SIZE = 25;
 
 type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "plans";
 type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
+type TxnJump = {
+  category: string | null;
+  rangeKey: RangeKey;
+  custom?: DateRange;
+  version: number;
+};
 type TransactionSortKey =
   | "date-desc"
   | "date-asc"
@@ -194,7 +201,7 @@ function buildFilledDailySeries(
     perDay.set(key, (perDay.get(key) ?? 0) + transaction.amount);
   }
 
-  const series: { date: string; amount: number }[] = [];
+  const series: { date: string; isoDate: string; amount: number }[] = [];
   for (
     let cursor = startOfDay(from);
     cursor <= to;
@@ -203,6 +210,7 @@ function buildFilledDailySeries(
     const key = cursor.toISOString();
     series.push({
       date: format(cursor, "MMM d"),
+      isoDate: key,
       amount: Number((perDay.get(key) ?? 0).toFixed(2)),
     });
   }
@@ -572,7 +580,7 @@ function DashboardLayout({
 }) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [visibleOverviewCards, setVisibleOverviewCards] = useState<string[]>([]);
-  const [txnJump, setTxnJump] = useState<{ category: string; version: number } | null>(null);
+  const [txnJump, setTxnJump] = useState<TxnJump | null>(null);
   const [editingBudgetCategory, setEditingBudgetCategory] = useState<string | null>(null);
   const [editingBudgetAmount, setEditingBudgetAmount] = useState("");
   const [savingBudget, setSavingBudget] = useState(false);
@@ -681,7 +689,7 @@ function DashboardLayout({
       const amount = transactions
         .filter((transaction) => transaction.timestamp >= from && transaction.timestamp <= to)
         .reduce((sum, transaction) => sum + transaction.amount, 0);
-      return { day: format(day, "EEE"), amount: Number(amount.toFixed(2)) };
+      return { day: format(day, "EEE"), date: day, amount: Number(amount.toFixed(2)) };
     });
   }, [transactions]);
 
@@ -1029,6 +1037,10 @@ function DashboardLayout({
               categories={categories}
               catColorMap={catColorMap}
               loading={loading}
+              onPointClick={(date) => {
+                setTxnJump({ category: null, rangeKey: "custom", custom: { from: date, to: date }, version: Date.now() });
+                setActiveTab("transactions");
+              }}
             />
 
             <div className="grid lg:grid-cols-2 gap-6">
@@ -1042,7 +1054,7 @@ function DashboardLayout({
                       <CenteredChartMessage label="Loading..." />
                     ) : (
                       <ResponsiveContainer>
-                        <BarChart data={dailyData}>
+                        <BarChart data={dailyData} style={{ cursor: "pointer" }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 256)" />
                           <XAxis dataKey="day" stroke="oklch(0.55 0.04 257)" fontSize={12} />
                           <YAxis
@@ -1057,7 +1069,21 @@ function DashboardLayout({
                             }}
                             formatter={(value: number) => currency.format(value)}
                           />
-                          <Bar dataKey="amount" fill="oklch(0.65 0.18 254)" radius={[6, 6, 0, 0]} />
+                          <Bar
+                            dataKey="amount"
+                            fill="oklch(0.65 0.18 254)"
+                            radius={[6, 6, 0, 0]}
+                            onClick={(data: { date: Date }) => {
+                              const day = data.date;
+                              setTxnJump({
+                                category: null,
+                                rangeKey: "custom",
+                                custom: { from: startOfDay(day), to: endOfDay(day) },
+                                version: Date.now(),
+                              });
+                              setActiveTab("transactions");
+                            }}
+                          />
                         </BarChart>
                       </ResponsiveContainer>
                     )}
@@ -1070,6 +1096,10 @@ function DashboardLayout({
                 categories={categories}
                 catColorMap={catColorMap}
                 loading={loading}
+                onSliceClick={(categoryName, rangeKey, custom) => {
+                  setTxnJump({ category: categoryName, rangeKey, custom, version: Date.now() });
+                  setActiveTab("transactions");
+                }}
               />
             </div>
           </TabsContent>
@@ -1120,7 +1150,7 @@ function DashboardLayout({
                               className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none hover:bg-secondary/80 transition-colors cursor-pointer"
                               aria-label={`View ${category.name} transactions`}
                               onClick={() => {
-                                setTxnJump({ category: category.name, version: Date.now() });
+                                setTxnJump({ category: category.name, rangeKey: "current-month", version: Date.now() });
                                 setActiveTab("transactions");
                               }}
                             >
@@ -1699,19 +1729,34 @@ function OverviewInfoPopover({
   );
 }
 
+function interleaveBySize<T extends { value: number }>(arr: T[]): T[] {
+  const sorted = [...arr].sort((a, b) => b.value - a.value);
+  const result: T[] = [];
+  let lo = 0, hi = sorted.length - 1;
+  let pickLarge = true;
+  while (lo <= hi) {
+    result.push(pickLarge ? sorted[lo++] : sorted[hi--]);
+    pickLarge = !pickLarge;
+  }
+  return result;
+}
+
 function CategoryPieCard({
   transactions,
   categories,
   catColorMap,
   loading,
+  onSliceClick,
 }: {
   transactions: DashboardTransaction[];
   categories: DashboardCategory[];
   catColorMap: Record<string, string>;
   loading: boolean;
+  onSliceClick?: (categoryName: string, rangeKey: RangeKey, custom?: DateRange) => void;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
+  const isMobile = useIsMobile();
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
 
@@ -1725,13 +1770,19 @@ function CategoryPieCard({
     return categories
       .map((cat) => ({
         name: `${cat.emoji} ${cat.name}`,
+        rawName: cat.name,
+        emoji: cat.emoji,
         value: Number((summaries[cat.name] ?? 0).toFixed(2)),
         color: catColorMap[cat.name],
       }))
       .filter((entry) => entry.value > 0);
   }, [transactions, categories, catColorMap, from, to]);
 
+  const chartData = useMemo(() => interleaveBySize(pieData), [pieData]);
+  const legendData = useMemo(() => [...pieData].sort((a, b) => b.value - a.value), [pieData]);
+
   const total = pieData.reduce((sum, entry) => sum + entry.value, 0);
+  const hasData = !loading && pieData.length > 0;
 
   return (
     <Card>
@@ -1745,52 +1796,139 @@ function CategoryPieCard({
         />
       </CardHeader>
       <CardContent>
-        <div className="h-72 w-full">
-          {loading ? (
-            <CenteredChartMessage label="Loading..." />
-          ) : pieData.length === 0 ? (
-            <CenteredChartMessage label="No data for this period." />
-          ) : (
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={50}
-                  outerRadius={85}
-                  paddingAngle={2}
-                  label={({ value }) => currency.format(Number(value ?? 0))}
-                  labelLine={false}
-                >
-                  {pieData.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{ borderRadius: 8, border: "1px solid oklch(0.92 0.01 256)" }}
-                  formatter={(value: number) => currency.format(value)}
-                />
-                <Legend
-                  layout="vertical"
-                  align="right"
-                  verticalAlign="middle"
-                  wrapperStyle={{ fontSize: 12 }}
-                  formatter={(value, entry: { payload?: { value?: number } }) => (
-                    <span className="text-foreground">
-                      {value}{" "}
-                      <span className="text-muted-foreground">
-                        {Math.round(((entry?.payload?.value ?? 0) / Math.max(total, 1)) * 100)}%
-                      </span>
-                    </span>
-                  )}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+        <div className={isMobile ? undefined : "flex items-center gap-4"}>
+          <div className={isMobile ? "h-56 w-full" : "h-80 w-[55%] flex-none"}>
+            {loading ? (
+              <CenteredChartMessage label="Loading..." />
+            ) : pieData.length === 0 ? (
+              <CenteredChartMessage label="No data for this period." />
+            ) : (
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie
+                    data={chartData}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={50}
+                    outerRadius={85}
+                    paddingAngle={2}
+                    label={
+                      isMobile
+                        ? (props: Parameters<typeof renderEmojiSliceLabel>[0]) =>
+                            renderEmojiSliceLabel(props)
+                        : (props: Parameters<typeof renderDesktopSliceLabel>[0]) =>
+                            renderDesktopSliceLabel(props)
+                    }
+                    labelLine={false}
+                    cursor={onSliceClick ? "pointer" : undefined}
+                    onClick={
+                      onSliceClick
+                        ? (entry: { rawName: string }) => onSliceClick(entry.rawName, rangeKey, custom)
+                        : undefined
+                    }
+                  >
+                    {chartData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ borderRadius: 8, border: "1px solid oklch(0.92 0.01 256)" }}
+                    formatter={(value: number) => currency.format(value)}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          {!isMobile && hasData && (
+            <div className="flex-1 min-w-0 max-h-80 overflow-y-auto">
+              <MobilePieLegend data={legendData} total={total} className="" />
+            </div>
           )}
         </div>
+        {isMobile && hasData && <MobilePieLegend data={legendData} total={total} />}
       </CardContent>
     </Card>
+  );
+}
+
+function renderEmojiSliceLabel(props: {
+  cx?: number;
+  cy?: number;
+  midAngle?: number;
+  outerRadius?: number;
+  percent?: number;
+  payload?: { emoji?: string };
+}) {
+  const { cx = 0, cy = 0, midAngle = 0, outerRadius = 0, percent = 0, payload } = props;
+  const emoji = payload?.emoji;
+  const pct = Math.round(percent * 100);
+  if (!emoji || pct === 0) return null;
+  const RADIAN = Math.PI / 180;
+  const radius = outerRadius + 22;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text textAnchor="middle" fontSize={11} pointerEvents="none">
+      <tspan x={x} y={y} dy="-0.6em">{emoji}</tspan>
+      <tspan x={x} dy="1.2em">{pct}%</tspan>
+    </text>
+  );
+}
+
+function renderDesktopSliceLabel(props: {
+  cx?: number;
+  cy?: number;
+  midAngle?: number;
+  outerRadius?: number;
+  percent?: number;
+  payload?: { emoji?: string };
+}) {
+  const { cx = 0, cy = 0, midAngle = 0, outerRadius = 0, percent = 0, payload } = props;
+  const emoji = payload?.emoji;
+  const pct = Math.round(percent * 100);
+  if (pct === 0) return null;
+  const RADIAN = Math.PI / 180;
+  const radius = outerRadius + 28;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text textAnchor="middle" fontSize={18} pointerEvents="none">
+      <tspan x={x} y={y} dy="-0.6em">{emoji}</tspan>
+      <tspan x={x} dy="1.2em">{pct}%</tspan>
+    </text>
+  );
+}
+
+function MobilePieLegend({
+  data,
+  total,
+  className = "mt-3",
+}: {
+  data: { rawName: string; emoji: string; value: number; color: string }[];
+  total: number;
+  className?: string;
+}) {
+  return (
+    <div className={`grid grid-cols-[auto_auto_1fr_auto_auto] items-center gap-x-2 gap-y-1.5 text-xs ${className}`}>
+      {data.map((entry) => {
+        const pct = Math.round((entry.value / Math.max(total, 1)) * 100);
+        return (
+          <Fragment key={entry.rawName}>
+            <span
+              className="inline-block h-3 w-3 rounded-sm"
+              style={{ backgroundColor: entry.color }}
+              aria-hidden
+            />
+            <span className="leading-none">{entry.emoji}</span>
+            <span className="text-foreground truncate">{entry.rawName}</span>
+            <span className="text-muted-foreground text-right tabular-nums">{pct}%</span>
+            <span className="text-foreground text-right tabular-nums">
+              {currency.format(entry.value)}
+            </span>
+          </Fragment>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1799,11 +1937,13 @@ function TrendCard({
   categories,
   catColorMap,
   loading,
+  onPointClick,
 }: {
   transactions: DashboardTransaction[];
   categories: DashboardCategory[];
   catColorMap: Record<string, string>;
   loading: boolean;
+  onPointClick?: (date: Date) => void;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
@@ -1869,7 +2009,18 @@ function TrendCard({
             <CenteredChartMessage label="Select at least one category." />
           ) : (
             <ResponsiveContainer>
-              <LineChart data={data}>
+              <LineChart
+                data={data}
+                style={onPointClick ? { cursor: "pointer" } : undefined}
+                onClick={
+                  onPointClick
+                    ? (chartData: { activePayload?: { payload: { isoDate: string } }[] }) => {
+                        const isoDate = chartData?.activePayload?.[0]?.payload?.isoDate;
+                        if (isoDate) onPointClick(new Date(isoDate));
+                      }
+                    : undefined
+                }
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 256)" />
                 <XAxis dataKey="date" stroke="oklch(0.55 0.04 257)" fontSize={12} minTickGap={24} />
                 <YAxis
@@ -1923,7 +2074,7 @@ function TransactionsTab({
     },
   ) => Promise<void>;
   onEditPlanTransaction: (planId: string) => boolean;
-  jump?: { category: string; version: number } | null;
+  jump?: TxnJump | null;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
@@ -1949,10 +2100,15 @@ function TransactionsTab({
 
   useEffect(() => {
     if (!jump) return;
-    setRangeKey("current-month");
-    setCustom(undefined);
-    setSelectedCategories([jump.category]);
-    setIsCategoryAllMode(false);
+    setRangeKey(jump.rangeKey);
+    setCustom(jump.custom);
+    if (jump.category !== null) {
+      setSelectedCategories([jump.category]);
+      setIsCategoryAllMode(false);
+    } else {
+      setSelectedCategories(categories.map((c) => c.name));
+      setIsCategoryAllMode(true);
+    }
   }, [jump]);
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
