@@ -123,6 +123,12 @@ const TRANSACTIONS_PAGE_SIZE = 25;
 
 type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "plans";
 type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
+type TxnJump = {
+  category: string | null;
+  rangeKey: RangeKey;
+  custom?: DateRange;
+  version: number;
+};
 type TransactionSortKey =
   | "date-desc"
   | "date-asc"
@@ -572,7 +578,7 @@ function DashboardLayout({
 }) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [visibleOverviewCards, setVisibleOverviewCards] = useState<string[]>([]);
-  const [txnJump, setTxnJump] = useState<{ category: string; version: number } | null>(null);
+  const [txnJump, setTxnJump] = useState<TxnJump | null>(null);
   const [editingBudgetCategory, setEditingBudgetCategory] = useState<string | null>(null);
   const [editingBudgetAmount, setEditingBudgetAmount] = useState("");
   const [savingBudget, setSavingBudget] = useState(false);
@@ -681,7 +687,7 @@ function DashboardLayout({
       const amount = transactions
         .filter((transaction) => transaction.timestamp >= from && transaction.timestamp <= to)
         .reduce((sum, transaction) => sum + transaction.amount, 0);
-      return { day: format(day, "EEE"), amount: Number(amount.toFixed(2)) };
+      return { day: format(day, "EEE"), date: day, amount: Number(amount.toFixed(2)) };
     });
   }, [transactions]);
 
@@ -1042,7 +1048,7 @@ function DashboardLayout({
                       <CenteredChartMessage label="Loading..." />
                     ) : (
                       <ResponsiveContainer>
-                        <BarChart data={dailyData}>
+                        <BarChart data={dailyData} style={{ cursor: "pointer" }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 256)" />
                           <XAxis dataKey="day" stroke="oklch(0.55 0.04 257)" fontSize={12} />
                           <YAxis
@@ -1057,7 +1063,21 @@ function DashboardLayout({
                             }}
                             formatter={(value: number) => currency.format(value)}
                           />
-                          <Bar dataKey="amount" fill="oklch(0.65 0.18 254)" radius={[6, 6, 0, 0]} />
+                          <Bar
+                            dataKey="amount"
+                            fill="oklch(0.65 0.18 254)"
+                            radius={[6, 6, 0, 0]}
+                            onClick={(data: { date: Date }) => {
+                              const day = data.date;
+                              setTxnJump({
+                                category: null,
+                                rangeKey: "custom",
+                                custom: { from: startOfDay(day), to: endOfDay(day) },
+                                version: Date.now(),
+                              });
+                              setActiveTab("transactions");
+                            }}
+                          />
                         </BarChart>
                       </ResponsiveContainer>
                     )}
@@ -1070,6 +1090,10 @@ function DashboardLayout({
                 categories={categories}
                 catColorMap={catColorMap}
                 loading={loading}
+                onSliceClick={(categoryName, rangeKey, custom) => {
+                  setTxnJump({ category: categoryName, rangeKey, custom, version: Date.now() });
+                  setActiveTab("transactions");
+                }}
               />
             </div>
           </TabsContent>
@@ -1120,7 +1144,7 @@ function DashboardLayout({
                               className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none hover:bg-secondary/80 transition-colors cursor-pointer"
                               aria-label={`View ${category.name} transactions`}
                               onClick={() => {
-                                setTxnJump({ category: category.name, version: Date.now() });
+                                setTxnJump({ category: category.name, rangeKey: "current-month", version: Date.now() });
                                 setActiveTab("transactions");
                               }}
                             >
@@ -1704,11 +1728,13 @@ function CategoryPieCard({
   categories,
   catColorMap,
   loading,
+  onSliceClick,
 }: {
   transactions: DashboardTransaction[];
   categories: DashboardCategory[];
   catColorMap: Record<string, string>;
   loading: boolean;
+  onSliceClick?: (categoryName: string, rangeKey: RangeKey, custom?: DateRange) => void;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
@@ -1725,6 +1751,7 @@ function CategoryPieCard({
     return categories
       .map((cat) => ({
         name: `${cat.emoji} ${cat.name}`,
+        rawName: cat.name,
         value: Number((summaries[cat.name] ?? 0).toFixed(2)),
         color: catColorMap[cat.name],
       }))
@@ -1760,6 +1787,12 @@ function CategoryPieCard({
                   innerRadius={50}
                   outerRadius={85}
                   paddingAngle={2}
+                  cursor={onSliceClick ? "pointer" : undefined}
+                  onClick={
+                    onSliceClick
+                      ? (entry: { rawName: string }) => onSliceClick(entry.rawName, rangeKey, custom)
+                      : undefined
+                  }
                 >
                   {pieData.map((entry) => (
                     <Cell key={entry.name} fill={entry.color} />
@@ -1921,7 +1954,7 @@ function TransactionsTab({
     },
   ) => Promise<void>;
   onEditPlanTransaction: (planId: string) => boolean;
-  jump?: { category: string; version: number } | null;
+  jump?: TxnJump | null;
 }) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("current-month");
   const [custom, setCustom] = useState<DateRange | undefined>();
@@ -1947,10 +1980,15 @@ function TransactionsTab({
 
   useEffect(() => {
     if (!jump) return;
-    setRangeKey("current-month");
-    setCustom(undefined);
-    setSelectedCategories([jump.category]);
-    setIsCategoryAllMode(false);
+    setRangeKey(jump.rangeKey);
+    setCustom(jump.custom);
+    if (jump.category !== null) {
+      setSelectedCategories([jump.category]);
+      setIsCategoryAllMode(false);
+    } else {
+      setSelectedCategories(categories.map((c) => c.name));
+      setIsCategoryAllMode(true);
+    }
   }, [jump]);
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
