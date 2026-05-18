@@ -514,7 +514,12 @@ async def list_dashboard_budgets(request: Request):
 @router.patch("/budgets/{category_name}")
 async def update_dashboard_budget(category_name: str, body: BudgetSetRequest, request: Request):
     session = _require_session(request)
-    set_budget(session["chat_id"], category_name, body.amount)
+    if body.amount < 0:
+        raise HTTPException(status_code=400, detail="Budget amount cannot be negative.")
+    if body.amount == 0:
+        remove_budget(session["chat_id"], category_name)
+    else:
+        set_budget(session["chat_id"], category_name, body.amount)
     return {"ok": True}
 
 

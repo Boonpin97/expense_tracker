@@ -629,8 +629,6 @@ function DashboardLayout({
   }, [transactions]);
 
   const monthTotal = Object.values(monthSummaries).reduce((sum, value) => sum + value, 0);
-  const budgetTotal = Object.values(budgets).reduce((sum, value) => sum + value, 0);
-  const budgetRemaining = Math.max(budgetTotal - monthTotal, 0);
 
   const recentTransactions = useMemo(
     () =>
@@ -667,6 +665,10 @@ function DashboardLayout({
         }),
     [categories, monthSummaries, budgets],
   );
+
+  const budgetTotal = budgetRows.reduce((sum, row) => sum + row.budget, 0);
+  const budgetSpentTotal = budgetRows.reduce((sum, row) => sum + (row.budget > 0 ? row.spent : 0), 0);
+  const budgetRemaining = Math.max(budgetTotal - budgetSpentTotal, 0);
 
   const pieData = useMemo(
     () =>
@@ -1115,8 +1117,8 @@ function DashboardLayout({
               />
               <StatCard
                 label="Spent"
-                value={currency.format(monthTotal)}
-                sub={`${budgetTotal > 0 ? Math.round((monthTotal / budgetTotal) * 100) : 0}% used`}
+                value={currency.format(budgetSpentTotal)}
+                sub={`${budgetTotal > 0 ? Math.round((budgetSpentTotal / budgetTotal) * 100) : 0}% used`}
                 icon={Wallet}
                 trend="up"
               />
