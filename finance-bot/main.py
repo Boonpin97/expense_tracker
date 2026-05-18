@@ -32,7 +32,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Telegram Finance Bot", lifespan=lifespan)
 
+dashboard_web_url = os.getenv("DASHBOARD_WEB_URL", "").strip()
 default_origins = [
+    dashboard_web_url,
+    "https://budget-flow-123.web.app",
+    "https://budget-flow-123.firebaseapp.com",
+    "https://budget-flow-123-dev.web.app",
+    "https://budget-flow-123-dev.firebaseapp.com",
     "https://budget-bot-123.web.app",
     "https://budget-bot-123.firebaseapp.com",
     "https://budget-bot-123-dev.web.app",
@@ -49,7 +55,7 @@ configured_origins = [
     for origin in os.getenv("DASHBOARD_WEB_ORIGINS", "").split(",")
     if origin.strip()
 ]
-allowed_origins = list(dict.fromkeys([*default_origins, *configured_origins]))
+allowed_origins = list(dict.fromkeys([origin for origin in [*default_origins, *configured_origins] if origin]))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,

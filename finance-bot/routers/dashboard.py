@@ -109,7 +109,7 @@ class DashboardPreferencesUpdateRequest(BaseModel):
 
 
 def _dashboard_url() -> str:
-    return os.getenv("DASHBOARD_WEB_URL", "https://budget-bot-123.web.app")
+    return os.getenv("DASHBOARD_WEB_URL", "https://budget-flow-123.web.app")
 
 
 def _set_session_cookie(response: Response, token: str, expires_at: datetime) -> None:

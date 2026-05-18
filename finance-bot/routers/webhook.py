@@ -726,7 +726,7 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
         delete_web_sessions_for_chat(chat_id)
         clear_session(chat_id)
         clear_user_state(chat_id)
-        dashboard_url = os.getenv("DASHBOARD_WEB_URL", "https://budget-bot-123.web.app")
+        dashboard_url = os.getenv("DASHBOARD_WEB_URL", "https://budget-flow-123.web.app")
         await telegram.send_message(
             chat_id,
             (

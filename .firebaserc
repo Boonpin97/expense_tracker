@@ -1,15 +1,15 @@
 {
   "projects": {
-    "default": "budget-bot-123"
+    "default": "budget-flow-123"
   },
   "targets": {
-    "budget-bot-123": {
+    "budget-flow-123": {
       "hosting": {
         "prod": [
-          "budget-bot-123"
+          "budget-flow-123"
         ],
         "dev": [
-          "budget-bot-123-dev"
+          "budget-flow-123-dev"
         ]
       }
     }
