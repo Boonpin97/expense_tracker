@@ -373,6 +373,58 @@ class CategoryPartitioningTests(unittest.TestCase):
         self.assertEqual(store[("users/456/category_map", "coffee")]["category"], "Food & Drink")
         self.assertNotIn(("users/123/category_map", "coffee"), store)
 
+    def test_remove_category_from_list_also_removes_budget(self):
+        store = {
+            ("users/123/category_list", "Social"): {"name": "Social", "emoji": "🎉", "order": 1},
+            ("budgets", "123"): {"Social": 100.0, "Food": 50.0},
+        }
+
+        with patch.object(firestore, "get_db", return_value=_FakeDb(store)):
+            removed = firestore.remove_category_from_list(123, "Social")
+
+        self.assertTrue(removed)
+        self.assertNotIn(("users/123/category_list", "Social"), store)
+        self.assertEqual(store[("budgets", "123")], {"Food": 50.0})
+
+    def test_rename_category_moves_budget_key(self):
+        store = {
+            ("users/123/category_list", "Food"): {"name": "Food", "emoji": "🍔", "order": 1},
+            ("budgets", "123"): {"Food": 300.0, "Transport": 50.0},
+            ("transactions", "tx-1"): {
+                "chat_id": 123,
+                "item": "Lunch",
+                "amount": 12.0,
+                "category": "Food",
+                "timestamp": "2026-05-01T10:00:00+08:00",
+            },
+        }
+
+        with patch.object(firestore, "get_db", return_value=_FakeDb(store)):
+            ok, tx_count, map_count = firestore.rename_category(123, "Food", "Dining")
+
+        self.assertTrue(ok)
+        self.assertEqual((tx_count, map_count), (1, 0))
+        self.assertEqual(store[("budgets", "123")], {"Dining": 300.0, "Transport": 50.0})
+        self.assertEqual(store[("transactions", "tx-1")]["category"], "Dining")
+
+    def test_get_budgets_filters_orphaned_and_non_positive_entries(self):
+        store = {
+            ("users/123/category_list", "Food"): {"name": "Food", "emoji": "🍔", "order": 1},
+            ("users/123/category_list", "Transport"): {"name": "Transport", "emoji": "🚌", "order": 2},
+            ("budgets", "123"): {
+                "Food": 300.0,
+                "Deleted Category": 120.0,
+                "Transport": 0.0,
+                "Broken": -10.0,
+            },
+        }
+
+        with patch.object(firestore, "get_db", return_value=_FakeDb(store)):
+            budgets = firestore.get_budgets(123)
+
+        self.assertEqual(budgets, {"Food": 300.0})
+        self.assertEqual(store[("budgets", "123")], {"Food": 300.0})
+
 
 if __name__ == "__main__":
     unittest.main()

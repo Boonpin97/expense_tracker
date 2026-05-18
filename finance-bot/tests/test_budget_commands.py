@@ -164,11 +164,15 @@ class BudgetCommandTests(unittest.TestCase):
             _parse_budget_command_or_none("/set_budget Transport $45.50"),
             ("Transport", 45.50),
         )
+        self.assertEqual(
+            _parse_budget_command_or_none("/set_budget Social 0"),
+            ("Social", 0.0),
+        )
 
     def test_parse_budget_command_rejects_invalid_input(self):
         self.assertIsNone(_parse_budget_command_or_none("/set_budget"))
         self.assertIsNone(_parse_budget_command_or_none("/set_budget Food nope"))
-        self.assertIsNone(_parse_budget_command_or_none("/set_budget Food 0"))
+        self.assertIsNone(_parse_budget_command_or_none("/set_budget Food -1"))
 
     def test_parse_remove_budget_command(self):
         self.assertEqual(
@@ -350,7 +354,7 @@ class BudgetCommandTests(unittest.TestCase):
         answer_callback_query.assert_awaited_once_with("cb-1", "")
         send_message.assert_awaited_once_with(
             123,
-            "Send the monthly budget for <b>Food & Drink</b>, for example <code>300</code>.",
+            "Send the monthly budget for <b>Food & Drink</b>, for example <code>300</code>. Send <code>0</code> to remove it.",
         )
 
     def test_set_budget_amount_entry_saves_budget_and_reprompts(self):
@@ -393,6 +397,54 @@ class BudgetCommandTests(unittest.TestCase):
         send_message.assert_awaited_once_with(
             123,
             "✅ Monthly budget for <b>Food & Drink</b> set to <b>$300.00</b>.",
+        )
+        send_budget_category_keyboard.assert_awaited_once_with(
+            123,
+            "Choose another category to set a monthly budget for, or tap Done.",
+        )
+
+    def test_set_budget_amount_entry_zero_removes_budget_and_reprompts(self):
+        payload = {"message": {"chat": {"id": 123}, "text": "0"}}
+
+        class DummyRequest:
+            async def json(self):
+                return payload
+
+        session = {
+            "flow_type": "set_budget",
+            "step": "awaiting_amount",
+            "payload": {"selected_category": "Food & Drink"},
+            "expires_at": "2999-01-01T00:00:00+08:00",
+        }
+
+        with patch("routers.webhook._get_allowed_chat_ids", return_value={123}), patch(
+            "routers.webhook.get_session",
+            return_value=session,
+        ), patch(
+            "routers.webhook.remove_budget",
+        ) as remove_budget, patch(
+            "routers.webhook.set_budget",
+        ) as set_budget, patch(
+            "routers.webhook.update_session",
+        ) as update_session, patch(
+            "routers.webhook.telegram.send_message",
+            new=AsyncMock(),
+        ) as send_message, patch(
+            "routers.webhook.telegram.send_budget_category_keyboard",
+            new=AsyncMock(),
+        ) as send_budget_category_keyboard:
+            asyncio.run(webhook(DummyRequest()))
+
+        remove_budget.assert_called_once_with(123, "Food & Drink")
+        set_budget.assert_not_called()
+        update_session.assert_called_once_with(
+            123,
+            step="choosing_category",
+            payload_updates={"selected_category": ""},
+        )
+        send_message.assert_awaited_once_with(
+            123,
+            "🗑️ Removed the monthly budget for <b>Food & Drink</b>.",
         )
         send_budget_category_keyboard.assert_awaited_once_with(
             123,

@@ -114,6 +114,14 @@ def _valid_amount(text: str) -> float | None:
     return value if value > 0 else None
 
 
+def _valid_budget_amount(text: str) -> float | None:
+    try:
+        value = float(text.strip().replace("$", ""))
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
 def _valid_day(text: str) -> int | None:
     try:
         day = int(text.strip())
@@ -144,7 +152,7 @@ def _parse_budget_command_or_none(text: str) -> tuple[str, float] | None:
         return None
     category = match.group(1).strip().title()
     amount = float(match.group(2))
-    if amount <= 0:
+    if amount < 0:
         return None
     return category, amount
 
@@ -718,6 +726,7 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
         delete_web_sessions_for_chat(chat_id)
         clear_session(chat_id)
         clear_user_state(chat_id)
+        dashboard_url = os.getenv("DASHBOARD_WEB_URL", "https://budget-flow-123.web.app")
         await telegram.send_message(
             chat_id,
             (
@@ -725,7 +734,7 @@ async def _handle_dashboard_account_session(chat_id: int, text: str) -> bool:
                 if action == "update_password"
                 else "✅ Dashboard login saved.\n"
             )
-            + "Use your username and password at <a href=\"https://budget-bot-123.web.app\">budget-bot-123.web.app</a>.",
+            + f"Use your username and password at <a href=\"{dashboard_url}\">{dashboard_url}</a>.",
         )
         return True
 
@@ -750,17 +759,22 @@ async def _handle_set_budget_session(chat_id: int, text: str) -> bool:
         await telegram.send_message(chat_id, "⚠️ Budget setup was interrupted. Send /set_budget again.")
         return True
 
-    amount = _valid_amount(text)
+    amount = _valid_budget_amount(text)
     if amount is None:
         await telegram.send_message(
             chat_id,
-            f"⚠️ Send a positive number for <b>{category}</b>, for example <code>300</code>.",
+            f"⚠️ Send a non-negative number for <b>{category}</b>. Send <code>0</code> to remove the budget, or <code>300</code> to set one.",
         )
         return True
 
-    set_budget(chat_id, category, amount)
+    if amount == 0:
+        remove_budget(chat_id, category)
+        message = f"🗑️ Removed the monthly budget for <b>{category}</b>."
+    else:
+        set_budget(chat_id, category, amount)
+        message = f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>."
     update_session(chat_id, step="choosing_category", payload_updates={"selected_category": ""})
-    await telegram.send_message(chat_id, f"✅ Monthly budget for <b>{category}</b> set to <b>${amount:.2f}</b>.")
+    await telegram.send_message(chat_id, message)
     await _send_set_budget_category_prompt(
         chat_id,
         "Choose another category to set a monthly budget for, or tap Done.",
@@ -836,7 +850,7 @@ async def webhook(request: Request):
             await telegram.answer_callback_query(callback_query_id, "")
             await telegram.send_message(
                 chat_id,
-                f"Send the monthly budget for <b>{category}</b>, for example <code>300</code>.",
+                f"Send the monthly budget for <b>{category}</b>, for example <code>300</code>. Send <code>0</code> to remove it.",
             )
             return {"ok": True}
 

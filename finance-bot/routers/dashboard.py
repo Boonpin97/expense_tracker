@@ -109,7 +109,7 @@ class DashboardPreferencesUpdateRequest(BaseModel):
 
 
 def _dashboard_url() -> str:
-    return os.getenv("DASHBOARD_WEB_URL", "https://budget-bot-123.web.app")
+    return os.getenv("DASHBOARD_WEB_URL", "https://budget-flow-123.web.app")
 
 
 def _set_session_cookie(response: Response, token: str, expires_at: datetime) -> None:
@@ -514,7 +514,12 @@ async def list_dashboard_budgets(request: Request):
 @router.patch("/budgets/{category_name}")
 async def update_dashboard_budget(category_name: str, body: BudgetSetRequest, request: Request):
     session = _require_session(request)
-    set_budget(session["chat_id"], category_name, body.amount)
+    if body.amount < 0:
+        raise HTTPException(status_code=400, detail="Budget amount cannot be negative.")
+    if body.amount == 0:
+        remove_budget(session["chat_id"], category_name)
+    else:
+        set_budget(session["chat_id"], category_name, body.amount)
     return {"ok": True}
 
 

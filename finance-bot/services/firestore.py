@@ -322,6 +322,7 @@ def remove_category_from_list(chat_id: int, name: str) -> bool:
     doc = doc_ref.get()
     if doc.exists:
         doc_ref.delete()
+        remove_budget(chat_id, name)
         return True
     return False
 
@@ -386,6 +387,17 @@ def rename_category(chat_id: int, old_name: str, new_name: str) -> tuple[bool, i
     data["name"] = new_name
     new_ref.set(data)
     old_ref.delete()
+
+    budgets_ref = get_db().collection("budgets").document(str(chat_id))
+    budgets_doc = budgets_ref.get()
+    if budgets_doc.exists:
+        budgets = budgets_doc.to_dict() or {}
+        if old_name in budgets:
+            budgets[new_name] = budgets.pop(old_name)
+            if budgets:
+                budgets_ref.set(budgets)
+            else:
+                budgets_ref.delete()
 
     tx_count = 0
     for doc in get_db().collection("transactions").where("chat_id", "==", chat_id).stream():
@@ -582,7 +594,23 @@ def update_dashboard_preferences(chat_id: int, **fields) -> None:
 def get_budgets(chat_id: int) -> dict[str, float]:
     doc = get_db().collection("budgets").document(str(chat_id)).get()
     if doc.exists:
-        return doc.to_dict() or {}
+        raw_budgets = doc.to_dict() or {}
+        category_names = {category.get("name") for category in get_category_list(chat_id)}
+        budgets: dict[str, float] = {}
+        changed = False
+
+        for category, amount in raw_budgets.items():
+            if category not in category_names or not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount <= 0:
+                changed = True
+                continue
+            budgets[category] = float(amount)
+
+        if changed:
+            if budgets:
+                doc.reference.set(budgets)
+            else:
+                doc.reference.delete()
+        return budgets
     return {}
 
 

@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -629,8 +629,6 @@ function DashboardLayout({
   }, [transactions]);
 
   const monthTotal = Object.values(monthSummaries).reduce((sum, value) => sum + value, 0);
-  const budgetTotal = Object.values(budgets).reduce((sum, value) => sum + value, 0);
-  const budgetRemaining = Math.max(budgetTotal - monthTotal, 0);
 
   const recentTransactions = useMemo(
     () =>
@@ -667,6 +665,10 @@ function DashboardLayout({
         }),
     [categories, monthSummaries, budgets],
   );
+
+  const budgetTotal = budgetRows.reduce((sum, row) => sum + row.budget, 0);
+  const budgetSpentTotal = budgetRows.reduce((sum, row) => sum + (row.budget > 0 ? row.spent : 0), 0);
+  const budgetRemaining = Math.max(budgetTotal - budgetSpentTotal, 0);
 
   const pieData = useMemo(
     () =>
@@ -1115,8 +1117,8 @@ function DashboardLayout({
               />
               <StatCard
                 label="Spent"
-                value={currency.format(monthTotal)}
-                sub={`${budgetTotal > 0 ? Math.round((monthTotal / budgetTotal) * 100) : 0}% used`}
+                value={currency.format(budgetSpentTotal)}
+                sub={`${budgetTotal > 0 ? Math.round((budgetSpentTotal / budgetTotal) * 100) : 0}% used`}
                 icon={Wallet}
                 trend="up"
               />
@@ -2080,6 +2082,7 @@ function TransactionsTab({
   const [custom, setCustom] = useState<DateRange | undefined>();
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [isCategoryAllMode, setIsCategoryAllMode] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
   const [sortKey, setSortKey] = useState<TransactionSortKey>("date-desc");
@@ -2112,11 +2115,13 @@ function TransactionsTab({
   }, [jump]);
 
   const { from, to } = useMemo(() => getRange(rangeKey, custom), [rangeKey, custom]);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const minValue = minAmount.trim() === "" ? null : Number(minAmount);
   const maxValue = maxAmount.trim() === "" ? null : Number(maxAmount);
 
   const filteredTransactions = useMemo(() => {
     const selectedSet = new Set(selectedCategories);
+    const normalizedQuery = deferredSearchQuery.trim().toLowerCase();
     const filtered = transactions.filter((transaction) => {
       if (transaction.timestamp < from || transaction.timestamp > to) {
         return false;
@@ -2130,14 +2135,27 @@ function TransactionsTab({
       if (maxValue !== null && !Number.isNaN(maxValue) && transaction.amount > maxValue) {
         return false;
       }
+      if (normalizedQuery) {
+        const searchable = [
+          transaction.item,
+          transaction.category,
+          format(transaction.timestamp, "MMM d, yyyy"),
+          format(transaction.timestamp, "yyyy-MM-dd"),
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!searchable.includes(normalizedQuery)) {
+          return false;
+        }
+      }
       return true;
     });
     return sortTransactions(filtered, sortKey);
-  }, [transactions, from, to, selectedCategories, minValue, maxValue, sortKey]);
+  }, [transactions, from, to, selectedCategories, minValue, maxValue, deferredSearchQuery, sortKey]);
 
   useEffect(() => {
     setPage(1);
-  }, [rangeKey, custom, selectedCategories, minAmount, maxAmount, sortKey]);
+  }, [rangeKey, custom, selectedCategories, searchQuery, minAmount, maxAmount, sortKey]);
 
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / TRANSACTIONS_PAGE_SIZE));
 
@@ -2265,6 +2283,16 @@ function TransactionsTab({
 
   return (
     <>
+      <div className="space-y-2">
+        <Label htmlFor="transaction-search">Search transactions</Label>
+        <Input
+          id="transaction-search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="Search by item, category, or date"
+          className="max-w-md"
+        />
+      </div>
       <Card>
         <CardHeader className="space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

@@ -1,6 +1,8 @@
 param(
   [ValidateSet("prod", "dev")]
-  [string]$Environment
+  [string]$Environment,
+
+  [string]$ProjectId = $env:FIREBASE_PROJECT_ID
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +30,11 @@ if (-not $Environment) {
   }
 }
 
+if (-not $ProjectId) {
+  throw "ProjectId is required. Pass -ProjectId <firebase-project-id> or set FIREBASE_PROJECT_ID."
+}
+
 $selected = $config[$Environment]
 
 & $npm run build
-& $firebase deploy --only "hosting:$($selected.HostingTarget)" --project budget-bot-123
+& $firebase deploy --only "hosting:$($selected.HostingTarget)" --project $ProjectId
