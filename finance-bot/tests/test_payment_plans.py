@@ -79,7 +79,7 @@ if "httpx" not in sys.modules:
     sys.modules["httpx"] = httpx_stub
 
 from services.payment_plans import clamp_day, compute_split_amounts, compute_next_due_date
-from services.plan_manager import process_due_plans, rewrite_plan_history
+from services.plan_manager import process_due_plans, rewrite_plan_history, post_next_occurrence
 from services import telegram
 
 SGT = timezone(timedelta(hours=8))
@@ -193,6 +193,50 @@ class PaymentPlanHelperTests(unittest.TestCase):
 
 
 class ProcessDuePlansTests(unittest.IsolatedAsyncioTestCase):
+    async def test_post_next_occurrence_marks_final_split_installment_completed(self):
+        due_at = datetime(2026, 6, 30, 0, 0, 0, tzinfo=SGT)
+        plan = {
+            "id": "plan-1",
+            "chat_id": 123,
+            "plan_type": "split_payment",
+            "item": "Phone",
+            "category": "Shopping",
+            "day_of_month": 30,
+            "status": "active",
+            "start_year": 2026,
+            "start_month": 5,
+            "next_due_date": due_at.isoformat(),
+            "created_at": due_at.isoformat(),
+            "total_amount": 100.0,
+            "installment_count": 2,
+            "current_installment_number": 1,
+            "base_installment_amount": 50.0,
+            "final_installment_amount": 50.0,
+        }
+        with patch("services.plan_manager.firestore.find_transaction_by_plan_occurrence", return_value=None), \
+             patch("services.plan_manager.firestore.save_transaction") as mock_save_tx, \
+             patch("services.plan_manager.firestore.update_payment_plan") as mock_update_plan, \
+             patch("services.plan_manager.telegram.send_transaction_confirmation", new=AsyncMock()) as mock_confirm, \
+             patch("services.plan_manager._check_budget_exceeded", new=AsyncMock()):
+            posted = await post_next_occurrence(plan, timestamp=due_at)
+
+        self.assertTrue(posted)
+        self.assertEqual(mock_save_tx.call_args.args[0].occurrence_key, "2026-06")
+        mock_update_plan.assert_called_once_with(
+            "plan-1",
+            current_installment_number=2,
+            next_due_date="",
+            status="completed",
+        )
+        self.assertIn("installment 2/2", mock_confirm.call_args.kwargs["note"])
+
+    async def test_post_next_occurrence_skips_inactive_plan(self):
+        plan = {"id": "plan-1", "status": "completed"}
+        with patch("services.plan_manager.firestore.save_transaction") as mock_save_tx:
+            posted = await post_next_occurrence(plan)
+        self.assertFalse(posted)
+        mock_save_tx.assert_not_called()
+
     async def test_process_due_plans_posts_once(self):
         due_at = datetime(2026, 6, 30, 0, 0, 0, tzinfo=SGT)
         plan = {
@@ -296,6 +340,49 @@ class ProcessDuePlansTests(unittest.IsolatedAsyncioTestCase):
              patch("services.plan_manager._check_budget_exceeded", new=AsyncMock()):
             processed = await process_due_plans(due_at)
         self.assertEqual(processed, 0)
+
+    async def test_rewrite_recurring_plan_history_rebuilds_past_months_and_next_due(self):
+        recurring_plan = {
+            "id": "plan-1",
+            "chat_id": 123,
+            "plan_type": "recurring",
+            "item": "Netflix",
+            "category": "Entertainment",
+            "day_of_month": 15,
+            "status": "active",
+            "start_year": 2026,
+            "start_month": 3,
+            "next_due_date": datetime(2026, 5, 15, tzinfo=SGT).isoformat(),
+            "created_at": datetime(2026, 3, 15, tzinfo=SGT).isoformat(),
+            "amount": 20.0,
+            "current_installment_number": 0,
+        }
+        saved_transactions = []
+        update_kwargs = {}
+
+        def capture_save_tx(tx):
+            saved_transactions.append(tx)
+
+        def capture_update(_plan_id, **kwargs):
+            update_kwargs.update(kwargs)
+
+        class FakeDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 5, 20, 12, 0, 0, tzinfo=tz or SGT)
+
+        with patch("services.plan_manager.firestore.get_payment_plan", return_value=recurring_plan), \
+             patch("services.plan_manager.firestore.delete_transactions_for_plan", return_value=0), \
+             patch("services.plan_manager.firestore.save_transaction", side_effect=capture_save_tx), \
+             patch("services.plan_manager.firestore.update_payment_plan", side_effect=capture_update), \
+             patch("services.plan_manager.datetime", FakeDateTime):
+            rewritten = await rewrite_plan_history("plan-1")
+
+        self.assertEqual(rewritten, 3)
+        self.assertEqual([tx.occurrence_key for tx in saved_transactions], ["2026-03", "2026-04", "2026-05"])
+        self.assertEqual(update_kwargs["current_installment_number"], 3)
+        self.assertEqual(update_kwargs["next_due_date"], "2026-06-15T00:00:00+08:00")
+        self.assertEqual(update_kwargs["status"], "active")
 
 
 if __name__ == "__main__":

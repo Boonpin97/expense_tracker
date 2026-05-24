@@ -1703,7 +1703,7 @@ async def webhook(request: Request):
 
     parsed = parse_expense(text)
     if parsed is None:
-        await telegram.send_message(chat_id, "🤔 I couldn't understand that. Try something like:\n<code>Coffee $10</code>\n<code>Drinks 10+20*2</code>\n<code>Coffee $10 130126</code>")
+        await telegram.send_message(chat_id, "🤔 I couldn't understand that. Try something like:\n<code>Coffee $10</code>\n<code>2 eat</code>\n<code>Drinks 10+20*2</code>\n<code>Coffee $10 130126</code>")
         return {"ok": True}
 
     await handle_expense(

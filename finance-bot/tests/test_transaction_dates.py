@@ -121,6 +121,30 @@ class TransactionDateParsingTests(unittest.TestCase):
         self.assertEqual(parsed.item, "Drinks")
         self.assertEqual(parsed.amount, 50.0)
 
+    def test_parse_expense_with_leading_dollar_amount(self):
+        parsed = parse_expense("$10 Food")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "Food")
+        self.assertEqual(parsed.amount, 10.0)
+
+    def test_parse_expense_with_leading_plain_amount(self):
+        parsed = parse_expense("10.4 Drinks")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "Drinks")
+        self.assertEqual(parsed.amount, 10.4)
+
+    def test_parse_expense_with_numeric_item_name(self):
+        parsed = parse_expense("10.44 711")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "711")
+        self.assertEqual(parsed.amount, 10.44)
+
+    def test_parse_expense_with_hyphenated_numeric_item_name(self):
+        parsed = parse_expense("5 7-11")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.item, "7-11")
+        self.assertEqual(parsed.amount, 5.0)
+
     def test_parse_expense_with_parentheses_and_trailing_date(self):
         parsed = parse_expense("Snacks (10+20)*2 130126")
         self.assertIsNotNone(parsed)

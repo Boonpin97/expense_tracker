@@ -122,6 +122,11 @@ def parse_expense(text: str) -> Optional[ParsedExpense]:
         item, amount = parsed
         return ParsedExpense(item=item, amount=amount, transaction_date=transaction_date)
 
+    parsed = _parse_amount_then_item(text)
+    if parsed:
+        item, amount = parsed
+        return ParsedExpense(item=item, amount=amount, transaction_date=transaction_date)
+
     parsed = _parse_item_then_amount(text)
     if parsed:
         item, amount = parsed
