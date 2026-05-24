@@ -106,6 +106,14 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
             dashboard._parse_dashboard_datetime("not-a-date")
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_scheduled_plan_start_stays_in_same_month_before_due_day(self):
+        timestamp = dashboard._parse_dashboard_datetime("2026-05-10T09:30:00+08:00")
+        self.assertEqual(dashboard._scheduled_plan_start(timestamp, 15), (2026, 5))
+
+    def test_scheduled_plan_start_moves_to_next_month_after_due_day(self):
+        timestamp = dashboard._parse_dashboard_datetime("2026-05-20T09:30:00+08:00")
+        self.assertEqual(dashboard._scheduled_plan_start(timestamp, 15), (2026, 6))
+
     def test_login_dashboard_rejects_inactive_account(self):
         response = Response()
         request = dashboard.LoginRequest(username="alice", password="secret")
@@ -171,6 +179,18 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
                 asyncio.run(dashboard.create_dashboard_category(payload, request))
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_update_dashboard_category_same_name_only_updates_emoji(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        payload = dashboard.CategoryUpdateRequest(name="Food", emoji="🍟")
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "update_category_emoji", return_value=True) as mock_update_emoji,
+        ):
+            result = asyncio.run(dashboard.update_dashboard_category("Food", payload, request))
+
+        self.assertEqual(result, {"ok": True})
+        mock_update_emoji.assert_called_once_with(123, "Food", "🍟")
+
     def test_update_dashboard_category_rejects_renaming_other(self):
         request = SimpleNamespace(cookies={}, headers={})
         payload = dashboard.CategoryUpdateRequest(name="Misc", emoji="📦")
@@ -194,6 +214,20 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
                 asyncio.run(dashboard.move_dashboard_category("Food", payload, request))
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_move_dashboard_category_out_of_bounds_is_noop(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        payload = dashboard.CategoryMoveRequest(direction=-1)
+        categories = [{"name": "Food", "order": 1}, {"name": "Other", "order": 9999}]
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_category_list", return_value=categories),
+            patch.object(dashboard, "update_category_order") as mock_update_order,
+        ):
+            result = asyncio.run(dashboard.move_dashboard_category("Food", payload, request))
+
+        self.assertEqual(result, {"ok": True})
+        mock_update_order.assert_not_called()
+
     def test_update_dashboard_budget_rejects_negative_amount(self):
         request = SimpleNamespace(cookies={}, headers={})
         payload = dashboard.BudgetSetRequest(amount=-1.0)
@@ -214,6 +248,23 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
                 asyncio.run(dashboard.update_dashboard_plan("plan-1", payload, request))
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_update_dashboard_plan_rejects_installment_count_below_posted(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        payload = dashboard.PlanUpdateRequest(installment_count=1)
+        plan = {
+            "id": "plan-1",
+            "chat_id": 123,
+            "plan_type": "split_payment",
+            "current_installment_number": 2,
+        }
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_payment_plan", return_value=plan),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(dashboard.update_dashboard_plan("plan-1", payload, request))
+        self.assertEqual(ctx.exception.status_code, 400)
+
     def test_delete_dashboard_plan_rejects_cross_user_access(self):
         request = SimpleNamespace(cookies={}, headers={})
         plan = {"id": "plan-1", "chat_id": 456, "plan_type": "recurring"}
@@ -224,6 +275,21 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(dashboard.delete_dashboard_plan("plan-1", request))
         self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_delete_dashboard_split_plan_removes_generated_transactions_by_default(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        plan = {"id": "plan-1", "chat_id": 123, "plan_type": "split_payment"}
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_payment_plan", return_value=plan),
+            patch.object(dashboard, "delete_payment_plan") as mock_delete_plan,
+            patch.object(dashboard, "delete_transactions_for_plan", return_value=2) as mock_delete_txs,
+        ):
+            result = asyncio.run(dashboard.delete_dashboard_plan("plan-1", request))
+
+        self.assertEqual(result, {"ok": True, "deleted": 2})
+        mock_delete_plan.assert_called_once_with("plan-1")
+        mock_delete_txs.assert_called_once_with("plan-1")
 
 
 if __name__ == "__main__":

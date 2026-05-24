@@ -212,6 +212,58 @@ class CategoriserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(mock_confirm.call_args.kwargs["include_change_date"])
         mock_budget.assert_awaited_once_with(123, "Fun Stuff")
 
+    async def test_handle_custom_category_input_without_pending_warns_user(self):
+        with (
+            patch.object(categoriser.firestore, "get_pending", return_value=None),
+            patch.object(categoriser.telegram, "send_message", new=AsyncMock()) as mock_send,
+        ):
+            await categoriser.handle_custom_category_input(123, "Fun Stuff", "🎉")
+
+        mock_send.assert_awaited_once()
+        self.assertIn("no pending expense", mock_send.call_args.args[1].lower())
+
+    async def test_handle_category_selection_updates_existing_transaction_in_change_flow(self):
+        pending_change = {
+            "tx_id": "tx-99",
+            "item_key": "coffee",
+            "timestamp": datetime.now(SGT).isoformat(),
+        }
+        with (
+            patch.object(categoriser.firestore, "get_pending_change", return_value=pending_change),
+            patch.object(categoriser.firestore, "update_transaction_category") as mock_update_tx,
+            patch.object(categoriser.firestore, "save_category") as mock_save_category,
+            patch.object(categoriser.firestore, "delete_pending_change") as mock_delete_pending_change,
+            patch.object(categoriser.telegram, "answer_callback_query", new=AsyncMock()) as mock_answer,
+            patch.object(categoriser.telegram, "send_message", new=AsyncMock()) as mock_send,
+        ):
+            await categoriser.handle_category_selection(123, "Food", "cb-3")
+
+        mock_update_tx.assert_called_once_with("tx-99", "Food")
+        mock_save_category.assert_called_once_with(123, "coffee", "Food", confirmed_by_user=True)
+        mock_delete_pending_change.assert_called_once_with(123)
+        mock_answer.assert_awaited_once_with("cb-3", "Changed to Food")
+        self.assertIn("recategorised", mock_send.call_args.args[1].lower())
+
+    async def test_handle_category_selection_new_category_from_expense_flow_sets_inline_name_state(self):
+        pending = {
+            "item": "Mystery Shop",
+            "amount": 12.3,
+            "timestamp": "2026-05-20T09:00:00+08:00",
+            "created_at": datetime.now(SGT).isoformat(),
+        }
+        with (
+            patch.object(categoriser.firestore, "get_pending_change", return_value=None),
+            patch.object(categoriser.firestore, "get_pending", return_value=pending),
+            patch.object(categoriser.firestore, "set_user_state") as mock_set_state,
+            patch.object(categoriser.telegram, "answer_callback_query", new=AsyncMock()) as mock_answer,
+            patch.object(categoriser.telegram, "send_message", new=AsyncMock()) as mock_send,
+        ):
+            await categoriser.handle_category_selection(123, "__new__", "cb-4")
+
+        mock_set_state.assert_called_once_with(123, "awaiting_inline_cat_name")
+        mock_answer.assert_awaited_once_with("cb-4", "")
+        self.assertIn("type the name of the new category", mock_send.call_args.args[1].lower())
+
     async def test_check_budget_exceeded_sends_warning_when_over_prorated_limit(self):
         now = datetime(2026, 5, 20, 12, 0, tzinfo=SGT)
 

@@ -117,6 +117,32 @@ class ReportsRouterTests(unittest.TestCase):
             reports._get_period_window("yearly")
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_format_report_sorts_categories_by_total_descending_with_fallback_emoji(self):
+        transactions = [
+            {"category": "Food", "amount": 15.0},
+            {"category": "Transport", "amount": 5.0},
+            {"category": "Food", "amount": 10.0},
+            {"category": "Other", "amount": 30.0},
+        ]
+        with patch.object(reports, "get_category_list", return_value=[{"name": "Food", "emoji": "🍔"}]):
+            body = reports._format_report(123, "Weekly Report", transactions)
+
+        self.assertLess(body.index("📦 Other"), body.index("🍔 Food"))
+        self.assertLess(body.index("🍔 Food"), body.index("📦 Transport"))
+        self.assertIn("100.0%", body)
+
+    def test_format_daily_report_sorts_by_timestamp_and_formats_times(self):
+        transactions = [
+            {"item": "Dinner", "amount": 12.0, "category": "Food", "timestamp": "2026-05-20T19:30:00+08:00"},
+            {"item": "Breakfast", "amount": 5.0, "category": "Food", "timestamp": "2026-05-20T08:15:00+08:00"},
+        ]
+        with patch.object(reports, "get_category_list", return_value=[{"name": "Food", "emoji": "🍔"}]):
+            body = reports._format_daily_report(123, "Daily Report", transactions)
+
+        self.assertLess(body.index("Breakfast"), body.index("Dinner"))
+        self.assertIn("08:15 AM", body)
+        self.assertIn("07:30 PM", body)
+
     def test_trigger_report_rejects_invalid_scheduler_secret(self):
         with patch("os.getenv", return_value="expected-secret"):
             with self.assertRaises(HTTPException) as ctx:
