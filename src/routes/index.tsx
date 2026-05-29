@@ -1729,7 +1729,7 @@ function OverviewCards({
           <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
             Net this month
           </p>
-          <p className="mt-1 text-5xl font-extrabold tracking-tight leading-none text-foreground">
+          <p className="mt-1 text-3xl font-extrabold tracking-tight leading-none text-foreground">
             {monthNet < 0 ? "-" : "+"}
             {currency.format(Math.abs(monthNet))}
           </p>
@@ -1751,12 +1751,12 @@ function OverviewCards({
 
             {/* Inflow pill */}
             <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10">
-                <TrendingUp className="h-4 w-4 text-accent" />
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/10">
+                <TrendingUp className="h-4 w-4 text-emerald-500" />
               </div>
               <div className="min-w-0">
                 <p className="text-xs text-muted-foreground">Inflow</p>
-                <p className="text-lg font-bold text-accent leading-tight">
+                <p className="text-lg font-bold text-emerald-500 leading-tight">
                   +{currency.format(monthIncome)}
                 </p>
               </div>
