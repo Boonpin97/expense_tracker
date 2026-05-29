@@ -811,8 +811,8 @@ async def _get_pending_plan_or_expire(chat_id: int, message: str) -> dict | None
 
 
 INFLOW_USAGE = (
-    "Send the inflow as <code>&lt;item&gt; &lt;amount&gt;</code>, "
-    "for example <code>Salary 2000</code>."
+    "Send the inflow as <code>&lt;item&gt; &lt;amount&gt;</code> with an optional date, "
+    "for example <code>Salary 2000</code> or <code>Salary 2000 010526</code>."
 )
 
 
