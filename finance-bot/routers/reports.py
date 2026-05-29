@@ -61,15 +61,12 @@ def _amount_cell(value: float) -> str:
 
 
 def _summary_lines(expense_total: float, income_total: float) -> list[str]:
-    """Shared Expense / Income / Net summary block.
-
-    Expenses are shown as a negative total; net is income minus expenses.
-    """
+    """Shared Expense / Inflow / Net summary block."""
     net = income_total - expense_total
     return [
         _DIVIDER,
         f"💰 {'Expense':<{_LABEL_WIDTH}} {_amount_cell(-expense_total)}",
-        f"💵 {'Income':<{_LABEL_WIDTH}} {_amount_cell(income_total)}",
+        f"💵 {'Inflow':<{_LABEL_WIDTH}} {_amount_cell(income_total)}",
         f"📈 {'Net':<{_LABEL_WIDTH}} {_amount_cell(net)}",
     ]
 

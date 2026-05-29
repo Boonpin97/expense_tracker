@@ -165,7 +165,7 @@ class InflowCommandTests(unittest.TestCase):
         self.assertEqual(inflow.item, "Salary")
         self.assertEqual(inflow.amount, 2000.0)
         self.assertEqual(inflow.chat_id, 123)
-        self.assertIn("Income", mock_send.call_args.args[1])
+        self.assertIn("Inflow", mock_send.call_args.args[1])
 
     def test_inflow_command_with_dollar_and_date(self):
         with (
@@ -240,7 +240,7 @@ class InflowSessionTests(unittest.TestCase):
         self.assertEqual(inflow.item, "Cashback")
         self.assertEqual(inflow.amount, 50.0)
         mock_clear.assert_called_once_with(123)
-        self.assertIn("Income", mock_send.call_args.args[1])
+        self.assertIn("Inflow", mock_send.call_args.args[1])
 
     def test_expired_session_clears_and_notifies_without_recording(self):
         session = {"flow_type": "inflow", "step": "awaiting_entry", "expires_at": "2000-01-01T00:00:00+08:00"}
@@ -286,7 +286,7 @@ class InflowReportTests(unittest.TestCase):
         with patch.object(reports, "get_category_list", return_value=[{"name": "Food", "emoji": "🍔"}]):
             body = reports._format_report(123, "Weekly Report", transactions, inflows)
 
-        self.assertIn("Income", body)
+        self.assertIn("Inflow", body)
         self.assertIn("100.00", body)
         self.assertIn("Net", body)
         self.assertIn("60.00", body)
@@ -319,7 +319,7 @@ class InflowReportTests(unittest.TestCase):
             )
 
         self.assertIn("None recorded.", body)
-        self.assertIn("Income", body)
+        self.assertIn("Inflow", body)
         self.assertIn("250.00", body)
 
     def test_format_report_without_inflows_still_shows_summary(self):
@@ -327,8 +327,8 @@ class InflowReportTests(unittest.TestCase):
         with patch.object(reports, "get_category_list", return_value=[{"name": "Food", "emoji": "🍔"}]):
             body = reports._format_report(123, "Weekly Report", transactions)
 
-        # Income/Net summary is always present now; with no inflows net = -expenses
-        self.assertIn("Income", body)
+        # Inflow/Net summary is always present now; with no inflows net = -expenses
+        self.assertIn("Inflow", body)
         self.assertIn("Net", body)
         self.assertIn("-40.00", body)
 
@@ -344,7 +344,7 @@ class InflowReportTests(unittest.TestCase):
 
         self.assertIn("Salary", body)
         self.assertIn("2000.00", body)
-        self.assertIn("Income", body)
+        self.assertIn("Inflow", body)
         self.assertIn("Net", body)
 
 

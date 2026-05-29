@@ -990,7 +990,7 @@ function DashboardLayout({
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
             <TabsTrigger value="transactions">Transactions</TabsTrigger>
-            <TabsTrigger value="income">Income</TabsTrigger>
+            <TabsTrigger value="income">Inflow</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
           <div className="flex min-h-9 items-center justify-start gap-2">
@@ -1735,7 +1735,7 @@ function OverviewCards({
       <div className="grid grid-cols-2 gap-4">
         <Card className="border-border/60">
           <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">Income</p>
+            <p className="text-sm text-muted-foreground">Inflow</p>
             <p className="text-2xl font-bold mt-1 text-accent">{currency.format(monthIncome)}</p>
             <p className="text-xs mt-1 text-muted-foreground">This month</p>
           </CardContent>
@@ -1749,7 +1749,7 @@ function OverviewCards({
               {monthNet < 0 ? "-" : ""}
               {currency.format(Math.abs(monthNet))}
             </p>
-            <p className="text-xs mt-1 text-muted-foreground">Income − spending this month</p>
+            <p className="text-xs mt-1 text-muted-foreground">Inflow − spending this month</p>
           </CardContent>
         </Card>
       </div>
@@ -3013,7 +3013,7 @@ function IncomeTab({
       setAmount("");
       setTimestamp(formatDateTimeInputValue(new Date()));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not add income.");
+      setError(caught instanceof Error ? caught.message : "Could not add inflow.");
     } finally {
       setCreating(false);
     }
@@ -3034,7 +3034,7 @@ function IncomeTab({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Add Income</CardTitle>
+          <CardTitle className="text-lg">Add Inflow</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-3">
@@ -3077,7 +3077,7 @@ function IncomeTab({
               ) : (
                 <Plus className="h-4 w-4" />
               )}
-              Add income
+              Add inflow
             </Button>
           </div>
         </CardContent>
@@ -3085,14 +3085,14 @@ function IncomeTab({
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-lg">Income</CardTitle>
+          <CardTitle className="text-lg">Inflow</CardTitle>
           <span className="text-sm font-semibold text-accent">{currency.format(total)}</span>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <CenteredListMessage label="Loading income..." />
+            <CenteredListMessage label="Loading inflow..." />
           ) : sorted.length === 0 ? (
-            <CenteredListMessage label="No income recorded yet." />
+            <CenteredListMessage label="No inflow recorded yet." />
           ) : (
             <Table>
               <TableHeader>

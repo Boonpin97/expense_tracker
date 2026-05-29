@@ -831,7 +831,7 @@ async def _record_inflow(
         created_at=datetime.now(SGT).isoformat(),
     )
     save_inflow(inflow)
-    message = f"✅ Income: <b>{item}</b> +${amount:.2f}"
+    message = f"✅ Inflow: <b>{item}</b> +${amount:.2f}"
     if transaction_date:
         date_obj = datetime.strptime(transaction_date, "%Y-%m-%d")
         message += f"\n🗓 {date_obj.strftime('%d %b %Y')}"
