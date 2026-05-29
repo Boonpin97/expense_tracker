@@ -332,6 +332,55 @@ class InflowReportTests(unittest.TestCase):
         self.assertIn("Net", body)
 
 
+class _FakeDoc:
+    def __init__(self, doc_id, data):
+        self.id = doc_id
+        self._data = data
+
+    def to_dict(self):
+        return dict(self._data)
+
+
+class _FakeQuery:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def where(self, field, _op, value):
+        return _FakeQuery([d for d in self._docs if d._data.get(field) == value])
+
+    def stream(self):
+        return iter(self._docs)
+
+
+class _FakeDB:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def collection(self, _name):
+        return _FakeQuery(self._docs)
+
+
+class InflowFirestoreQueryTests(unittest.TestCase):
+    def test_get_inflows_filters_by_window_and_chat(self):
+        from services import firestore
+
+        docs = [
+            _FakeDoc("a", {"chat_id": 123, "amount": 10.0, "timestamp": "2026-05-20T09:00:00+08:00"}),
+            _FakeDoc("b", {"chat_id": 123, "amount": 20.0, "timestamp": "2026-05-25T09:00:00+08:00"}),
+            _FakeDoc("c", {"chat_id": 999, "amount": 30.0, "timestamp": "2026-05-20T10:00:00+08:00"}),
+        ]
+        start = datetime(2026, 5, 20, tzinfo=SGT)
+        end = datetime(2026, 5, 21, tzinfo=SGT)
+
+        with patch.object(firestore, "get_db", return_value=_FakeDB(docs)):
+            rows = firestore.get_inflows(123, start, end)
+            with_ids = firestore.get_inflows_with_ids(123, start, end)
+
+        self.assertEqual([row["amount"] for row in rows], [10.0])
+        self.assertEqual([row["_doc_id"] for row in with_ids], ["a"])
+        self.assertNotIn("_doc_id", rows[0])
+
+
 class DashboardInflowTests(unittest.TestCase):
     def _request(self):
         return SimpleNamespace(cookies={}, headers={})
