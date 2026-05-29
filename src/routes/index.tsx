@@ -1031,18 +1031,18 @@ function DashboardLayout({
               <Button
                 onClick={openAddTransactionDialog}
                 size="sm"
-                className="shrink-0 bg-orange-500 hover:bg-orange-600 text-white"
+                className="shrink-0 bg-orange-700 hover:bg-orange-800 text-white"
               >
                 <Plus className="mr-2 h-4 w-4" />
-                Add Expense
+                Expense
               </Button>
               <Button
                 onClick={openAddInflowDialog}
                 size="sm"
-                className="shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white"
+                className="shrink-0 bg-emerald-700 hover:bg-emerald-800 text-white"
               >
                 <Plus className="mr-2 h-4 w-4" />
-                Add Inflow
+                Inflow
               </Button>
               {activeTab === "overview" ? (
                 <OverviewInfoPopover
