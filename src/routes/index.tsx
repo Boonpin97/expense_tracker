@@ -1720,19 +1720,63 @@ function OverviewCards({
   return (
     <div className="space-y-5">
       {/* Net hero banner — always visible */}
-      <Card className="border-border/60 bg-gradient-to-r from-background to-secondary/30">
-        <CardContent className="p-6">
-          <p className="text-sm text-muted-foreground">Net this month</p>
+      <Card className="overflow-hidden border-0 shadow-md">
+        <div
+          className={`relative px-6 pt-6 pb-5 ${
+            monthNet < 0
+              ? "bg-gradient-to-br from-destructive/10 via-destructive/5 to-background"
+              : "bg-gradient-to-br from-accent/10 via-accent/5 to-background"
+          }`}
+        >
+          {/* Decorative blurred orb */}
+          <div
+            className={`pointer-events-none absolute -top-6 -right-6 h-36 w-36 rounded-full blur-3xl opacity-30 ${
+              monthNet < 0 ? "bg-destructive" : "bg-accent"
+            }`}
+          />
+
+          {/* Net headline */}
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            Net this month
+          </p>
           <p
-            className={`text-4xl font-extrabold mt-1 tracking-tight ${monthNet < 0 ? "text-destructive" : "text-accent"}`}
+            className={`mt-1 text-5xl font-extrabold tracking-tight leading-none ${
+              monthNet < 0 ? "text-destructive" : "text-accent"
+            }`}
           >
-            {monthNet < 0 ? "-" : ""}
+            {monthNet < 0 ? "-" : "+"}
             {currency.format(Math.abs(monthNet))}
           </p>
-          <p className="text-xs mt-2 text-muted-foreground">
-            Inflow {currency.format(monthIncome)} − Expenses {currency.format(stats.monthTotal)}
-          </p>
-        </CardContent>
+
+          {/* Expenses / Inflow pills */}
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:gap-4">
+            {/* Expenses pill */}
+            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+                <TrendingDown className="h-4 w-4 text-destructive" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Expenses</p>
+                <p className="text-lg font-bold text-destructive leading-tight">
+                  -{currency.format(stats.monthTotal)}
+                </p>
+              </div>
+            </div>
+
+            {/* Inflow pill */}
+            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10">
+                <TrendingUp className="h-4 w-4 text-accent" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Inflow</p>
+                <p className="text-lg font-bold text-accent leading-tight">
+                  +{currency.format(monthIncome)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       </Card>
 
       {hasCards ? (
