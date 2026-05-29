@@ -129,7 +129,7 @@ class ReportsRouterTests(unittest.TestCase):
 
         self.assertLess(body.index("📦 Other"), body.index("🍔 Food"))
         self.assertLess(body.index("🍔 Food"), body.index("📦 Transport"))
-        self.assertIn("100.0%", body)
+        self.assertIn("Expenses", body)
 
     def test_format_daily_report_sorts_by_timestamp_and_formats_times(self):
         transactions = [

@@ -297,24 +297,40 @@ class InflowReportTests(unittest.TestCase):
         with patch.object(reports, "get_category_list", return_value=[{"name": "Food", "emoji": "🍔"}]):
             body = reports._format_report(123, "Weekly Report", transactions, inflows)
 
-        self.assertIn("-$", body)
-        self.assertIn("70.00", body)
+        # net = 30 - 100 = -70, rendered as a negative dollar amount
+        self.assertIn("-70.00", body)
+
+    def test_format_report_has_expenses_and_inflow_sections(self):
+        transactions = [{"category": "Food", "amount": 40.0}]
+        inflows = [{"item": "Salary", "amount": 100.0, "timestamp": "2026-05-20T09:00:00+08:00"}]
+        with patch.object(reports, "get_category_list", return_value=[{"name": "Food", "emoji": "🍔"}]):
+            body = reports._format_report(123, "Weekly Report", transactions, inflows)
+
+        self.assertIn("Expenses", body)
+        self.assertIn("Inflow", body)
+        self.assertIn("Salary", body)
+        # expense shown negative
+        self.assertIn("-40.00", body)
 
     def test_format_report_income_without_expenses(self):
         with patch.object(reports, "get_category_list", return_value=[]):
-            body = reports._format_report(123, "Weekly Report", [], [{"amount": 250.0}])
+            body = reports._format_report(
+                123, "Weekly Report", [], [{"item": "Salary", "amount": 250.0, "timestamp": "2026-05-20T09:00:00+08:00"}]
+            )
 
-        self.assertIn("No expenses recorded.", body)
+        self.assertIn("None recorded.", body)
         self.assertIn("Income", body)
         self.assertIn("250.00", body)
 
-    def test_format_report_without_inflows_unchanged(self):
+    def test_format_report_without_inflows_still_shows_summary(self):
         transactions = [{"category": "Food", "amount": 40.0}]
         with patch.object(reports, "get_category_list", return_value=[{"name": "Food", "emoji": "🍔"}]):
             body = reports._format_report(123, "Weekly Report", transactions)
 
-        self.assertNotIn("Income", body)
-        self.assertNotIn("Net", body)
+        # Income/Net summary is always present now; with no inflows net = -expenses
+        self.assertIn("Income", body)
+        self.assertIn("Net", body)
+        self.assertIn("-40.00", body)
 
     def test_format_daily_report_lists_inflows_with_times(self):
         transactions = [

@@ -49,14 +49,28 @@ def _get_period_window(period: str) -> tuple[datetime, datetime, str]:
     return start, end, label
 
 
-def _income_net_summary_lines(income_total: float, expense_total: float) -> list[str]:
-    """Trailing 'Income' and 'Net' lines shared by the spending reports."""
+_DIVIDER = "─────────────────────────"
+_LABEL_WIDTH = 14
+
+
+def _amount_cell(value: float) -> str:
+    """Render a signed dollar amount in a fixed-width cell (avoids -0.00)."""
+    if value == 0:
+        value = 0.0
+    return f"${value:>9.2f}"
+
+
+def _summary_lines(expense_total: float, income_total: float) -> list[str]:
+    """Shared Expense / Income / Net summary block.
+
+    Expenses are shown as a negative total; net is income minus expenses.
+    """
     net = income_total - expense_total
-    net_display = f"-${abs(net):>7.2f}" if net < 0 else f"${net:>8.2f}"
     return [
-        "─────────────────────────",
-        f"💵 Income{' ' * 11}${income_total:>8.2f}",
-        f"📈 Net{' ' * 14}{net_display}",
+        _DIVIDER,
+        f"💰 {'Expense':<{_LABEL_WIDTH}} {_amount_cell(-expense_total)}",
+        f"💵 {'Income':<{_LABEL_WIDTH}} {_amount_cell(income_total)}",
+        f"📈 {'Net':<{_LABEL_WIDTH}} {_amount_cell(net)}",
     ]
 
 
@@ -69,31 +83,34 @@ def _format_report(
     inflows = inflows or []
     income_total = sum(inflow.get("amount", 0.0) for inflow in inflows)
 
-    if not transactions and not income_total:
-        return f"📊 {label}\n─────────────────────────\nNo expenses recorded.\n─────────────────────────"
-
     by_category: dict[str, float] = defaultdict(float)
     for tx in transactions:
         by_category[tx["category"]] += tx["amount"]
+    expense_total = sum(by_category.values())
 
-    grand_total = sum(by_category.values())
-    lines = [f"📊 {label}", "─────────────────────────"]
+    if not transactions and not inflows:
+        return f"📊 {label}\n{_DIVIDER}\nNo expenses recorded.\n{_DIVIDER}"
 
     category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
 
+    lines = [f"📊 {label}", _DIVIDER, "Expenses"]
     if transactions:
         for cat, total in sorted(by_category.items(), key=lambda x: -x[1]):
             emoji = category_emoji.get(cat, "📦")
-            pct = (total / grand_total * 100) if grand_total else 0
-            lines.append(f"{emoji} {cat:<16} ${total:>8.2f}  {pct:>5.1f}%")
-        lines.append("─────────────────────────")
-        lines.append(f"💰 Total{' ' * 12}${grand_total:>8.2f}  100.0%")
+            pct = (total / expense_total * 100) if expense_total else 0
+            lines.append(f"{emoji} {cat:<{_LABEL_WIDTH}} {_amount_cell(-total)}  {pct:>5.1f}%")
     else:
-        lines.append("No expenses recorded.")
+        lines.append("None recorded.")
 
-    if income_total:
-        lines.extend(_income_net_summary_lines(income_total, grand_total))
+    lines.append(_DIVIDER)
+    lines.append("Inflow")
+    if inflows:
+        for inflow in sorted(inflows, key=lambda i: i.get("timestamp", "")):
+            lines.append(f"💵 {inflow.get('item', ''):<{_LABEL_WIDTH}} {_amount_cell(inflow.get('amount', 0.0))}")
+    else:
+        lines.append("None recorded.")
 
+    lines.extend(_summary_lines(expense_total, income_total))
     return "\n".join(lines)
 
 
@@ -105,40 +122,36 @@ def _format_daily_report(
 ) -> str:
     inflows = inflows or []
     income_total = sum(inflow.get("amount", 0.0) for inflow in inflows)
+    expense_total = sum(tx.get("amount", 0.0) for tx in transactions)
 
-    if not transactions and not income_total:
-        return f"📊 {label}\n─────────────────────────\nNo expenses recorded.\n─────────────────────────"
+    if not transactions and not inflows:
+        return f"📊 {label}\n{_DIVIDER}\nNo expenses recorded.\n{_DIVIDER}"
 
     category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
 
-    sorted_txs = sorted(transactions, key=lambda t: t.get("timestamp", ""))
-
-    lines = [f"📊 {label}", "─────────────────────────"]
-
-    for tx in sorted_txs:
-        emoji = category_emoji.get(tx.get("category", ""), "📦")
-        item = tx.get("item", "")
-        amount = tx.get("amount", 0.0)
-        ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
-        time_str = ts.strftime("%I:%M %p")
-        lines.append(f"{emoji} {item:<16} ${amount:>8.2f}  {time_str}")
-
-    grand_total = sum(tx.get("amount", 0.0) for tx in transactions)
+    lines = [f"📊 {label}", _DIVIDER, "Expenses"]
     if transactions:
-        lines.append("─────────────────────────")
-        lines.append(f"💰 Total{' ' * 12}${grand_total:>8.2f}")
+        for tx in sorted(transactions, key=lambda t: t.get("timestamp", "")):
+            emoji = category_emoji.get(tx.get("category", ""), "📦")
+            item = tx.get("item", "")
+            ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
+            time_str = ts.strftime("%I:%M %p")
+            lines.append(f"{emoji} {item:<{_LABEL_WIDTH}} {_amount_cell(-tx.get('amount', 0.0))}  {time_str}")
     else:
-        lines.append("No expenses recorded.")
+        lines.append("None recorded.")
 
+    lines.append(_DIVIDER)
+    lines.append("Inflow")
     if inflows:
         for inflow in sorted(inflows, key=lambda i: i.get("timestamp", "")):
             item = inflow.get("item", "")
-            amount = inflow.get("amount", 0.0)
             ts = datetime.fromisoformat(inflow["timestamp"]).astimezone(SGT)
             time_str = ts.strftime("%I:%M %p")
-            lines.append(f"💵 {item:<16} ${amount:>8.2f}  {time_str}")
-        lines.extend(_income_net_summary_lines(income_total, grand_total))
+            lines.append(f"💵 {item:<{_LABEL_WIDTH}} {_amount_cell(inflow.get('amount', 0.0))}  {time_str}")
+    else:
+        lines.append("None recorded.")
 
+    lines.extend(_summary_lines(expense_total, income_total))
     return "\n".join(lines)
 
 
