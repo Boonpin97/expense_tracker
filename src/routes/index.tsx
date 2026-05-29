@@ -614,6 +614,12 @@ function DashboardLayout({
   const [deletingBudgetCategory, setDeletingBudgetCategory] = useState<string | null>(null);
   const [budgetActionError, setBudgetActionError] = useState<string | null>(null);
   const [addTransactionOpen, setAddTransactionOpen] = useState(false);
+  const [addInflowOpen, setAddInflowOpen] = useState(false);
+  const [newInflowItem, setNewInflowItem] = useState("");
+  const [newInflowAmount, setNewInflowAmount] = useState("");
+  const [newInflowTimestamp, setNewInflowTimestamp] = useState(formatDateTimeInputValue(new Date()));
+  const [creatingInflow, setCreatingInflow] = useState(false);
+  const [createInflowError, setCreateInflowError] = useState<string | null>(null);
   const [newItem, setNewItem] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [newAmount, setNewAmount] = useState("");
@@ -752,6 +758,33 @@ function DashboardLayout({
     if (creatingTransaction) return;
     setAddTransactionOpen(false);
     setCreateTransactionError(null);
+  }
+
+  function openAddInflowDialog() {
+    setNewInflowItem("");
+    setNewInflowAmount("");
+    setNewInflowTimestamp(formatDateTimeInputValue(new Date()));
+    setCreateInflowError(null);
+    setAddInflowOpen(true);
+  }
+
+  async function handleCreateInflowSubmit() {
+    setCreateInflowError(null);
+    const trimmed = newInflowItem.trim();
+    const parsedAmount = Number(newInflowAmount);
+    if (!trimmed) { setCreateInflowError("Description is required."); return; }
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) { setCreateInflowError("Amount must be a positive number."); return; }
+    const when = new Date(newInflowTimestamp);
+    if (Number.isNaN(when.getTime())) { setCreateInflowError("Date is invalid."); return; }
+    setCreatingInflow(true);
+    try {
+      await onCreateInflow({ item: trimmed, amount: parsedAmount, timestamp: when });
+      setAddInflowOpen(false);
+    } catch (caught) {
+      setCreateInflowError(caught instanceof Error ? caught.message : "Could not add inflow.");
+    } finally {
+      setCreatingInflow(false);
+    }
   }
 
   async function handleOverviewVisibleCardsChange(next: string[]) {
@@ -995,12 +1028,22 @@ function DashboardLayout({
           </TabsList>
           <div className="flex min-h-9 items-center justify-start gap-2">
             <div className="flex items-center gap-2">
-              {activeTab !== "income" && (
-                <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Expense
-                </Button>
-              )}
+              <Button
+                onClick={openAddTransactionDialog}
+                size="sm"
+                className="shrink-0 bg-orange-500 hover:bg-orange-600 text-white"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add Expense
+              </Button>
+              <Button
+                onClick={openAddInflowDialog}
+                size="sm"
+                className="shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add Inflow
+              </Button>
               {activeTab === "overview" ? (
                 <OverviewInfoPopover
                   visible={visibleOverviewCards}
@@ -1254,7 +1297,6 @@ function DashboardLayout({
             <IncomeTab
               inflows={inflows}
               loading={loading}
-              onCreateInflow={onCreateInflow}
               onDeleteInflow={onDeleteInflow}
             />
           </TabsContent>
@@ -1424,6 +1466,64 @@ function DashboardLayout({
               >
                 {creatingTransaction ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Create
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={addInflowOpen} onOpenChange={(open) => { if (!open && !creatingInflow) setAddInflowOpen(false); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add Inflow</DialogTitle>
+              <DialogDescription>Record income such as salary, cashback, or a refund.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-item">Description</Label>
+                <Input
+                  id="new-inflow-item"
+                  placeholder="Salary"
+                  value={newInflowItem}
+                  onChange={(e) => setNewInflowItem(e.target.value)}
+                  disabled={creatingInflow}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-amount">Amount</Label>
+                <Input
+                  id="new-inflow-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="2000"
+                  value={newInflowAmount}
+                  onChange={(e) => setNewInflowAmount(e.target.value)}
+                  disabled={creatingInflow}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-timestamp">Date & Time</Label>
+                <Input
+                  id="new-inflow-timestamp"
+                  type="datetime-local"
+                  value={newInflowTimestamp}
+                  onChange={(e) => setNewInflowTimestamp(e.target.value)}
+                  disabled={creatingInflow}
+                />
+              </div>
+              {createInflowError && <p className="text-sm text-destructive">{createInflowError}</p>}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAddInflowOpen(false)} disabled={creatingInflow}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void handleCreateInflowSubmit()}
+                disabled={creatingInflow}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white"
+              >
+                {creatingInflow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Add Inflow
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -3003,19 +3103,12 @@ function CategoryFilterPopover({
 function IncomeTab({
   inflows,
   loading,
-  onCreateInflow,
   onDeleteInflow,
 }: {
   inflows: DashboardInflow[];
   loading: boolean;
-  onCreateInflow: (payload: { item: string; amount: number; timestamp: Date }) => Promise<void>;
   onDeleteInflow: (inflowId: string) => Promise<void>;
 }) {
-  const [item, setItem] = useState("");
-  const [amount, setAmount] = useState("");
-  const [timestamp, setTimestamp] = useState(formatDateTimeInputValue(new Date()));
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const sorted = useMemo(
@@ -3026,36 +3119,6 @@ function IncomeTab({
     () => inflows.reduce((sum, inflow) => sum + inflow.amount, 0),
     [inflows],
   );
-
-  async function handleAdd() {
-    setError(null);
-    const trimmed = item.trim();
-    const parsedAmount = Number(amount);
-    if (!trimmed) {
-      setError("Enter a description, e.g. Salary.");
-      return;
-    }
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      setError("Enter an amount greater than 0.");
-      return;
-    }
-    const when = new Date(timestamp);
-    if (Number.isNaN(when.getTime())) {
-      setError("Enter a valid date and time.");
-      return;
-    }
-    setCreating(true);
-    try {
-      await onCreateInflow({ item: trimmed, amount: parsedAmount, timestamp: when });
-      setItem("");
-      setAmount("");
-      setTimestamp(formatDateTimeInputValue(new Date()));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not add inflow.");
-    } finally {
-      setCreating(false);
-    }
-  }
 
   async function handleDelete(inflowId: string) {
     setDeletingId(inflowId);
@@ -3071,60 +3134,9 @@ function IncomeTab({
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Add Inflow</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="space-y-2">
-              <Label htmlFor="income-item">Description</Label>
-              <Input
-                id="income-item"
-                placeholder="Salary"
-                value={item}
-                onChange={(event) => setItem(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="income-amount">Amount</Label>
-              <Input
-                id="income-amount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="2000"
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="income-date">Date</Label>
-              <Input
-                id="income-date"
-                type="datetime-local"
-                value={timestamp}
-                onChange={(event) => setTimestamp(event.target.value)}
-              />
-            </div>
-          </div>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex justify-end">
-            <Button onClick={() => void handleAdd()} disabled={creating} className="gap-2">
-              {creating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="h-4 w-4" />
-              )}
-              Add inflow
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg">Inflow</CardTitle>
-          <span className="text-sm font-semibold text-accent">{currency.format(total)}</span>
+          <span className="text-sm font-semibold text-emerald-500">{currency.format(total)}</span>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -3148,7 +3160,7 @@ function IncomeTab({
                     <TableCell className="text-muted-foreground">
                       {format(inflow.timestamp, "MMM d, yyyy")}
                     </TableCell>
-                    <TableCell className="text-right font-semibold text-accent">
+                    <TableCell className="text-right font-semibold text-emerald-500">
                       +{currency.format(inflow.amount)}
                     </TableCell>
                     <TableCell>
