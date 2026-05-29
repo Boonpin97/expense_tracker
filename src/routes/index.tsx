@@ -989,16 +989,18 @@ function DashboardLayout({
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
-            <TabsTrigger value="transactions">Transactions</TabsTrigger>
+            <TabsTrigger value="transactions">Expenses</TabsTrigger>
             <TabsTrigger value="income">Inflow</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
           <div className="flex min-h-9 items-center justify-start gap-2">
             <div className="flex items-center gap-2">
-              <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
-                <Plus className="mr-2 h-4 w-4" />
-                Add Transaction
-              </Button>
+              {activeTab !== "income" && (
+                <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Expense
+                </Button>
+              )}
               {activeTab === "overview" ? (
                 <OverviewInfoPopover
                   visible={visibleOverviewCards}
@@ -1018,13 +1020,13 @@ function DashboardLayout({
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Recent Transactions</CardTitle>
+                <CardTitle className="text-lg">Recent Expenses</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {loading ? (
-                  <CenteredListMessage label="Loading transactions..." />
+                  <CenteredListMessage label="Loading expenses..." />
                 ) : recentTransactions.length === 0 ? (
-                  <CenteredListMessage label="No transactions found." />
+                  <CenteredListMessage label="No expenses found." />
                 ) : (
                   <>
                     <div className="space-y-1">
@@ -1053,7 +1055,7 @@ function DashboardLayout({
                     </div>
                     <div className="flex justify-center">
                       <Button variant="ghost" onClick={() => setActiveTab("transactions")}>
-                        Show all
+                        Show all expenses
                       </Button>
                     </div>
                   </>
@@ -1712,10 +1714,28 @@ function OverviewCards({
   ];
 
   const cards = statCards.filter((card) => visible.includes(card.key));
+  const showInflowCard = visible.includes("inflow");
+  const hasCards = cards.length > 0 || showInflowCard;
 
   return (
     <div className="space-y-5">
-      {cards.length > 0 ? (
+      {/* Net hero banner — always visible */}
+      <Card className="border-border/60 bg-gradient-to-r from-background to-secondary/30">
+        <CardContent className="p-6">
+          <p className="text-sm text-muted-foreground">Net this month</p>
+          <p
+            className={`text-4xl font-extrabold mt-1 tracking-tight ${monthNet < 0 ? "text-destructive" : "text-accent"}`}
+          >
+            {monthNet < 0 ? "-" : ""}
+            {currency.format(Math.abs(monthNet))}
+          </p>
+          <p className="text-xs mt-2 text-muted-foreground">
+            Inflow {currency.format(monthIncome)} − Expenses {currency.format(stats.monthTotal)}
+          </p>
+        </CardContent>
+      </Card>
+
+      {hasCards ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {cards.map((card) => (
             <StatCard
@@ -1727,32 +1747,19 @@ function OverviewCards({
               trend={card.trend}
             />
           ))}
+          {showInflowCard && (
+            <StatCard
+              label="Inflow"
+              value={currency.format(monthIncome)}
+              sub="This month"
+              icon={TrendingUp}
+              trend="up"
+            />
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground text-center py-8">No cards selected.</p>
       )}
-
-      <div className="grid grid-cols-2 gap-4">
-        <Card className="border-border/60">
-          <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">Inflow</p>
-            <p className="text-2xl font-bold mt-1 text-accent">{currency.format(monthIncome)}</p>
-            <p className="text-xs mt-1 text-muted-foreground">This month</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/60">
-          <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">Net</p>
-            <p
-              className={`text-2xl font-bold mt-1 ${monthNet < 0 ? "text-destructive" : "text-accent"}`}
-            >
-              {monthNet < 0 ? "-" : ""}
-              {currency.format(Math.abs(monthNet))}
-            </p>
-            <p className="text-xs mt-1 text-muted-foreground">Inflow − spending this month</p>
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }
@@ -1769,6 +1776,7 @@ function OverviewInfoPopover({
     { key: "week", label: "This Week" },
     { key: "month", label: "This Month" },
     { key: "budget", label: "Budget Left" },
+    { key: "inflow", label: "Inflow" },
     { key: "30d", label: "Last 30 Days" },
     { key: "90d", label: "Last 90 Days" },
     { key: "ytd", label: "Year to Date" },
@@ -2357,7 +2365,7 @@ function TransactionsTab({
   return (
     <>
       <div className="space-y-2">
-        <Label htmlFor="transaction-search">Search transactions</Label>
+        <Label htmlFor="transaction-search">Search expenses</Label>
         <Input
           id="transaction-search"
           value={searchQuery}
@@ -2370,10 +2378,10 @@ function TransactionsTab({
         <CardHeader className="space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <CardTitle className="text-lg">All Transactions</CardTitle>
+              <CardTitle className="text-lg">All Expenses</CardTitle>
               {!loading && (
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  {filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? "s" : ""} &middot;{" "}
+                  {filteredTransactions.length} expense{filteredTransactions.length !== 1 ? "s" : ""} &middot;{" "}
                   <span className="font-semibold text-foreground">
                     {currency.format(filteredTransactions.reduce((sum, tx) => sum + tx.amount, 0))}
                   </span>
@@ -2447,9 +2455,9 @@ function TransactionsTab({
             </div>
           ) : null}
           {loading ? (
-            <CenteredListMessage label="Loading transactions..." />
+            <CenteredListMessage label="Loading expenses..." />
           ) : pageRows.length === 0 ? (
-            <CenteredListMessage label="No transactions found for the selected filters." />
+            <CenteredListMessage label="No expenses found for the selected filters." />
           ) : (
             <>
               <div className="rounded-xl border border-border/70">
