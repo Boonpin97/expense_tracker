@@ -1031,15 +1031,15 @@ function DashboardLayout({
               <Button
                 onClick={openAddTransactionDialog}
                 size="sm"
-                className="shrink-0 bg-orange-700 hover:bg-orange-800 text-white"
+                className="shrink-0 gap-1 bg-orange-700 hover:bg-orange-800 text-white"
               >
-                <Plus className="mr-1 h-4 w-4" />
+                <Plus className="h-4 w-4" />
                 Expense
               </Button>
               <Button
                 onClick={openAddInflowDialog}
                 size="sm"
-                className="shrink-0 bg-emerald-700 hover:bg-emerald-800 text-white"
+                className="shrink-0 gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
               >
                 <Plus className="mr-1 h-4 w-4" />
                 Inflow
