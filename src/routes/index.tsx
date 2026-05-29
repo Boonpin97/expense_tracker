@@ -1033,7 +1033,7 @@ function DashboardLayout({
                 size="sm"
                 className="shrink-0 bg-orange-700 hover:bg-orange-800 text-white"
               >
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus className="mr-1 h-4 w-4" />
                 Expense
               </Button>
               <Button
@@ -1041,7 +1041,7 @@ function DashboardLayout({
                 size="sm"
                 className="shrink-0 bg-emerald-700 hover:bg-emerald-800 text-white"
               >
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus className="mr-1 h-4 w-4" />
                 Inflow
               </Button>
               {activeTab === "overview" ? (
