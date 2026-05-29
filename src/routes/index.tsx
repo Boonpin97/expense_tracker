@@ -1721,29 +1721,15 @@ function OverviewCards({
     <div className="space-y-5">
       {/* Net hero banner — always visible */}
       <Card className="overflow-hidden border-0 shadow-md">
-        <div
-          className={`relative px-6 pt-6 pb-5 ${
-            monthNet < 0
-              ? "bg-gradient-to-br from-destructive/10 via-destructive/5 to-background"
-              : "bg-gradient-to-br from-accent/10 via-accent/5 to-background"
-          }`}
-        >
+        <div className="relative px-6 pt-6 pb-5 bg-gradient-to-br from-accent/10 via-accent/5 to-background">
           {/* Decorative blurred orb */}
-          <div
-            className={`pointer-events-none absolute -top-6 -right-6 h-36 w-36 rounded-full blur-3xl opacity-30 ${
-              monthNet < 0 ? "bg-destructive" : "bg-accent"
-            }`}
-          />
+          <div className="pointer-events-none absolute -top-6 -right-6 h-36 w-36 rounded-full blur-3xl opacity-30 bg-accent" />
 
           {/* Net headline */}
           <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
             Net this month
           </p>
-          <p
-            className={`mt-1 text-5xl font-extrabold tracking-tight leading-none ${
-              monthNet < 0 ? "text-destructive" : "text-accent"
-            }`}
-          >
+          <p className="mt-1 text-5xl font-extrabold tracking-tight leading-none text-foreground">
             {monthNet < 0 ? "-" : "+"}
             {currency.format(Math.abs(monthNet))}
           </p>
