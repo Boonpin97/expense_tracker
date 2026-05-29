@@ -9,6 +9,7 @@ from google.cloud import firestore
 from models.transaction import (
     CategoryMapping,
     FlowSession,
+    Inflow,
     PaymentPlan,
     PendingPlan,
     PendingTransaction,
@@ -77,6 +78,55 @@ def save_transaction(tx: Transaction) -> str:
     tx.id = doc_ref.id
     doc_ref.set(tx.model_dump())
     return doc_ref.id
+
+
+def save_inflow(inflow: Inflow) -> str:
+    doc_ref = get_db().collection("inflows").document()
+    inflow.id = doc_ref.id
+    doc_ref.set(inflow.model_dump())
+    return doc_ref.id
+
+
+def get_inflows(chat_id: int, start: datetime, end: datetime) -> list[dict]:
+    docs = (
+        get_db()
+        .collection("inflows")
+        .where("chat_id", "==", chat_id)
+        .where("timestamp", ">=", start.isoformat())
+        .where("timestamp", "<", end.isoformat())
+        .stream()
+    )
+    return [doc.to_dict() for doc in docs]
+
+
+def get_inflows_with_ids(chat_id: int, start: datetime, end: datetime) -> list[dict]:
+    docs = (
+        get_db()
+        .collection("inflows")
+        .where("chat_id", "==", chat_id)
+        .where("timestamp", ">=", start.isoformat())
+        .where("timestamp", "<", end.isoformat())
+        .stream()
+    )
+    result = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        result.append(data)
+    return result
+
+
+def get_inflow_by_id(doc_id: str) -> Optional[dict]:
+    doc = get_db().collection("inflows").document(doc_id).get()
+    if doc.exists:
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        return data
+    return None
+
+
+def delete_inflow(doc_id: str) -> None:
+    get_db().collection("inflows").document(doc_id).delete()
 
 
 def delete_transactions_for_plan(plan_id: str) -> int:

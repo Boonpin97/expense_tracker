@@ -425,6 +425,7 @@ async def set_my_commands() -> dict:
         {"command": "start", "description": "Welcome message"},
         {"command": "daily", "description": "Daily spending reports"},
         {"command": "weekly", "description": "This week's spending summary"},
+        {"command": "inflow", "description": "Record income, e.g. /inflow Salary 2000"},
         {"command": "set_budget", "description": "Set a monthly budget for a category"},
         {"command": "list_budget", "description": "List monthly budgets"},
         {"command": "budget_report", "description": "Show this month's budget report"},

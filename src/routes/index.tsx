@@ -76,12 +76,15 @@ import {
 } from "recharts";
 import {
   DashboardApiError,
+  createDashboardInflow,
   createDashboardTransaction,
   deleteDashboardBudget,
+  deleteDashboardInflow,
   deleteDashboardPlan,
   deleteDashboardTransaction,
   fetchDashboardBudgets,
   fetchDashboardCategories,
+  fetchDashboardInflows,
   fetchDashboardPlans,
   fetchDashboardPreferences,
   fetchDashboardSession,
@@ -93,6 +96,7 @@ import {
   updateDashboardPlan,
   updateDashboardTransaction,
   type DashboardCategory,
+  type DashboardInflow,
   type DashboardPaymentType,
   type DashboardPreferences,
   type DashboardPlan,
@@ -122,7 +126,7 @@ const currency = new Intl.NumberFormat("en-US", {
 const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
 const TRANSACTIONS_PAGE_SIZE = 25;
 
-type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "plans";
+type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "income" | "plans";
 type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
 type TxnJump = {
   category: string | null;
@@ -367,6 +371,7 @@ function DashboardShell({
   const [categories, setCategories] = useState<DashboardCategory[]>([]);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
+  const [inflows, setInflows] = useState<DashboardInflow[]>([]);
   const [plans, setPlans] = useState<DashboardPlan[]>([]);
   const [preferences, setPreferences] = useState<DashboardPreferences>({
     overviewVisibleCards: [],
@@ -382,14 +387,16 @@ function DashboardShell({
       fetchDashboardCategories(),
       fetchDashboardBudgets(),
       fetchDashboardTransactions({ start: HISTORY_START, end: endOfDay(now) }),
+      fetchDashboardInflows({ start: HISTORY_START, end: endOfDay(now) }),
       fetchDashboardPlans(),
       fetchDashboardPreferences(),
     ])
-      .then(([cats, buds, txns, pls, prefs]) => {
+      .then(([cats, buds, txns, infs, pls, prefs]) => {
         if (!active) return;
         setCategories(cats);
         setBudgets(buds);
         setTransactions(txns);
+        setInflows(infs);
         setPlans(pls);
         setPreferences(prefs);
         setLoading(false);
@@ -458,6 +465,17 @@ function DashboardShell({
     setPlans(pls);
   }
 
+  async function handleCreateInflow(payload: { item: string; amount: number; timestamp: Date }) {
+    await createDashboardInflow(payload);
+    const end = endOfDay(new Date(Math.max(Date.now(), payload.timestamp.getTime())));
+    setInflows(await fetchDashboardInflows({ start: HISTORY_START, end }));
+  }
+
+  async function handleDeleteInflow(inflowId: string) {
+    await deleteDashboardInflow(inflowId);
+    setInflows((current) => current.filter((inflow) => inflow.id !== inflowId));
+  }
+
   const refreshBudgets = useCallback(async () => {
     try {
       const buds = await fetchDashboardBudgets();
@@ -502,12 +520,15 @@ function DashboardShell({
       categories={categories}
       budgets={budgets}
       transactions={transactions}
+      inflows={inflows}
       plans={plans}
       preferences={preferences}
       onDeleteTransaction={handleDeleteTransaction}
       onLogout={() => void handleLogout()}
       onUpdateTransaction={handleUpdateTransaction}
       onCreateTransaction={handleCreateTransaction}
+      onCreateInflow={handleCreateInflow}
+      onDeleteInflow={handleDeleteInflow}
       onRefreshBudgets={refreshBudgets}
       onUpdatePlan={handleUpdatePlan}
       onDeletePlan={handleDeletePlan}
@@ -523,12 +544,15 @@ function DashboardLayout({
   categories,
   budgets,
   transactions,
+  inflows,
   plans,
   preferences,
   onDeleteTransaction,
   onLogout,
   onUpdateTransaction,
   onCreateTransaction,
+  onCreateInflow,
+  onDeleteInflow,
   onRefreshBudgets,
   onUpdatePlan,
   onDeletePlan,
@@ -540,6 +564,7 @@ function DashboardLayout({
   categories: DashboardCategory[];
   budgets: Record<string, number>;
   transactions: DashboardTransaction[];
+  inflows: DashboardInflow[];
   plans: DashboardPlan[];
   preferences: DashboardPreferences;
   onDeleteTransaction: (transactionId: string) => Promise<void>;
@@ -563,6 +588,8 @@ function DashboardLayout({
     installmentCount?: number;
     createFirstTransactionNow?: boolean;
   }) => Promise<void>;
+  onCreateInflow: (payload: { item: string; amount: number; timestamp: Date }) => Promise<void>;
+  onDeleteInflow: (inflowId: string) => Promise<void>;
   onRefreshBudgets: () => Promise<void>;
   onUpdatePlan: (
     planId: string,
@@ -958,11 +985,12 @@ function DashboardLayout({
           onValueChange={(value) => setActiveTab(value as DashboardTab)}
           className="space-y-6"
         >
-          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-5 sm:inline-grid">
+          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-6 sm:inline-grid">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
             <TabsTrigger value="transactions">Transactions</TabsTrigger>
+            <TabsTrigger value="income">Income</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
           <div className="flex min-h-9 items-center justify-start gap-2">
@@ -983,6 +1011,7 @@ function DashboardLayout({
           <TabsContent value="overview" className="space-y-6">
             <OverviewCards
               transactions={transactions}
+              inflows={inflows}
               budgetTotal={budgetTotal}
               visible={visibleOverviewCards}
             />
@@ -1216,6 +1245,15 @@ function DashboardLayout({
               onUpdateTransaction={onUpdateTransaction}
               onEditPlanTransaction={openPlanEditById}
               jump={txnJump}
+            />
+          </TabsContent>
+
+          <TabsContent value="income" className="space-y-6">
+            <IncomeTab
+              inflows={inflows}
+              loading={loading}
+              onCreateInflow={onCreateInflow}
+              onDeleteInflow={onDeleteInflow}
             />
           </TabsContent>
 
@@ -1571,10 +1609,12 @@ function DashboardLayout({
 
 function OverviewCards({
   transactions,
+  inflows,
   budgetTotal,
   visible,
 }: {
   transactions: DashboardTransaction[];
+  inflows: DashboardInflow[];
   budgetTotal: number;
   visible: string[];
 }) {
@@ -1597,6 +1637,17 @@ function OverviewCards({
       remaining,
     };
   }, [transactions, budgetTotal]);
+
+  const monthIncome = useMemo(() => {
+    const now = new Date();
+    const from = startOfMonth(now);
+    const end = endOfDay(now);
+    return inflows
+      .filter((inflow) => inflow.timestamp >= from && inflow.timestamp <= end)
+      .reduce((sum, inflow) => sum + inflow.amount, 0);
+  }, [inflows]);
+
+  const monthNet = monthIncome - stats.monthTotal;
 
   const statCards = [
     {
@@ -1680,6 +1731,28 @@ function OverviewCards({
       ) : (
         <p className="text-sm text-muted-foreground text-center py-8">No cards selected.</p>
       )}
+
+      <div className="grid grid-cols-2 gap-4">
+        <Card className="border-border/60">
+          <CardContent className="p-5">
+            <p className="text-sm text-muted-foreground">Income</p>
+            <p className="text-2xl font-bold mt-1 text-accent">{currency.format(monthIncome)}</p>
+            <p className="text-xs mt-1 text-muted-foreground">This month</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border/60">
+          <CardContent className="p-5">
+            <p className="text-sm text-muted-foreground">Net</p>
+            <p
+              className={`text-2xl font-bold mt-1 ${monthNet < 0 ? "text-destructive" : "text-accent"}`}
+            >
+              {monthNet < 0 ? "-" : ""}
+              {currency.format(Math.abs(monthNet))}
+            </p>
+            <p className="text-xs mt-1 text-muted-foreground">Income − spending this month</p>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -2886,6 +2959,182 @@ function CategoryFilterPopover({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function IncomeTab({
+  inflows,
+  loading,
+  onCreateInflow,
+  onDeleteInflow,
+}: {
+  inflows: DashboardInflow[];
+  loading: boolean;
+  onCreateInflow: (payload: { item: string; amount: number; timestamp: Date }) => Promise<void>;
+  onDeleteInflow: (inflowId: string) => Promise<void>;
+}) {
+  const [item, setItem] = useState("");
+  const [amount, setAmount] = useState("");
+  const [timestamp, setTimestamp] = useState(formatDateTimeInputValue(new Date()));
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const sorted = useMemo(
+    () => [...inflows].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()),
+    [inflows],
+  );
+  const total = useMemo(
+    () => inflows.reduce((sum, inflow) => sum + inflow.amount, 0),
+    [inflows],
+  );
+
+  async function handleAdd() {
+    setError(null);
+    const trimmed = item.trim();
+    const parsedAmount = Number(amount);
+    if (!trimmed) {
+      setError("Enter a description, e.g. Salary.");
+      return;
+    }
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setError("Enter an amount greater than 0.");
+      return;
+    }
+    const when = new Date(timestamp);
+    if (Number.isNaN(when.getTime())) {
+      setError("Enter a valid date and time.");
+      return;
+    }
+    setCreating(true);
+    try {
+      await onCreateInflow({ item: trimmed, amount: parsedAmount, timestamp: when });
+      setItem("");
+      setAmount("");
+      setTimestamp(formatDateTimeInputValue(new Date()));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not add income.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleDelete(inflowId: string) {
+    setDeletingId(inflowId);
+    try {
+      await onDeleteInflow(inflowId);
+    } catch {
+      // Row remains; the next refresh reconciles state.
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Add Income</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label htmlFor="income-item">Description</Label>
+              <Input
+                id="income-item"
+                placeholder="Salary"
+                value={item}
+                onChange={(event) => setItem(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="income-amount">Amount</Label>
+              <Input
+                id="income-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="2000"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="income-date">Date</Label>
+              <Input
+                id="income-date"
+                type="datetime-local"
+                value={timestamp}
+                onChange={(event) => setTimestamp(event.target.value)}
+              />
+            </div>
+          </div>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          <div className="flex justify-end">
+            <Button onClick={() => void handleAdd()} disabled={creating} className="gap-2">
+              {creating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+              Add income
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-lg">Income</CardTitle>
+          <span className="text-sm font-semibold text-accent">{currency.format(total)}</span>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <CenteredListMessage label="Loading income..." />
+          ) : sorted.length === 0 ? (
+            <CenteredListMessage label="No income recorded yet." />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sorted.map((inflow) => (
+                  <TableRow key={inflow.id}>
+                    <TableCell className="font-medium">{inflow.item}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {format(inflow.timestamp, "MMM d, yyyy")}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold text-accent">
+                      +{currency.format(inflow.amount)}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        disabled={deletingId === inflow.id}
+                        onClick={() => void handleDelete(inflow.id)}
+                      >
+                        {deletingId === inflow.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

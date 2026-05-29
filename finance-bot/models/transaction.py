@@ -15,6 +15,15 @@ class Transaction(BaseModel):
     auto_generated: bool = False
 
 
+class Inflow(BaseModel):
+    id: Optional[str] = None
+    item: str
+    amount: float
+    timestamp: str  # ISO 8601 with timezone offset — when the income happened
+    chat_id: int
+    created_at: str
+
+
 class PendingTransaction(BaseModel):
     item: str
     amount: float

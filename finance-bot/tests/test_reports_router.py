@@ -175,6 +175,7 @@ class ReportsRouterTests(unittest.TestCase):
             patch("services.firestore.get_allowed_chat_ids", return_value={123, 456}),
             patch.object(reports, "_get_period_window", return_value=(start, end, "Daily Report (20/05/26)")),
             patch.object(reports, "get_transactions", return_value=[{"item": "Coffee", "amount": 4.5, "category": "Food", "timestamp": start.isoformat()}]) as mock_get_transactions,
+            patch.object(reports, "get_inflows", return_value=[]),
             patch.object(reports, "_format_daily_report", return_value="daily-body"),
             patch.object(reports, "send_message", new=AsyncMock()) as mock_send,
         ):
