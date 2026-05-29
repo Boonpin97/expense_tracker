@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
-from services.firestore import get_category_list, get_transactions, get_budgets
+from services.firestore import get_category_list, get_inflows, get_transactions, get_budgets
 from services.plan_manager import process_due_plans
 from services.telegram import send_message
 
@@ -49,52 +49,106 @@ def _get_period_window(period: str) -> tuple[datetime, datetime, str]:
     return start, end, label
 
 
-def _format_report(chat_id: int, label: str, transactions: list[dict]) -> str:
-    if not transactions:
-        return f"📊 {label}\n─────────────────────────\nNo expenses recorded.\n─────────────────────────"
+_DIVIDER = "─────────────────────────"
+_LABEL_WIDTH = 14
+
+
+def _amount_cell(value: float) -> str:
+    """Render a signed dollar amount in a fixed-width cell (avoids -0.00)."""
+    if value == 0:
+        value = 0.0
+    return f"${value:>9.2f}"
+
+
+def _summary_lines(expense_total: float, income_total: float) -> list[str]:
+    """Shared Expense / Inflow / Net summary block."""
+    net = income_total - expense_total
+    return [
+        _DIVIDER,
+        f"💰 {'Expense':<{_LABEL_WIDTH}} {_amount_cell(-expense_total)}",
+        f"💵 {'Inflow':<{_LABEL_WIDTH}} {_amount_cell(income_total)}",
+        f"📈 {'Net':<{_LABEL_WIDTH}} {_amount_cell(net)}",
+    ]
+
+
+def _format_report(
+    chat_id: int,
+    label: str,
+    transactions: list[dict],
+    inflows: list[dict] | None = None,
+) -> str:
+    inflows = inflows or []
+    income_total = sum(inflow.get("amount", 0.0) for inflow in inflows)
 
     by_category: dict[str, float] = defaultdict(float)
     for tx in transactions:
         by_category[tx["category"]] += tx["amount"]
+    expense_total = sum(by_category.values())
 
-    grand_total = sum(by_category.values())
-    lines = [f"📊 {label}", "─────────────────────────"]
+    if not transactions and not inflows:
+        return f"📊 {label}\n{_DIVIDER}\nNo expenses recorded.\n{_DIVIDER}"
 
     category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
 
-    for cat, total in sorted(by_category.items(), key=lambda x: -x[1]):
-        emoji = category_emoji.get(cat, "📦")
-        pct = (total / grand_total * 100) if grand_total else 0
-        lines.append(f"{emoji} {cat:<16} ${total:>8.2f}  {pct:>5.1f}%")
+    lines = [f"📊 {label}", _DIVIDER, "Expenses"]
+    if transactions:
+        for cat, total in sorted(by_category.items(), key=lambda x: -x[1]):
+            emoji = category_emoji.get(cat, "📦")
+            pct = (total / expense_total * 100) if expense_total else 0
+            lines.append(f"{emoji} {cat:<{_LABEL_WIDTH}} {_amount_cell(-total)}  {pct:>5.1f}%")
+    else:
+        lines.append("None recorded.")
 
-    lines.append("─────────────────────────")
-    lines.append(f"💰 Total{' ' * 12}${grand_total:>8.2f}  100.0%")
+    lines.append(_DIVIDER)
+    lines.append("Inflow")
+    if inflows:
+        for inflow in sorted(inflows, key=lambda i: i.get("timestamp", "")):
+            lines.append(f"💵 {inflow.get('item', ''):<{_LABEL_WIDTH}} {_amount_cell(inflow.get('amount', 0.0))}")
+    else:
+        lines.append("None recorded.")
 
+    lines.extend(_summary_lines(expense_total, income_total))
     return "\n".join(lines)
 
 
-def _format_daily_report(chat_id: int, label: str, transactions: list[dict]) -> str:
-    if not transactions:
-        return f"📊 {label}\n─────────────────────────\nNo expenses recorded.\n─────────────────────────"
+def _format_daily_report(
+    chat_id: int,
+    label: str,
+    transactions: list[dict],
+    inflows: list[dict] | None = None,
+) -> str:
+    inflows = inflows or []
+    income_total = sum(inflow.get("amount", 0.0) for inflow in inflows)
+    expense_total = sum(tx.get("amount", 0.0) for tx in transactions)
+
+    if not transactions and not inflows:
+        return f"📊 {label}\n{_DIVIDER}\nNo expenses recorded.\n{_DIVIDER}"
 
     category_emoji = {c["name"]: c.get("emoji", "📦") for c in get_category_list(chat_id)}
 
-    sorted_txs = sorted(transactions, key=lambda t: t.get("timestamp", ""))
+    lines = [f"📊 {label}", _DIVIDER, "Expenses"]
+    if transactions:
+        for tx in sorted(transactions, key=lambda t: t.get("timestamp", "")):
+            emoji = category_emoji.get(tx.get("category", ""), "📦")
+            item = tx.get("item", "")
+            ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
+            time_str = ts.strftime("%I:%M %p")
+            lines.append(f"{emoji} {item:<{_LABEL_WIDTH}} {_amount_cell(-tx.get('amount', 0.0))}  {time_str}")
+    else:
+        lines.append("None recorded.")
 
-    lines = [f"📊 {label}", "─────────────────────────"]
+    lines.append(_DIVIDER)
+    lines.append("Inflow")
+    if inflows:
+        for inflow in sorted(inflows, key=lambda i: i.get("timestamp", "")):
+            item = inflow.get("item", "")
+            ts = datetime.fromisoformat(inflow["timestamp"]).astimezone(SGT)
+            time_str = ts.strftime("%I:%M %p")
+            lines.append(f"💵 {item:<{_LABEL_WIDTH}} {_amount_cell(inflow.get('amount', 0.0))}  {time_str}")
+    else:
+        lines.append("None recorded.")
 
-    for tx in sorted_txs:
-        emoji = category_emoji.get(tx.get("category", ""), "📦")
-        item = tx.get("item", "")
-        amount = tx.get("amount", 0.0)
-        ts = datetime.fromisoformat(tx["timestamp"]).astimezone(SGT)
-        time_str = ts.strftime("%I:%M %p")
-        lines.append(f"{emoji} {item:<16} ${amount:>8.2f}  {time_str}")
-
-    grand_total = sum(tx.get("amount", 0.0) for tx in transactions)
-    lines.append("─────────────────────────")
-    lines.append(f"💰 Total{' ' * 12}${grand_total:>8.2f}")
-
+    lines.extend(_summary_lines(expense_total, income_total))
     return "\n".join(lines)
 
 
@@ -116,8 +170,9 @@ async def trigger_report(
     total_tx = 0
     for chat_id in chat_ids:
         transactions = get_transactions(chat_id, start, end)
+        inflows = get_inflows(chat_id, start, end)
         formatter = _format_daily_report if period == "daily" else _format_report
-        report = formatter(chat_id, label, transactions)
+        report = formatter(chat_id, label, transactions, inflows)
         await send_message(chat_id, f"<pre>{report}</pre>")
         total_tx += len(transactions)
 

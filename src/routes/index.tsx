@@ -76,12 +76,15 @@ import {
 } from "recharts";
 import {
   DashboardApiError,
+  createDashboardInflow,
   createDashboardTransaction,
   deleteDashboardBudget,
+  deleteDashboardInflow,
   deleteDashboardPlan,
   deleteDashboardTransaction,
   fetchDashboardBudgets,
   fetchDashboardCategories,
+  fetchDashboardInflows,
   fetchDashboardPlans,
   fetchDashboardPreferences,
   fetchDashboardSession,
@@ -93,6 +96,7 @@ import {
   updateDashboardPlan,
   updateDashboardTransaction,
   type DashboardCategory,
+  type DashboardInflow,
   type DashboardPaymentType,
   type DashboardPreferences,
   type DashboardPlan,
@@ -122,7 +126,7 @@ const currency = new Intl.NumberFormat("en-US", {
 const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
 const TRANSACTIONS_PAGE_SIZE = 25;
 
-type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "plans";
+type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "income" | "plans";
 type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
 type TxnJump = {
   category: string | null;
@@ -367,6 +371,7 @@ function DashboardShell({
   const [categories, setCategories] = useState<DashboardCategory[]>([]);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
+  const [inflows, setInflows] = useState<DashboardInflow[]>([]);
   const [plans, setPlans] = useState<DashboardPlan[]>([]);
   const [preferences, setPreferences] = useState<DashboardPreferences>({
     overviewVisibleCards: [],
@@ -382,14 +387,16 @@ function DashboardShell({
       fetchDashboardCategories(),
       fetchDashboardBudgets(),
       fetchDashboardTransactions({ start: HISTORY_START, end: endOfDay(now) }),
+      fetchDashboardInflows({ start: HISTORY_START, end: endOfDay(now) }),
       fetchDashboardPlans(),
       fetchDashboardPreferences(),
     ])
-      .then(([cats, buds, txns, pls, prefs]) => {
+      .then(([cats, buds, txns, infs, pls, prefs]) => {
         if (!active) return;
         setCategories(cats);
         setBudgets(buds);
         setTransactions(txns);
+        setInflows(infs);
         setPlans(pls);
         setPreferences(prefs);
         setLoading(false);
@@ -458,6 +465,17 @@ function DashboardShell({
     setPlans(pls);
   }
 
+  async function handleCreateInflow(payload: { item: string; amount: number; timestamp: Date }) {
+    await createDashboardInflow(payload);
+    const end = endOfDay(new Date(Math.max(Date.now(), payload.timestamp.getTime())));
+    setInflows(await fetchDashboardInflows({ start: HISTORY_START, end }));
+  }
+
+  async function handleDeleteInflow(inflowId: string) {
+    await deleteDashboardInflow(inflowId);
+    setInflows((current) => current.filter((inflow) => inflow.id !== inflowId));
+  }
+
   const refreshBudgets = useCallback(async () => {
     try {
       const buds = await fetchDashboardBudgets();
@@ -502,12 +520,15 @@ function DashboardShell({
       categories={categories}
       budgets={budgets}
       transactions={transactions}
+      inflows={inflows}
       plans={plans}
       preferences={preferences}
       onDeleteTransaction={handleDeleteTransaction}
       onLogout={() => void handleLogout()}
       onUpdateTransaction={handleUpdateTransaction}
       onCreateTransaction={handleCreateTransaction}
+      onCreateInflow={handleCreateInflow}
+      onDeleteInflow={handleDeleteInflow}
       onRefreshBudgets={refreshBudgets}
       onUpdatePlan={handleUpdatePlan}
       onDeletePlan={handleDeletePlan}
@@ -523,12 +544,15 @@ function DashboardLayout({
   categories,
   budgets,
   transactions,
+  inflows,
   plans,
   preferences,
   onDeleteTransaction,
   onLogout,
   onUpdateTransaction,
   onCreateTransaction,
+  onCreateInflow,
+  onDeleteInflow,
   onRefreshBudgets,
   onUpdatePlan,
   onDeletePlan,
@@ -540,6 +564,7 @@ function DashboardLayout({
   categories: DashboardCategory[];
   budgets: Record<string, number>;
   transactions: DashboardTransaction[];
+  inflows: DashboardInflow[];
   plans: DashboardPlan[];
   preferences: DashboardPreferences;
   onDeleteTransaction: (transactionId: string) => Promise<void>;
@@ -563,6 +588,8 @@ function DashboardLayout({
     installmentCount?: number;
     createFirstTransactionNow?: boolean;
   }) => Promise<void>;
+  onCreateInflow: (payload: { item: string; amount: number; timestamp: Date }) => Promise<void>;
+  onDeleteInflow: (inflowId: string) => Promise<void>;
   onRefreshBudgets: () => Promise<void>;
   onUpdatePlan: (
     planId: string,
@@ -587,6 +614,12 @@ function DashboardLayout({
   const [deletingBudgetCategory, setDeletingBudgetCategory] = useState<string | null>(null);
   const [budgetActionError, setBudgetActionError] = useState<string | null>(null);
   const [addTransactionOpen, setAddTransactionOpen] = useState(false);
+  const [addInflowOpen, setAddInflowOpen] = useState(false);
+  const [newInflowItem, setNewInflowItem] = useState("");
+  const [newInflowAmount, setNewInflowAmount] = useState("");
+  const [newInflowTimestamp, setNewInflowTimestamp] = useState(formatDateTimeInputValue(new Date()));
+  const [creatingInflow, setCreatingInflow] = useState(false);
+  const [createInflowError, setCreateInflowError] = useState<string | null>(null);
   const [newItem, setNewItem] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [newAmount, setNewAmount] = useState("");
@@ -725,6 +758,33 @@ function DashboardLayout({
     if (creatingTransaction) return;
     setAddTransactionOpen(false);
     setCreateTransactionError(null);
+  }
+
+  function openAddInflowDialog() {
+    setNewInflowItem("");
+    setNewInflowAmount("");
+    setNewInflowTimestamp(formatDateTimeInputValue(new Date()));
+    setCreateInflowError(null);
+    setAddInflowOpen(true);
+  }
+
+  async function handleCreateInflowSubmit() {
+    setCreateInflowError(null);
+    const trimmed = newInflowItem.trim();
+    const parsedAmount = Number(newInflowAmount);
+    if (!trimmed) { setCreateInflowError("Description is required."); return; }
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) { setCreateInflowError("Amount must be a positive number."); return; }
+    const when = new Date(newInflowTimestamp);
+    if (Number.isNaN(when.getTime())) { setCreateInflowError("Date is invalid."); return; }
+    setCreatingInflow(true);
+    try {
+      await onCreateInflow({ item: trimmed, amount: parsedAmount, timestamp: when });
+      setAddInflowOpen(false);
+    } catch (caught) {
+      setCreateInflowError(caught instanceof Error ? caught.message : "Could not add inflow.");
+    } finally {
+      setCreatingInflow(false);
+    }
   }
 
   async function handleOverviewVisibleCardsChange(next: string[]) {
@@ -958,18 +1018,31 @@ function DashboardLayout({
           onValueChange={(value) => setActiveTab(value as DashboardTab)}
           className="space-y-6"
         >
-          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-5 sm:inline-grid">
+          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-6 sm:inline-grid">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
-            <TabsTrigger value="transactions">Transactions</TabsTrigger>
+            <TabsTrigger value="transactions">Expenses</TabsTrigger>
+            <TabsTrigger value="income">Inflow</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
           <div className="flex min-h-9 items-center justify-start gap-2">
             <div className="flex items-center gap-2">
-              <Button onClick={openAddTransactionDialog} size="sm" className="shrink-0">
-                <Plus className="mr-2 h-4 w-4" />
-                Add Transaction
+              <Button
+                onClick={openAddTransactionDialog}
+                size="sm"
+                className="shrink-0 gap-1 bg-orange-700 hover:bg-orange-800 text-white"
+              >
+                <Plus className="h-4 w-4" />
+                Expense
+              </Button>
+              <Button
+                onClick={openAddInflowDialog}
+                size="sm"
+                className="shrink-0 gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
+              >
+                <Plus className="mr-1 h-4 w-4" />
+                Inflow
               </Button>
               {activeTab === "overview" ? (
                 <OverviewInfoPopover
@@ -983,19 +1056,20 @@ function DashboardLayout({
           <TabsContent value="overview" className="space-y-6">
             <OverviewCards
               transactions={transactions}
+              inflows={inflows}
               budgetTotal={budgetTotal}
               visible={visibleOverviewCards}
             />
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Recent Transactions</CardTitle>
+                <CardTitle className="text-lg">Recent Expenses</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {loading ? (
-                  <CenteredListMessage label="Loading transactions..." />
+                  <CenteredListMessage label="Loading expenses..." />
                 ) : recentTransactions.length === 0 ? (
-                  <CenteredListMessage label="No transactions found." />
+                  <CenteredListMessage label="No expenses found." />
                 ) : (
                   <>
                     <div className="space-y-1">
@@ -1024,7 +1098,7 @@ function DashboardLayout({
                     </div>
                     <div className="flex justify-center">
                       <Button variant="ghost" onClick={() => setActiveTab("transactions")}>
-                        Show all
+                        Show all expenses
                       </Button>
                     </div>
                   </>
@@ -1219,6 +1293,14 @@ function DashboardLayout({
             />
           </TabsContent>
 
+          <TabsContent value="income" className="space-y-6">
+            <IncomeTab
+              inflows={inflows}
+              loading={loading}
+              onDeleteInflow={onDeleteInflow}
+            />
+          </TabsContent>
+
           <TabsContent value="plans" className="space-y-6">
             <PlansTab
               plans={plans}
@@ -1384,6 +1466,64 @@ function DashboardLayout({
               >
                 {creatingTransaction ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Create
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={addInflowOpen} onOpenChange={(open) => { if (!open && !creatingInflow) setAddInflowOpen(false); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add Inflow</DialogTitle>
+              <DialogDescription>Record income such as salary, cashback, or a refund.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-item">Description</Label>
+                <Input
+                  id="new-inflow-item"
+                  placeholder="Salary"
+                  value={newInflowItem}
+                  onChange={(e) => setNewInflowItem(e.target.value)}
+                  disabled={creatingInflow}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-amount">Amount</Label>
+                <Input
+                  id="new-inflow-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="2000"
+                  value={newInflowAmount}
+                  onChange={(e) => setNewInflowAmount(e.target.value)}
+                  disabled={creatingInflow}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-timestamp">Date & Time</Label>
+                <Input
+                  id="new-inflow-timestamp"
+                  type="datetime-local"
+                  value={newInflowTimestamp}
+                  onChange={(e) => setNewInflowTimestamp(e.target.value)}
+                  disabled={creatingInflow}
+                />
+              </div>
+              {createInflowError && <p className="text-sm text-destructive">{createInflowError}</p>}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAddInflowOpen(false)} disabled={creatingInflow}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void handleCreateInflowSubmit()}
+                disabled={creatingInflow}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white"
+              >
+                {creatingInflow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Add Inflow
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1571,10 +1711,12 @@ function DashboardLayout({
 
 function OverviewCards({
   transactions,
+  inflows,
   budgetTotal,
   visible,
 }: {
   transactions: DashboardTransaction[];
+  inflows: DashboardInflow[];
   budgetTotal: number;
   visible: string[];
 }) {
@@ -1597,6 +1739,17 @@ function OverviewCards({
       remaining,
     };
   }, [transactions, budgetTotal]);
+
+  const monthIncome = useMemo(() => {
+    const now = new Date();
+    const from = startOfMonth(now);
+    const end = endOfDay(now);
+    return inflows
+      .filter((inflow) => inflow.timestamp >= from && inflow.timestamp <= end)
+      .reduce((sum, inflow) => sum + inflow.amount, 0);
+  }, [inflows]);
+
+  const monthNet = monthIncome - stats.monthTotal;
 
   const statCards = [
     {
@@ -1661,10 +1814,58 @@ function OverviewCards({
   ];
 
   const cards = statCards.filter((card) => visible.includes(card.key));
+  const showInflowCard = visible.includes("inflow");
+  const hasCards = cards.length > 0 || showInflowCard;
 
   return (
     <div className="space-y-5">
-      {cards.length > 0 ? (
+      {/* Net hero banner — always visible */}
+      <Card className="overflow-hidden border-0 shadow-md">
+        <div className="relative px-6 pt-6 pb-5 bg-gradient-to-br from-accent/10 via-accent/5 to-background">
+          {/* Decorative blurred orb */}
+          <div className="pointer-events-none absolute -top-6 -right-6 h-36 w-36 rounded-full blur-3xl opacity-30 bg-accent" />
+
+          {/* Net headline */}
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            Net this month
+          </p>
+          <p className="mt-1 text-3xl font-extrabold tracking-tight leading-none text-foreground">
+            {monthNet < 0 ? "-" : "+"}
+            {currency.format(Math.abs(monthNet))}
+          </p>
+
+          {/* Expenses / Inflow pills */}
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:gap-4">
+            {/* Expenses pill */}
+            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+                <TrendingDown className="h-4 w-4 text-destructive" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Expenses</p>
+                <p className="text-lg font-bold text-destructive leading-tight">
+                  -{currency.format(stats.monthTotal)}
+                </p>
+              </div>
+            </div>
+
+            {/* Inflow pill */}
+            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/10">
+                <TrendingUp className="h-4 w-4 text-emerald-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Inflow</p>
+                <p className="text-lg font-bold text-emerald-500 leading-tight">
+                  +{currency.format(monthIncome)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {hasCards ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {cards.map((card) => (
             <StatCard
@@ -1676,6 +1877,15 @@ function OverviewCards({
               trend={card.trend}
             />
           ))}
+          {showInflowCard && (
+            <StatCard
+              label="Inflow"
+              value={currency.format(monthIncome)}
+              sub="This month"
+              icon={TrendingUp}
+              trend="up"
+            />
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground text-center py-8">No cards selected.</p>
@@ -1696,6 +1906,7 @@ function OverviewInfoPopover({
     { key: "week", label: "This Week" },
     { key: "month", label: "This Month" },
     { key: "budget", label: "Budget Left" },
+    { key: "inflow", label: "Inflow" },
     { key: "30d", label: "Last 30 Days" },
     { key: "90d", label: "Last 90 Days" },
     { key: "ytd", label: "Year to Date" },
@@ -2284,7 +2495,7 @@ function TransactionsTab({
   return (
     <>
       <div className="space-y-2">
-        <Label htmlFor="transaction-search">Search transactions</Label>
+        <Label htmlFor="transaction-search">Search expenses</Label>
         <Input
           id="transaction-search"
           value={searchQuery}
@@ -2297,10 +2508,10 @@ function TransactionsTab({
         <CardHeader className="space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <CardTitle className="text-lg">All Transactions</CardTitle>
+              <CardTitle className="text-lg">All Expenses</CardTitle>
               {!loading && (
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  {filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? "s" : ""} &middot;{" "}
+                  {filteredTransactions.length} expense{filteredTransactions.length !== 1 ? "s" : ""} &middot;{" "}
                   <span className="font-semibold text-foreground">
                     {currency.format(filteredTransactions.reduce((sum, tx) => sum + tx.amount, 0))}
                   </span>
@@ -2374,9 +2585,9 @@ function TransactionsTab({
             </div>
           ) : null}
           {loading ? (
-            <CenteredListMessage label="Loading transactions..." />
+            <CenteredListMessage label="Loading expenses..." />
           ) : pageRows.length === 0 ? (
-            <CenteredListMessage label="No transactions found for the selected filters." />
+            <CenteredListMessage label="No expenses found for the selected filters." />
           ) : (
             <>
               <div className="rounded-xl border border-border/70">
@@ -2886,6 +3097,94 @@ function CategoryFilterPopover({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function IncomeTab({
+  inflows,
+  loading,
+  onDeleteInflow,
+}: {
+  inflows: DashboardInflow[];
+  loading: boolean;
+  onDeleteInflow: (inflowId: string) => Promise<void>;
+}) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const sorted = useMemo(
+    () => [...inflows].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()),
+    [inflows],
+  );
+  const total = useMemo(
+    () => inflows.reduce((sum, inflow) => sum + inflow.amount, 0),
+    [inflows],
+  );
+
+  async function handleDelete(inflowId: string) {
+    setDeletingId(inflowId);
+    try {
+      await onDeleteInflow(inflowId);
+    } catch {
+      // Row remains; the next refresh reconciles state.
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-lg">Inflow</CardTitle>
+          <span className="text-sm font-semibold text-emerald-500">{currency.format(total)}</span>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <CenteredListMessage label="Loading inflow..." />
+          ) : sorted.length === 0 ? (
+            <CenteredListMessage label="No inflow recorded yet." />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sorted.map((inflow) => (
+                  <TableRow key={inflow.id}>
+                    <TableCell className="font-medium">{inflow.item}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {format(inflow.timestamp, "MMM d, yyyy")}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold text-emerald-500">
+                      +{currency.format(inflow.amount)}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        disabled={deletingId === inflow.id}
+                        onClick={() => void handleDelete(inflow.id)}
+                      >
+                        {deletingId === inflow.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

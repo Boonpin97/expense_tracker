@@ -14,6 +14,14 @@ export type DashboardTransaction = {
   sourcePlanId: string | null;
 };
 
+export type DashboardInflow = {
+  id: string;
+  item: string;
+  amount: number;
+  timestamp: Date;
+  chatId: number;
+};
+
 export type DashboardCategory = {
   name: string;
   emoji: string;
@@ -174,6 +182,16 @@ function parseTransaction(data: Record<string, unknown>): DashboardTransaction {
   };
 }
 
+function parseInflow(data: Record<string, unknown>): DashboardInflow {
+  return {
+    id: String(data._doc_id ?? data.id ?? ""),
+    item: String(data.item ?? ""),
+    amount: typeof data.amount === "number" ? data.amount : 0,
+    timestamp: new Date(String(data.timestamp ?? "")),
+    chatId: typeof data.chat_id === "number" ? data.chat_id : 0,
+  };
+}
+
 function parseCategory(data: Record<string, unknown>): DashboardCategory {
   return {
     name: String(data.name ?? ""),
@@ -269,6 +287,39 @@ export async function updateDashboardTransaction(
 
 export async function deleteDashboardTransaction(transactionId: string) {
   await requestJson("DELETE", `/dashboard/transactions/${transactionId}`);
+}
+
+export async function fetchDashboardInflows(options: { start: Date; end: Date }) {
+  const data = await requestJson<{ inflows?: Record<string, unknown>[] }>(
+    "GET",
+    "/dashboard/inflows",
+    {
+      query: {
+        start: options.start.toISOString(),
+        end: options.end.toISOString(),
+      },
+    },
+  );
+
+  return (data.inflows ?? []).map(parseInflow);
+}
+
+export async function createDashboardInflow(payload: {
+  item: string;
+  amount: number;
+  timestamp: Date;
+}) {
+  await requestJson("POST", "/dashboard/inflows", {
+    body: {
+      item: payload.item,
+      amount: payload.amount,
+      timestamp: payload.timestamp.toISOString(),
+    },
+  });
+}
+
+export async function deleteDashboardInflow(inflowId: string) {
+  await requestJson("DELETE", `/dashboard/inflows/${inflowId}`);
 }
 
 export async function fetchDashboardCategories() {

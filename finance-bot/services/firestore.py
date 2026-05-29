@@ -9,6 +9,7 @@ from google.cloud import firestore
 from models.transaction import (
     CategoryMapping,
     FlowSession,
+    Inflow,
     PaymentPlan,
     PendingPlan,
     PendingTransaction,
@@ -77,6 +78,56 @@ def save_transaction(tx: Transaction) -> str:
     tx.id = doc_ref.id
     doc_ref.set(tx.model_dump())
     return doc_ref.id
+
+
+def save_inflow(inflow: Inflow) -> str:
+    doc_ref = get_db().collection("inflows").document()
+    inflow.id = doc_ref.id
+    doc_ref.set(inflow.model_dump())
+    return doc_ref.id
+
+
+def _stream_inflows(chat_id: int, start: datetime, end: datetime):
+    """Stream a user's inflows within [start, end).
+
+    Filters by chat_id only (a single-field index that always exists) and
+    applies the timestamp window in Python, so the dedicated ``inflows``
+    collection does not need its own composite index. Timestamps are stored as
+    ISO strings with a consistent offset, so lexicographic comparison matches
+    chronological order — the same assumption the Firestore range query makes.
+    """
+    start_iso = start.isoformat()
+    end_iso = end.isoformat()
+    for doc in get_db().collection("inflows").where("chat_id", "==", chat_id).stream():
+        data = doc.to_dict() or {}
+        timestamp = data.get("timestamp", "")
+        if start_iso <= timestamp < end_iso:
+            yield doc, data
+
+
+def get_inflows(chat_id: int, start: datetime, end: datetime) -> list[dict]:
+    return [data for _doc, data in _stream_inflows(chat_id, start, end)]
+
+
+def get_inflows_with_ids(chat_id: int, start: datetime, end: datetime) -> list[dict]:
+    result = []
+    for doc, data in _stream_inflows(chat_id, start, end):
+        data["_doc_id"] = doc.id
+        result.append(data)
+    return result
+
+
+def get_inflow_by_id(doc_id: str) -> Optional[dict]:
+    doc = get_db().collection("inflows").document(doc_id).get()
+    if doc.exists:
+        data = doc.to_dict()
+        data["_doc_id"] = doc.id
+        return data
+    return None
+
+
+def delete_inflow(doc_id: str) -> None:
+    get_db().collection("inflows").document(doc_id).delete()
 
 
 def delete_transactions_for_plan(plan_id: str) -> int:

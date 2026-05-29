@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
+from models.transaction import Inflow
 from routers.reports import (
     _format_budget_report,
     _format_daily_report,
@@ -32,11 +33,13 @@ from services.firestore import (
     delete_transaction,
     get_category_list,
     get_budgets,
+    get_inflows,
     get_last_transaction,
     get_payment_plan,
     get_pending,
     get_pending_change,
     get_pending_plan,
+    save_inflow,
     get_transaction_by_id,
     get_transactions,
     get_transactions_with_ids,
@@ -807,6 +810,68 @@ async def _get_pending_plan_or_expire(chat_id: int, message: str) -> dict | None
     return pending
 
 
+INFLOW_USAGE = (
+    "Send the inflow as <code>&lt;item&gt; &lt;amount&gt;</code> with an optional date, "
+    "for example <code>Salary 2000</code> or <code>Salary 2000 010526</code>."
+)
+
+
+async def _record_inflow(
+    chat_id: int,
+    item: str,
+    amount: float,
+    transaction_date: str | None = None,
+) -> None:
+    timestamp = build_transaction_timestamp(transaction_date)
+    inflow = Inflow(
+        item=item,
+        amount=amount,
+        timestamp=timestamp,
+        chat_id=chat_id,
+        created_at=datetime.now(SGT).isoformat(),
+    )
+    save_inflow(inflow)
+    message = f"✅ Inflow: <b>{item}</b> +${amount:.2f}"
+    if transaction_date:
+        date_obj = datetime.strptime(transaction_date, "%Y-%m-%d")
+        message += f"\n🗓 {date_obj.strftime('%d %b %Y')}"
+    await telegram.send_message(chat_id, message)
+
+
+async def _handle_inflow_command(chat_id: int, text: str) -> None:
+    remainder = text[len("/inflow"):].strip()
+    if not remainder:
+        start_session(chat_id, "inflow", "awaiting_entry")
+        await telegram.send_message(chat_id, f"💵 {INFLOW_USAGE}")
+        return
+
+    parsed = parse_expense(remainder)
+    if parsed is None:
+        await telegram.send_message(chat_id, f"🤔 I couldn't read that inflow. {INFLOW_USAGE}")
+        return
+    await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
+
+
+async def _handle_inflow_session(chat_id: int, text: str) -> bool:
+    session = get_session(chat_id)
+    if not session or session.get("flow_type") != "inflow":
+        return False
+    if session_expired(session):
+        clear_session(chat_id)
+        await telegram.send_message(chat_id, "⏰ The /inflow request has expired. Please send /inflow again.")
+        return True
+
+    parsed = parse_expense(text)
+    if parsed is None:
+        # Keep the session active so the user can retry within the expiry window.
+        await telegram.send_message(chat_id, f"🤔 I couldn't read that inflow. {INFLOW_USAGE}")
+        return True
+
+    clear_session(chat_id)
+    await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
+    return True
+
+
 @router.post("/webhook")
 async def webhook(request: Request):
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -967,7 +1032,8 @@ async def webhook(request: Request):
 
             start, end, label = _get_month_window(year, month)
             transactions = get_transactions(chat_id, start, end)
-            report = _format_report(chat_id, label, transactions)
+            inflows = get_inflows(chat_id, start, end)
+            report = _format_report(chat_id, label, transactions, inflows)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
 
         elif callback_data.startswith("dailyrep:"):
@@ -993,7 +1059,8 @@ async def webhook(request: Request):
 
             start, end, label = _get_period_window("daily")
             transactions = get_transactions(chat_id, start, end)
-            report = _format_daily_report(chat_id, label, transactions)
+            inflows = get_inflows(chat_id, start, end)
+            report = _format_daily_report(chat_id, label, transactions, inflows)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
 
         elif callback_data.startswith("editcat:"):
@@ -1169,8 +1236,11 @@ async def webhook(request: Request):
         elif text.startswith("/weekly"):
             start, end, label = _get_period_window("weekly")
             transactions = get_transactions(chat_id, start, end)
-            report = _format_report(chat_id, label, transactions)
+            inflows = get_inflows(chat_id, start, end)
+            report = _format_report(chat_id, label, transactions, inflows)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
+        elif text.startswith("/inflow"):
+            await _handle_inflow_command(chat_id, text)
         elif text.startswith("/set_budget"):
             start_session(chat_id, "set_budget", "choosing_category")
             await _send_set_budget_category_prompt(chat_id)
@@ -1298,6 +1368,9 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if await _handle_set_budget_session(chat_id, text):
+        return {"ok": True}
+
+    if await _handle_inflow_session(chat_id, text):
         return {"ok": True}
 
     user_state = get_user_state(chat_id)
@@ -1428,7 +1501,8 @@ async def webhook(request: Request):
         clear_user_state(chat_id)
         start, end, label = _get_month_window(year, month)
         transactions = get_transactions(chat_id, start, end)
-        report = _format_report(chat_id, label, transactions)
+        inflows = get_inflows(chat_id, start, end)
+        report = _format_report(chat_id, label, transactions, inflows)
         await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         return {"ok": True}
 
@@ -1447,8 +1521,9 @@ async def webhook(request: Request):
         day_end = day_start + timedelta(days=1)
         label = f"Daily Report ({day_start.strftime('%d %b %Y')})"
         transactions = get_transactions(chat_id, day_start, day_end)
+        inflows = get_inflows(chat_id, day_start, day_end)
         clear_user_state(chat_id)
-        report = _format_daily_report(chat_id, label, transactions)
+        report = _format_daily_report(chat_id, label, transactions, inflows)
         await telegram.send_message(chat_id, f"<pre>{report}</pre>")
         return {"ok": True}
 

@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from models.transaction import PaymentPlan, Transaction
+from models.transaction import Inflow, PaymentPlan, Transaction
 from services.dashboard_auth import (
     build_session_token,
     normalize_username,
@@ -30,10 +30,14 @@ from services.firestore import (
     get_budgets,
     get_category_list,
     get_dashboard_preferences,
+    get_inflow_by_id,
+    get_inflows_with_ids,
     get_payment_plan,
     get_transaction_by_id,
     get_transactions_with_ids,
     get_web_session,
+    delete_inflow,
+    save_inflow,
     list_payment_plans,
     remove_budget,
     rename_category,
@@ -84,6 +88,18 @@ class TransactionCreateRequest(BaseModel):
     day_of_month: Optional[int] = None
     installment_count: Optional[int] = None
     create_first_transaction_now: bool = True
+
+
+class InflowCreateRequest(BaseModel):
+    item: str
+    amount: float
+    timestamp: str
+
+
+class InflowUpdateRequest(BaseModel):
+    item: str
+    amount: float
+    timestamp: str
 
 
 class CategoryCreateRequest(BaseModel):
@@ -413,6 +429,80 @@ async def delete_dashboard_transaction(transaction_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Transaction not found.")
 
     delete_transaction(transaction_id)
+    return {"ok": True}
+
+
+@router.get("/inflows")
+async def list_dashboard_inflows(
+    request: Request,
+    start: str,
+    end: str,
+):
+    session = _require_session(request)
+    start_dt = _parse_dashboard_datetime(start)
+    end_dt = _parse_dashboard_datetime(end)
+    inflows = get_inflows_with_ids(session["chat_id"], start_dt, end_dt)
+    inflows.sort(key=lambda inflow: inflow.get("timestamp", ""), reverse=True)
+    return {"inflows": inflows}
+
+
+@router.post("/inflows")
+async def create_dashboard_inflow(payload: InflowCreateRequest, request: Request):
+    session = _require_session(request)
+    item = payload.item.strip()
+    if not item:
+        raise HTTPException(status_code=400, detail="Item cannot be empty.")
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive.")
+    timestamp = _parse_dashboard_datetime(payload.timestamp)
+    save_inflow(
+        Inflow(
+            item=item,
+            amount=payload.amount,
+            timestamp=timestamp.isoformat(),
+            chat_id=session["chat_id"],
+            created_at=datetime.now(SGT).isoformat(),
+        )
+    )
+    return {"ok": True}
+
+
+@router.patch("/inflows/{inflow_id}")
+async def update_dashboard_inflow(
+    inflow_id: str,
+    payload: InflowUpdateRequest,
+    request: Request,
+):
+    session = _require_session(request)
+    inflow = get_inflow_by_id(inflow_id)
+    if not inflow or inflow.get("chat_id") != session["chat_id"]:
+        raise HTTPException(status_code=404, detail="Inflow not found.")
+
+    item = payload.item.strip()
+    if not item:
+        raise HTTPException(status_code=400, detail="Item cannot be empty.")
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive.")
+
+    from services.firestore import get_db
+
+    get_db().collection("inflows").document(inflow_id).update(
+        {
+            "item": item,
+            "amount": payload.amount,
+            "timestamp": _parse_dashboard_datetime(payload.timestamp).isoformat(),
+        }
+    )
+    return {"ok": True}
+
+
+@router.delete("/inflows/{inflow_id}")
+async def delete_dashboard_inflow(inflow_id: str, request: Request):
+    session = _require_session(request)
+    inflow = get_inflow_by_id(inflow_id)
+    if not inflow or inflow.get("chat_id") != session["chat_id"]:
+        raise HTTPException(status_code=404, detail="Inflow not found.")
+    delete_inflow(inflow_id)
     return {"ok": True}
 
 
