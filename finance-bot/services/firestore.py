@@ -9,6 +9,7 @@ from google.cloud import firestore
 from models.transaction import (
     CategoryMapping,
     FlowSession,
+    Goal,
     Inflow,
     PaymentPlan,
     PendingPlan,
@@ -128,6 +129,72 @@ def get_inflow_by_id(doc_id: str) -> Optional[dict]:
 
 def delete_inflow(doc_id: str) -> None:
     get_db().collection("inflows").document(doc_id).delete()
+
+
+def update_inflow_goal(doc_id: str, goal_id: Optional[str]) -> None:
+    get_db().collection("inflows").document(doc_id).update({"goal_id": goal_id})
+
+
+def _goals_collection(chat_id: int):
+    return get_db().collection(f"users/{chat_id}/goals")
+
+
+def save_goal(goal: Goal) -> str:
+    doc_ref = _goals_collection(goal.chat_id).document()
+    goal.id = doc_ref.id
+    doc_ref.set(goal.model_dump())
+    return doc_ref.id
+
+
+def get_goals(chat_id: int) -> list[dict]:
+    goals = []
+    for doc in _goals_collection(chat_id).stream():
+        data = doc.to_dict() or {}
+        data["id"] = doc.id
+        goals.append(data)
+    goals.sort(key=lambda goal: goal.get("created_at", ""))
+    return goals
+
+
+def get_goal_by_id(chat_id: int, goal_id: str) -> Optional[dict]:
+    doc = _goals_collection(chat_id).document(goal_id).get()
+    if not doc.exists:
+        return None
+    data = doc.to_dict() or {}
+    data["id"] = doc.id
+    return data
+
+
+def update_goal(chat_id: int, goal_id: str, **fields) -> bool:
+    doc_ref = _goals_collection(chat_id).document(goal_id)
+    if not doc_ref.get().exists:
+        return False
+    doc_ref.update(fields)
+    return True
+
+
+def delete_goal(chat_id: int, goal_id: str) -> bool:
+    doc_ref = _goals_collection(chat_id).document(goal_id)
+    if not doc_ref.get().exists:
+        return False
+    doc_ref.delete()
+    return True
+
+
+def sum_inflows_by_goal(chat_id: int) -> dict[str, float]:
+    """Sum all-time inflow amounts per goal_id.
+
+    Filters by chat_id only (single-field index) and groups in Python — the
+    same composite-index-avoiding approach as ``_stream_inflows``.
+    """
+    sums: dict[str, float] = {}
+    for doc in get_db().collection("inflows").where("chat_id", "==", chat_id).stream():
+        data = doc.to_dict() or {}
+        goal_id = data.get("goal_id")
+        if not goal_id:
+            continue
+        sums[goal_id] = sums.get(goal_id, 0.0) + data.get("amount", 0.0)
+    return sums
 
 
 def delete_transactions_for_plan(plan_id: str) -> int:

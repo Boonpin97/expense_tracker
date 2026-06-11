@@ -139,6 +139,88 @@ async def send_budget_category_keyboard(chat_id: int, prompt: str) -> dict:
         return resp.json()
 
 
+async def send_income_goal_keyboard(chat_id: int, goals: list[dict], item: str, amount: float) -> dict:
+    """Ask which goal a just-recorded income belongs to. Expiry comes from the
+    interaction session, so callback_data carries no timestamps."""
+    keyboard = [
+        [{"text": f"{goal.get('emoji', '🎯')} {goal['name']}", "callback_data": f"inflowgoal:{goal['id']}"}]
+        for goal in goals
+    ]
+    keyboard.append([{"text": "➕ Add new goal", "callback_data": "inflowgoal:__new__"}])
+    keyboard.append([{"text": "🚫 No goal", "callback_data": "inflowgoal:__none__"}])
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Tag <b>{item}</b> +${amount:.2f} to a goal?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_goal_keyboard(chat_id: int, goals: list[dict], action: str, prompt: str) -> dict:
+    """Generic goal picker; callback_data is `{action}:{goal_id}`."""
+    keyboard = [
+        [{"text": f"{goal.get('emoji', '🎯')} {goal['name']}", "callback_data": f"{action}:{goal['id']}"}]
+        for goal in goals
+    ]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_goal_field_keyboard(chat_id: int, goal_name: str) -> dict:
+    keyboard = [[
+        {"text": "📝 Name", "callback_data": "goalfield:name"},
+        {"text": "😀 Emoji", "callback_data": "goalfield:emoji"},
+        {"text": "🎯 Target", "callback_data": "goalfield:target"},
+    ]]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"What do you want to change on <b>{goal_name}</b>?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_goal_delete_confirm_keyboard(chat_id: int, goal_name: str) -> dict:
+    keyboard = [[
+        {"text": "🗑️ Delete", "callback_data": "goaldelconfirm:yes"},
+        {"text": "Cancel", "callback_data": "goaldelconfirm:no"},
+    ]]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Delete goal <b>{goal_name}</b>? Income entries tagged to it stay recorded.",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prompt: str) -> dict:
     """Send an inline keyboard where each button is a transaction to delete."""
     ts = datetime.now(SGT).isoformat(timespec="seconds")
@@ -425,7 +507,11 @@ async def set_my_commands() -> dict:
         {"command": "start", "description": "Welcome message"},
         {"command": "daily", "description": "Daily spending reports"},
         {"command": "weekly", "description": "This week's spending summary"},
-        {"command": "inflow", "description": "Record income, e.g. /inflow Salary 2000"},
+        {"command": "income", "description": "Record income, e.g. /income Salary 2000"},
+        {"command": "goals", "description": "List goals with progress"},
+        {"command": "new_goal", "description": "Create a savings goal"},
+        {"command": "edit_goal", "description": "Edit a goal's name or target"},
+        {"command": "delete_goal", "description": "Delete a goal"},
         {"command": "set_budget", "description": "Set a monthly budget for a category"},
         {"command": "list_budget", "description": "List monthly budgets"},
         {"command": "budget_report", "description": "Show this month's budget report"},

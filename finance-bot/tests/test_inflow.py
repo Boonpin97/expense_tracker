@@ -151,13 +151,23 @@ class InflowCommandTests(unittest.TestCase):
 
         return DummyRequest()
 
-    def test_inflow_command_with_args_records_inflow(self):
+    def _goal_prompt_patches(self):
+        return (
+            patch("routers.webhook.get_goals", return_value=[]),
+            patch("routers.webhook.start_session"),
+            patch("routers.webhook.telegram.send_income_goal_keyboard", new=AsyncMock()),
+        )
+
+    def test_income_command_with_args_records_inflow(self):
+        goals, start, keyboard = self._goal_prompt_patches()
         with (
+            goals, keyboard,
+            start as mock_start,
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
-            patch("routers.webhook.save_inflow") as mock_save,
+            patch("routers.webhook.save_inflow", return_value="inflow-doc-1") as mock_save,
             patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
         ):
-            result = asyncio.run(webhook(self._request_for_text("/inflow Salary 2000")))
+            result = asyncio.run(webhook(self._request_for_text("/income Salary 2000")))
 
         self.assertEqual(result, {"ok": True})
         mock_save.assert_called_once()
@@ -165,43 +175,71 @@ class InflowCommandTests(unittest.TestCase):
         self.assertEqual(inflow.item, "Salary")
         self.assertEqual(inflow.amount, 2000.0)
         self.assertEqual(inflow.chat_id, 123)
-        self.assertIn("Inflow", mock_send.call_args.args[1])
+        # Confirmation is deferred until after the goal enquiry, so no
+        # "Income" message is sent up front.
+        mock_send.assert_not_called()
+        mock_start.assert_called_once_with(
+            123,
+            "income_goal",
+            "choosing_goal",
+            payload={
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+            },
+        )
 
-    def test_inflow_command_with_dollar_and_date(self):
+    def test_income_command_with_dollar_and_date(self):
+        goals, start, keyboard = self._goal_prompt_patches()
         with (
+            goals, start, keyboard,
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
-            patch("routers.webhook.save_inflow") as mock_save,
+            patch("routers.webhook.save_inflow", return_value="inflow-doc-1") as mock_save,
             patch("routers.webhook.telegram.send_message", new=AsyncMock()),
         ):
-            asyncio.run(webhook(self._request_for_text("/inflow Cashback $50 130126")))
+            asyncio.run(webhook(self._request_for_text("/income Cashback $50 130126")))
 
         inflow = mock_save.call_args.args[0]
         self.assertEqual(inflow.item, "Cashback")
         self.assertEqual(inflow.amount, 50.0)
         self.assertTrue(inflow.timestamp.startswith("2026-01-13"))
 
-    def test_inflow_command_without_args_starts_session(self):
+    def test_income_command_without_args_starts_session(self):
         with (
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.start_session") as mock_start,
             patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
         ):
-            result = asyncio.run(webhook(self._request_for_text("/inflow")))
+            result = asyncio.run(webhook(self._request_for_text("/income")))
 
         self.assertEqual(result, {"ok": True})
         mock_start.assert_called_once_with(123, "inflow", "awaiting_entry")
         self.assertIn("item", mock_send.call_args.args[1].lower())
 
-    def test_inflow_command_invalid_args_sends_guidance(self):
+    def test_income_command_invalid_args_sends_guidance(self):
         with (
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.save_inflow") as mock_save,
             patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
         ):
-            asyncio.run(webhook(self._request_for_text("/inflow ??? ++")))
+            asyncio.run(webhook(self._request_for_text("/income ??? ++")))
 
         mock_save.assert_not_called()
         self.assertIn("couldn't read", mock_send.call_args.args[1].lower())
+
+    def test_old_inflow_command_no_longer_records(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.save_inflow") as mock_save,
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            result = asyncio.run(webhook(self._request_for_text("/inflow Salary 2000")))
+
+        self.assertEqual(result, {"ok": True})
+        mock_save.assert_not_called()
+        mock_start.assert_not_called()
 
 
 class InflowSessionTests(unittest.TestCase):
@@ -229,7 +267,10 @@ class InflowSessionTests(unittest.TestCase):
             patch("routers.webhook.get_session", return_value=session),
             patch("routers.webhook.session_expired", return_value=False),
             patch("routers.webhook.clear_session") as mock_clear,
-            patch("routers.webhook.save_inflow") as mock_save,
+            patch("routers.webhook.get_goals", return_value=[]),
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.telegram.send_income_goal_keyboard", new=AsyncMock()),
+            patch("routers.webhook.save_inflow", return_value="inflow-doc-1") as mock_save,
             patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
         ):
             result = asyncio.run(webhook(self._request_for_text("Cashback 50")))
@@ -240,7 +281,19 @@ class InflowSessionTests(unittest.TestCase):
         self.assertEqual(inflow.item, "Cashback")
         self.assertEqual(inflow.amount, 50.0)
         mock_clear.assert_called_once_with(123)
-        self.assertIn("Inflow", mock_send.call_args.args[1])
+        # Confirmation is deferred until after the goal enquiry.
+        mock_send.assert_not_called()
+        mock_start.assert_called_once_with(
+            123,
+            "income_goal",
+            "choosing_goal",
+            payload={
+                "inflow_id": "inflow-doc-1",
+                "item": "Cashback",
+                "amount": 50.0,
+                "transaction_date": None,
+            },
+        )
 
     def test_expired_session_clears_and_notifies_without_recording(self):
         session = {"flow_type": "inflow", "step": "awaiting_entry", "expires_at": "2000-01-01T00:00:00+08:00"}

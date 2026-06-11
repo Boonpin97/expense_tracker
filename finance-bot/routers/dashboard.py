@@ -30,6 +30,7 @@ from services.firestore import (
     get_budgets,
     get_category_list,
     get_dashboard_preferences,
+    get_goals,
     get_inflow_by_id,
     get_inflows_with_ids,
     get_payment_plan,
@@ -47,6 +48,7 @@ from services.firestore import (
     save_transaction,
     save_web_session,
     set_budget,
+    sum_inflows_by_goal,
     update_dashboard_preferences,
     update_category_emoji,
     update_category_order,
@@ -618,6 +620,14 @@ async def delete_dashboard_budget(category_name: str, request: Request):
     session = _require_session(request)
     remove_budget(session["chat_id"], category_name)
     return {"ok": True}
+
+
+@router.get("/goals")
+async def list_dashboard_goals(request: Request):
+    session = _require_session(request)
+    goals = get_goals(session["chat_id"])
+    sums = sum_inflows_by_goal(session["chat_id"])
+    return {"goals": [{**goal, "accumulated": sums.get(goal["id"], 0.0)} for goal in goals]}
 
 
 @router.get("/preferences")

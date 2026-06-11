@@ -22,6 +22,16 @@ class Inflow(BaseModel):
     timestamp: str  # ISO 8601 with timezone offset — when the income happened
     chat_id: int
     created_at: str
+    goal_id: Optional[str] = None
+
+
+class Goal(BaseModel):
+    id: Optional[str] = None
+    chat_id: int
+    name: str
+    target_amount: float
+    created_at: str
+    emoji: str = "🎯"
 
 
 class PendingTransaction(BaseModel):

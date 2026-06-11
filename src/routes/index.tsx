@@ -84,6 +84,7 @@ import {
   deleteDashboardTransaction,
   fetchDashboardBudgets,
   fetchDashboardCategories,
+  fetchDashboardGoals,
   fetchDashboardInflows,
   fetchDashboardPlans,
   fetchDashboardPreferences,
@@ -96,6 +97,7 @@ import {
   updateDashboardPlan,
   updateDashboardTransaction,
   type DashboardCategory,
+  type DashboardGoal,
   type DashboardInflow,
   type DashboardPaymentType,
   type DashboardPreferences,
@@ -126,7 +128,7 @@ const currency = new Intl.NumberFormat("en-US", {
 const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
 const TRANSACTIONS_PAGE_SIZE = 25;
 
-type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "income" | "plans";
+type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "income" | "goals" | "plans";
 type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
 type TxnJump = {
   category: string | null;
@@ -372,6 +374,7 @@ function DashboardShell({
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
   const [inflows, setInflows] = useState<DashboardInflow[]>([]);
+  const [goals, setGoals] = useState<DashboardGoal[]>([]);
   const [plans, setPlans] = useState<DashboardPlan[]>([]);
   const [preferences, setPreferences] = useState<DashboardPreferences>({
     overviewVisibleCards: [],
@@ -388,15 +391,17 @@ function DashboardShell({
       fetchDashboardBudgets(),
       fetchDashboardTransactions({ start: HISTORY_START, end: endOfDay(now) }),
       fetchDashboardInflows({ start: HISTORY_START, end: endOfDay(now) }),
+      fetchDashboardGoals(),
       fetchDashboardPlans(),
       fetchDashboardPreferences(),
     ])
-      .then(([cats, buds, txns, infs, pls, prefs]) => {
+      .then(([cats, buds, txns, infs, gls, pls, prefs]) => {
         if (!active) return;
         setCategories(cats);
         setBudgets(buds);
         setTransactions(txns);
         setInflows(infs);
+        setGoals(gls);
         setPlans(pls);
         setPreferences(prefs);
         setLoading(false);
@@ -474,6 +479,11 @@ function DashboardShell({
   async function handleDeleteInflow(inflowId: string) {
     await deleteDashboardInflow(inflowId);
     setInflows((current) => current.filter((inflow) => inflow.id !== inflowId));
+    try {
+      setGoals(await fetchDashboardGoals());
+    } catch {
+      // silent — stale progress remains visible until the next refresh
+    }
   }
 
   const refreshBudgets = useCallback(async () => {
@@ -521,6 +531,7 @@ function DashboardShell({
       budgets={budgets}
       transactions={transactions}
       inflows={inflows}
+      goals={goals}
       plans={plans}
       preferences={preferences}
       onDeleteTransaction={handleDeleteTransaction}
@@ -545,6 +556,7 @@ function DashboardLayout({
   budgets,
   transactions,
   inflows,
+  goals,
   plans,
   preferences,
   onDeleteTransaction,
@@ -565,6 +577,7 @@ function DashboardLayout({
   budgets: Record<string, number>;
   transactions: DashboardTransaction[];
   inflows: DashboardInflow[];
+  goals: DashboardGoal[];
   plans: DashboardPlan[];
   preferences: DashboardPreferences;
   onDeleteTransaction: (transactionId: string) => Promise<void>;
@@ -1018,12 +1031,13 @@ function DashboardLayout({
           onValueChange={(value) => setActiveTab(value as DashboardTab)}
           className="space-y-6"
         >
-          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-6 sm:inline-grid">
+          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-7 sm:inline-grid">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
             <TabsTrigger value="transactions">Expenses</TabsTrigger>
-            <TabsTrigger value="income">Inflow</TabsTrigger>
+            <TabsTrigger value="income">Income</TabsTrigger>
+            <TabsTrigger value="goals">Goals</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
           </TabsList>
           <div className="flex min-h-9 items-center justify-start gap-2">
@@ -1042,7 +1056,7 @@ function DashboardLayout({
                 className="shrink-0 gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
               >
                 <Plus className="mr-1 h-4 w-4" />
-                Inflow
+                Income
               </Button>
               {activeTab === "overview" ? (
                 <OverviewInfoPopover
@@ -1301,6 +1315,10 @@ function DashboardLayout({
             />
           </TabsContent>
 
+          <TabsContent value="goals" className="space-y-6">
+            <GoalsTab goals={goals} loading={loading} />
+          </TabsContent>
+
           <TabsContent value="plans" className="space-y-6">
             <PlansTab
               plans={plans}
@@ -1474,7 +1492,7 @@ function DashboardLayout({
         <Dialog open={addInflowOpen} onOpenChange={(open) => { if (!open && !creatingInflow) setAddInflowOpen(false); }}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add Inflow</DialogTitle>
+              <DialogTitle>Add Income</DialogTitle>
               <DialogDescription>Record income such as salary, cashback, or a refund.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-2">
@@ -1523,7 +1541,7 @@ function DashboardLayout({
                 className="bg-emerald-500 hover:bg-emerald-600 text-white"
               >
                 {creatingInflow ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Add Inflow
+                Add Income
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -3135,14 +3153,14 @@ function IncomeTab({
     <div className="space-y-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-lg">Inflow</CardTitle>
+          <CardTitle className="text-lg">Income</CardTitle>
           <span className="text-sm font-semibold text-emerald-500">{currency.format(total)}</span>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <CenteredListMessage label="Loading inflow..." />
+            <CenteredListMessage label="Loading income..." />
           ) : sorted.length === 0 ? (
-            <CenteredListMessage label="No inflow recorded yet." />
+            <CenteredListMessage label="No income recorded yet." />
           ) : (
             <Table>
               <TableHeader>
@@ -3181,6 +3199,55 @@ function IncomeTab({
                 ))}
               </TableBody>
             </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function GoalsTab({ goals, loading }: { goals: DashboardGoal[]; loading: boolean }) {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Goals</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {loading ? (
+            <CenteredListMessage label="Loading goals..." />
+          ) : goals.length === 0 ? (
+            <CenteredListMessage label="No goals yet — create one in Telegram with /new_goal." />
+          ) : (
+            goals.map((goal) => {
+              const pct =
+                goal.targetAmount > 0 ? (goal.accumulated / goal.targetAmount) * 100 : 0;
+              const reached = goal.targetAmount > 0 && goal.accumulated >= goal.targetAmount;
+              return (
+                <div key={goal.id} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
+                        {goal.emoji}
+                      </span>
+                      <p className="font-medium text-sm">{goal.name}</p>
+                    </div>
+                    <p
+                      className={`text-sm font-semibold shrink-0 ${reached ? "text-emerald-500" : "text-foreground"}`}
+                    >
+                      {currency.format(goal.accumulated)}{" "}
+                      <span className="text-muted-foreground font-normal">
+                        / {currency.format(goal.targetAmount)} ({Math.round(pct)}%)
+                      </span>
+                    </p>
+                  </div>
+                  <Progress
+                    value={Math.min(pct, 100)}
+                    className={reached ? "[&>div]:bg-emerald-500" : "[&>div]:bg-accent"}
+                  />
+                </div>
+              );
+            })
           )}
         </CardContent>
       </Card>

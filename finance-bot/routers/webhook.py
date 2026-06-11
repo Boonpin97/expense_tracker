@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
-from models.transaction import Inflow
+from models.transaction import Goal, Inflow
 from routers.reports import (
     _format_budget_report,
     _format_daily_report,
@@ -31,7 +31,10 @@ from services.firestore import (
     delete_payment_plan,
     delete_transactions_for_plan,
     delete_transaction,
+    delete_goal,
     get_category_list,
+    get_goal_by_id,
+    get_goals,
     get_budgets,
     get_inflows,
     get_last_transaction,
@@ -39,7 +42,9 @@ from services.firestore import (
     get_pending,
     get_pending_change,
     get_pending_plan,
+    save_goal,
     save_inflow,
+    sum_inflows_by_goal,
     get_transaction_by_id,
     get_transactions,
     get_transactions_with_ids,
@@ -58,6 +63,8 @@ from services.firestore import (
     delete_web_sessions_for_chat,
     update_category_emoji,
     update_category_order,
+    update_goal,
+    update_inflow_goal,
     update_payment_plan,
     update_pending_plan,
     update_transaction_category,
@@ -540,6 +547,14 @@ async def _get_active_session_or_expire(chat_id: int, flow_type: str) -> dict | 
             await telegram.send_message(chat_id, "⏰ The dashboard account setup has expired. Send /create_account again.")
         elif flow_type == "set_budget":
             await telegram.send_message(chat_id, "⏰ The /set_budget request has expired. Please send /set_budget again.")
+        elif flow_type == "income_goal":
+            await telegram.send_message(chat_id, "⏰ These goal options have expired — the income stays recorded without a goal.")
+        elif flow_type == "new_goal":
+            await telegram.send_message(chat_id, "⏰ The /new_goal request has expired. Please send /new_goal again.")
+        elif flow_type == "edit_goal":
+            await telegram.send_message(chat_id, "⏰ The /edit_goal request has expired. Please send /edit_goal again.")
+        elif flow_type == "delete_goal":
+            await telegram.send_message(chat_id, "⏰ The /delete_goal request has expired. Please send /delete_goal again.")
         else:
             await telegram.send_message(chat_id, "⏰ This flow has expired. Please start again.")
         return None
@@ -811,7 +826,7 @@ async def _get_pending_plan_or_expire(chat_id: int, message: str) -> dict | None
 
 
 INFLOW_USAGE = (
-    "Send the inflow as <code>&lt;item&gt; &lt;amount&gt;</code> with an optional date, "
+    "Send the income as <code>&lt;item&gt; &lt;amount&gt;</code> with an optional date, "
     "for example <code>Salary 2000</code> or <code>Salary 2000 010526</code>."
 )
 
@@ -821,7 +836,9 @@ async def _record_inflow(
     item: str,
     amount: float,
     transaction_date: str | None = None,
-) -> None:
+) -> str:
+    """Persist the income silently. The confirmation is sent only once the
+    goal enquiry is resolved (see `_income_summary`)."""
     timestamp = build_transaction_timestamp(transaction_date)
     inflow = Inflow(
         item=item,
@@ -830,16 +847,50 @@ async def _record_inflow(
         chat_id=chat_id,
         created_at=datetime.now(SGT).isoformat(),
     )
-    save_inflow(inflow)
-    message = f"✅ Inflow: <b>{item}</b> +${amount:.2f}"
+    return save_inflow(inflow)
+
+
+def _income_summary(
+    item: str,
+    amount: float,
+    transaction_date: str | None = None,
+    goal_label: str | None = None,
+    goal_created: bool = False,
+) -> str:
+    message = f"✅ Income: <b>{item}</b> +${amount:.2f}"
     if transaction_date:
         date_obj = datetime.strptime(transaction_date, "%Y-%m-%d")
         message += f"\n🗓 {date_obj.strftime('%d %b %Y')}"
-    await telegram.send_message(chat_id, message)
+    if goal_label:
+        message += f"\n🎯 Goal: {goal_label}{' (created)' if goal_created else ''}"
+    return message
+
+
+async def _prompt_income_goal(
+    chat_id: int,
+    inflow_id: str,
+    item: str,
+    amount: float,
+    transaction_date: str | None = None,
+) -> None:
+    """Ask which goal the income belongs to — after every entry, no learning."""
+    goals = get_goals(chat_id)
+    start_session(
+        chat_id,
+        "income_goal",
+        "choosing_goal",
+        payload={
+            "inflow_id": inflow_id,
+            "item": item,
+            "amount": amount,
+            "transaction_date": transaction_date,
+        },
+    )
+    await telegram.send_income_goal_keyboard(chat_id, goals, item, amount)
 
 
 async def _handle_inflow_command(chat_id: int, text: str) -> None:
-    remainder = text[len("/inflow"):].strip()
+    remainder = text[len("/income"):].strip()
     if not remainder:
         start_session(chat_id, "inflow", "awaiting_entry")
         await telegram.send_message(chat_id, f"💵 {INFLOW_USAGE}")
@@ -847,9 +898,10 @@ async def _handle_inflow_command(chat_id: int, text: str) -> None:
 
     parsed = parse_expense(remainder)
     if parsed is None:
-        await telegram.send_message(chat_id, f"🤔 I couldn't read that inflow. {INFLOW_USAGE}")
+        await telegram.send_message(chat_id, f"🤔 I couldn't read that income. {INFLOW_USAGE}")
         return
-    await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
+    inflow_id = await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
+    await _prompt_income_goal(chat_id, inflow_id, parsed.item, parsed.amount, parsed.transaction_date)
 
 
 async def _handle_inflow_session(chat_id: int, text: str) -> bool:
@@ -858,17 +910,172 @@ async def _handle_inflow_session(chat_id: int, text: str) -> bool:
         return False
     if session_expired(session):
         clear_session(chat_id)
-        await telegram.send_message(chat_id, "⏰ The /inflow request has expired. Please send /inflow again.")
+        await telegram.send_message(chat_id, "⏰ The /income request has expired. Please send /income again.")
         return True
 
     parsed = parse_expense(text)
     if parsed is None:
         # Keep the session active so the user can retry within the expiry window.
-        await telegram.send_message(chat_id, f"🤔 I couldn't read that inflow. {INFLOW_USAGE}")
+        await telegram.send_message(chat_id, f"🤔 I couldn't read that income. {INFLOW_USAGE}")
         return True
 
     clear_session(chat_id)
-    await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
+    inflow_id = await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
+    await _prompt_income_goal(chat_id, inflow_id, parsed.item, parsed.amount, parsed.transaction_date)
+    return True
+
+
+def _goal_label(goal: dict) -> str:
+    return f"{goal.get('emoji', '🎯')} <b>{goal.get('name', '')}</b>"
+
+
+def _format_goals_overview(chat_id: int) -> str:
+    goals = get_goals(chat_id)
+    if not goals:
+        return "No goals yet. Send /new_goal to create one."
+    sums = sum_inflows_by_goal(chat_id)
+    lines = []
+    for goal in goals:
+        target = goal.get("target_amount", 0.0)
+        current = sums.get(goal["id"], 0.0)
+        pct = round(current / target * 100) if target > 0 else 0
+        emoji = goal.get("emoji", "🎯")
+        lines.append(f"{emoji} {goal['name']}: ${current:,.2f} / ${target:,.2f} ({pct}%)")
+    return "\n".join(lines)
+
+
+def _goal_name_taken(chat_id: int, name: str) -> bool:
+    return name.casefold() in {g.get("name", "").casefold() for g in get_goals(chat_id)}
+
+
+async def _handle_new_goal_session(chat_id: int, text: str) -> bool:
+    session = get_session(chat_id)
+    if not session or session.get("flow_type") != "new_goal":
+        return False
+    session = await _get_active_session_or_expire(chat_id, "new_goal")
+    if not session:
+        return True
+
+    step = session.get("step")
+    payload = session.get("payload", {})
+
+    if step == "awaiting_name":
+        name = text.strip()
+        if not name:
+            await telegram.send_message(chat_id, "⚠️ Send a name for the goal.")
+            return True
+        if _goal_name_taken(chat_id, name):
+            await telegram.send_message(chat_id, f"⚠️ Goal <b>{name}</b> already exists. Send a different name.")
+            return True
+        update_session(chat_id, step="awaiting_emoji", payload_updates={"name": name})
+        await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
+        return True
+
+    if step == "awaiting_emoji":
+        emoji = text.strip()
+        if not emoji:
+            await telegram.send_message(chat_id, "⚠️ Send an emoji for the goal.")
+            return True
+        name = payload.get("name", "")
+        update_session(chat_id, step="awaiting_target", payload_updates={"emoji": emoji})
+        await telegram.send_message(
+            chat_id,
+            f"Send the target amount for {emoji} <b>{name}</b>, for example <code>3000</code>.",
+        )
+        return True
+
+    if step == "awaiting_target":
+        amount = _valid_amount(text)
+        if amount is None:
+            # Keep the session active so the user can retry within the expiry window.
+            await telegram.send_message(chat_id, "⚠️ Send a positive number, for example <code>3000</code>.")
+            return True
+        name = payload.get("name", "")
+        emoji = payload.get("emoji", "🎯")
+        goal_id = save_goal(
+            Goal(
+                chat_id=chat_id,
+                name=name,
+                target_amount=amount,
+                created_at=datetime.now(SGT).isoformat(),
+                emoji=emoji,
+            )
+        )
+        clear_session(chat_id)
+        inflow_id = payload.get("inflow_id")
+        if inflow_id:
+            update_inflow_goal(inflow_id, goal_id)
+            await telegram.send_message(
+                chat_id,
+                _income_summary(
+                    payload.get("item", ""),
+                    payload.get("amount", 0.0),
+                    payload.get("transaction_date"),
+                    goal_label=f"{emoji} <b>{name}</b>",
+                    goal_created=True,
+                ),
+            )
+        else:
+            await telegram.send_message(chat_id, f"✅ Goal {emoji} <b>{name}</b> created (${amount:,.2f}).")
+        return True
+
+    return True
+
+
+async def _handle_edit_goal_session(chat_id: int, text: str) -> bool:
+    session = get_session(chat_id)
+    if not session or session.get("flow_type") != "edit_goal":
+        return False
+    session = await _get_active_session_or_expire(chat_id, "edit_goal")
+    if not session:
+        return True
+
+    step = session.get("step")
+    payload = session.get("payload", {})
+    goal_id = payload.get("goal_id", "")
+    goal_name = payload.get("goal_name", "")
+
+    if step == "awaiting_new_name":
+        name = text.strip()
+        if not name:
+            await telegram.send_message(chat_id, "⚠️ Send a name for the goal.")
+            return True
+        if _goal_name_taken(chat_id, name):
+            await telegram.send_message(chat_id, f"⚠️ Goal <b>{name}</b> already exists. Send a different name.")
+            return True
+        clear_session(chat_id)
+        if update_goal(chat_id, goal_id, name=name):
+            await telegram.send_message(chat_id, f"✅ Renamed <b>{goal_name}</b> to <b>{name}</b>.")
+        else:
+            await telegram.send_message(chat_id, f"⚠️ Goal <b>{goal_name}</b> no longer exists.")
+        return True
+
+    if step == "awaiting_new_target":
+        amount = _valid_amount(text)
+        if amount is None:
+            # Keep the session active so the user can retry within the expiry window.
+            await telegram.send_message(chat_id, "⚠️ Send a positive number, for example <code>3000</code>.")
+            return True
+        clear_session(chat_id)
+        if update_goal(chat_id, goal_id, target_amount=amount):
+            await telegram.send_message(chat_id, f"✅ Target for <b>{goal_name}</b> set to <b>${amount:,.2f}</b>.")
+        else:
+            await telegram.send_message(chat_id, f"⚠️ Goal <b>{goal_name}</b> no longer exists.")
+        return True
+
+    if step == "awaiting_new_emoji":
+        emoji = text.strip()
+        if not emoji:
+            await telegram.send_message(chat_id, "⚠️ Send an emoji for the goal.")
+            return True
+        clear_session(chat_id)
+        if update_goal(chat_id, goal_id, emoji=emoji):
+            await telegram.send_message(chat_id, f"✅ Emoji for <b>{goal_name}</b> set to {emoji}.")
+        else:
+            await telegram.send_message(chat_id, f"⚠️ Goal <b>{goal_name}</b> no longer exists.")
+        return True
+
+    await telegram.send_message(chat_id, "Use the buttons above to pick a goal.")
     return True
 
 
@@ -922,6 +1129,158 @@ async def webhook(request: Request):
         if callback_data.startswith("acct:"):
             choice = callback_data.split(":", 1)[1]
             await _handle_dashboard_account_choice(chat_id, callback_query_id, choice)
+            return {"ok": True}
+
+        if callback_data.startswith("inflowgoal:"):
+            session = await _get_active_session_or_expire(chat_id, "income_goal")
+            if not session or session.get("step") != "choosing_goal":
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+
+            payload = session.get("payload", {})
+            choice = callback_data.split(":", 1)[1]
+            if choice == "__none__":
+                clear_session(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "No goal")
+                await telegram.send_message(
+                    chat_id,
+                    _income_summary(
+                        payload.get("item", ""),
+                        payload.get("amount", 0.0),
+                        payload.get("transaction_date"),
+                    ),
+                )
+                return {"ok": True}
+            if choice == "__new__":
+                start_session(
+                    chat_id,
+                    "new_goal",
+                    "awaiting_name",
+                    payload={
+                        "inflow_id": payload.get("inflow_id"),
+                        "item": payload.get("item", ""),
+                        "amount": payload.get("amount", 0.0),
+                        "transaction_date": payload.get("transaction_date"),
+                    },
+                )
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_message(chat_id, "🎯 Send a name for the new goal:")
+                return {"ok": True}
+
+            goal = get_goal_by_id(chat_id, choice)
+            if not goal:
+                clear_session(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, "⚠️ That goal is no longer available. The income stays recorded without a goal.")
+                return {"ok": True}
+
+            update_inflow_goal(payload.get("inflow_id"), choice)
+            clear_session(chat_id)
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_message(
+                chat_id,
+                _income_summary(
+                    payload.get("item", ""),
+                    payload.get("amount", 0.0),
+                    payload.get("transaction_date"),
+                    goal_label=_goal_label(goal),
+                ),
+            )
+            return {"ok": True}
+
+        if callback_data.startswith("goaledit:"):
+            session = await _get_active_session_or_expire(chat_id, "edit_goal")
+            if not session or session.get("step") != "choosing_goal":
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+
+            goal_id = callback_data.split(":", 1)[1]
+            goal = get_goal_by_id(chat_id, goal_id)
+            if not goal:
+                clear_session(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, "⚠️ That goal is no longer available. Send /edit_goal again.")
+                return {"ok": True}
+
+            update_session(
+                chat_id,
+                step="choosing_field",
+                payload_updates={"goal_id": goal_id, "goal_name": goal["name"]},
+            )
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_goal_field_keyboard(chat_id, goal["name"])
+            return {"ok": True}
+
+        if callback_data.startswith("goalfield:"):
+            session = await _get_active_session_or_expire(chat_id, "edit_goal")
+            if not session or session.get("step") != "choosing_field":
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+
+            field = callback_data.split(":", 1)[1]
+            goal_name = session.get("payload", {}).get("goal_name", "")
+            if field == "name":
+                update_session(chat_id, step="awaiting_new_name")
+                prompt = f"Send the new name for <b>{goal_name}</b>:"
+            elif field == "emoji":
+                update_session(chat_id, step="awaiting_new_emoji")
+                prompt = f"Send the new emoji for <b>{goal_name}</b>:"
+            elif field == "target":
+                update_session(chat_id, step="awaiting_new_target")
+                prompt = f"Send the new target amount for <b>{goal_name}</b>, for example <code>3000</code>."
+            else:
+                await telegram.answer_callback_query(callback_query_id, "Invalid")
+                return {"ok": True}
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_message(chat_id, prompt)
+            return {"ok": True}
+
+        if callback_data.startswith("goaldelconfirm:"):
+            session = await _get_active_session_or_expire(chat_id, "delete_goal")
+            if not session or session.get("step") != "confirming":
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+
+            payload = session.get("payload", {})
+            goal_name = payload.get("goal_name", "")
+            clear_session(chat_id)
+            if callback_data.split(":", 1)[1] != "yes":
+                await telegram.answer_callback_query(callback_query_id, "Cancelled")
+                await telegram.send_message(chat_id, "👍 Cancelled — the goal is unchanged.")
+                return {"ok": True}
+
+            if delete_goal(chat_id, payload.get("goal_id", "")):
+                await telegram.answer_callback_query(callback_query_id, f"Deleted {goal_name}")
+                await telegram.send_message(
+                    chat_id,
+                    f"🗑️ Deleted goal <b>{goal_name}</b>. Income entries tagged to it are unchanged.",
+                )
+            else:
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, f"⚠️ Goal <b>{goal_name}</b> not found.")
+            return {"ok": True}
+
+        if callback_data.startswith("goaldel:"):
+            session = await _get_active_session_or_expire(chat_id, "delete_goal")
+            if not session or session.get("step") != "choosing_goal":
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+
+            goal_id = callback_data.split(":", 1)[1]
+            goal = get_goal_by_id(chat_id, goal_id)
+            if not goal:
+                clear_session(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "Not found")
+                await telegram.send_message(chat_id, "⚠️ That goal is no longer available. Send /delete_goal again.")
+                return {"ok": True}
+
+            update_session(
+                chat_id,
+                step="confirming",
+                payload_updates={"goal_id": goal_id, "goal_name": goal["name"]},
+            )
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_goal_delete_confirm_keyboard(chat_id, goal["name"])
             return {"ok": True}
 
         if callback_data.startswith("cat:") and get_user_state(chat_id) in {
@@ -1239,8 +1598,27 @@ async def webhook(request: Request):
             inflows = get_inflows(chat_id, start, end)
             report = _format_report(chat_id, label, transactions, inflows)
             await telegram.send_message(chat_id, f"<pre>{report}</pre>")
-        elif text.startswith("/inflow"):
+        elif text.startswith("/income"):
             await _handle_inflow_command(chat_id, text)
+        elif text == "/goals":
+            await telegram.send_message(chat_id, _format_goals_overview(chat_id))
+        elif text == "/new_goal":
+            start_session(chat_id, "new_goal", "awaiting_name")
+            await telegram.send_message(chat_id, "🎯 Send a name for the new goal:")
+        elif text == "/edit_goal":
+            goals = get_goals(chat_id)
+            if not goals:
+                await telegram.send_message(chat_id, "No goals yet. Send /new_goal to create one.")
+            else:
+                start_session(chat_id, "edit_goal", "choosing_goal")
+                await telegram.send_goal_keyboard(chat_id, goals, "goaledit", "✏️ Tap a goal to edit:")
+        elif text == "/delete_goal":
+            goals = get_goals(chat_id)
+            if not goals:
+                await telegram.send_message(chat_id, "No goals yet. Send /new_goal to create one.")
+            else:
+                start_session(chat_id, "delete_goal", "choosing_goal")
+                await telegram.send_goal_keyboard(chat_id, goals, "goaldel", "🗑️ Tap a goal to delete:")
         elif text.startswith("/set_budget"):
             start_session(chat_id, "set_budget", "choosing_category")
             await _send_set_budget_category_prompt(chat_id)
@@ -1371,6 +1749,12 @@ async def webhook(request: Request):
         return {"ok": True}
 
     if await _handle_inflow_session(chat_id, text):
+        return {"ok": True}
+
+    if await _handle_new_goal_session(chat_id, text):
+        return {"ok": True}
+
+    if await _handle_edit_goal_session(chat_id, text):
         return {"ok": True}
 
     user_state = get_user_state(chat_id)
