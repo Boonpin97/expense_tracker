@@ -31,6 +31,7 @@ class Goal(BaseModel):
     name: str
     target_amount: float
     created_at: str
+    emoji: str = "🎯"
 
 
 class PendingTransaction(BaseModel):

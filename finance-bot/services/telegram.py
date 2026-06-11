@@ -143,7 +143,7 @@ async def send_income_goal_keyboard(chat_id: int, goals: list[dict], item: str, 
     """Ask which goal a just-recorded income belongs to. Expiry comes from the
     interaction session, so callback_data carries no timestamps."""
     keyboard = [
-        [{"text": f"🎯 {goal['name']}", "callback_data": f"inflowgoal:{goal['id']}"}]
+        [{"text": f"{goal.get('emoji', '🎯')} {goal['name']}", "callback_data": f"inflowgoal:{goal['id']}"}]
         for goal in goals
     ]
     keyboard.append([{"text": "➕ Add new goal", "callback_data": "inflowgoal:__new__"}])
@@ -165,7 +165,7 @@ async def send_income_goal_keyboard(chat_id: int, goals: list[dict], item: str, 
 async def send_goal_keyboard(chat_id: int, goals: list[dict], action: str, prompt: str) -> dict:
     """Generic goal picker; callback_data is `{action}:{goal_id}`."""
     keyboard = [
-        [{"text": f"🎯 {goal['name']}", "callback_data": f"{action}:{goal['id']}"}]
+        [{"text": f"{goal.get('emoji', '🎯')} {goal['name']}", "callback_data": f"{action}:{goal['id']}"}]
         for goal in goals
     ]
 
@@ -185,6 +185,7 @@ async def send_goal_keyboard(chat_id: int, goals: list[dict], action: str, promp
 async def send_goal_field_keyboard(chat_id: int, goal_name: str) -> dict:
     keyboard = [[
         {"text": "📝 Name", "callback_data": "goalfield:name"},
+        {"text": "😀 Emoji", "callback_data": "goalfield:emoji"},
         {"text": "🎯 Target", "callback_data": "goalfield:target"},
     ]]
 

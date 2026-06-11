@@ -837,6 +837,8 @@ async def _record_inflow(
     amount: float,
     transaction_date: str | None = None,
 ) -> str:
+    """Persist the income silently. The confirmation is sent only once the
+    goal enquiry is resolved (see `_income_summary`)."""
     timestamp = build_transaction_timestamp(transaction_date)
     inflow = Inflow(
         item=item,
@@ -845,23 +847,44 @@ async def _record_inflow(
         chat_id=chat_id,
         created_at=datetime.now(SGT).isoformat(),
     )
-    inflow_id = save_inflow(inflow)
+    return save_inflow(inflow)
+
+
+def _income_summary(
+    item: str,
+    amount: float,
+    transaction_date: str | None = None,
+    goal_label: str | None = None,
+    goal_created: bool = False,
+) -> str:
     message = f"✅ Income: <b>{item}</b> +${amount:.2f}"
     if transaction_date:
         date_obj = datetime.strptime(transaction_date, "%Y-%m-%d")
         message += f"\n🗓 {date_obj.strftime('%d %b %Y')}"
-    await telegram.send_message(chat_id, message)
-    return inflow_id
+    if goal_label:
+        message += f"\n🎯 Goal: {goal_label}{' (created)' if goal_created else ''}"
+    return message
 
 
-async def _prompt_income_goal(chat_id: int, inflow_id: str, item: str, amount: float) -> None:
+async def _prompt_income_goal(
+    chat_id: int,
+    inflow_id: str,
+    item: str,
+    amount: float,
+    transaction_date: str | None = None,
+) -> None:
     """Ask which goal the income belongs to — after every entry, no learning."""
     goals = get_goals(chat_id)
     start_session(
         chat_id,
         "income_goal",
         "choosing_goal",
-        payload={"inflow_id": inflow_id, "item": item, "amount": amount},
+        payload={
+            "inflow_id": inflow_id,
+            "item": item,
+            "amount": amount,
+            "transaction_date": transaction_date,
+        },
     )
     await telegram.send_income_goal_keyboard(chat_id, goals, item, amount)
 
@@ -878,7 +901,7 @@ async def _handle_inflow_command(chat_id: int, text: str) -> None:
         await telegram.send_message(chat_id, f"🤔 I couldn't read that income. {INFLOW_USAGE}")
         return
     inflow_id = await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
-    await _prompt_income_goal(chat_id, inflow_id, parsed.item, parsed.amount)
+    await _prompt_income_goal(chat_id, inflow_id, parsed.item, parsed.amount, parsed.transaction_date)
 
 
 async def _handle_inflow_session(chat_id: int, text: str) -> bool:
@@ -898,8 +921,12 @@ async def _handle_inflow_session(chat_id: int, text: str) -> bool:
 
     clear_session(chat_id)
     inflow_id = await _record_inflow(chat_id, parsed.item, parsed.amount, parsed.transaction_date)
-    await _prompt_income_goal(chat_id, inflow_id, parsed.item, parsed.amount)
+    await _prompt_income_goal(chat_id, inflow_id, parsed.item, parsed.amount, parsed.transaction_date)
     return True
+
+
+def _goal_label(goal: dict) -> str:
+    return f"{goal.get('emoji', '🎯')} <b>{goal.get('name', '')}</b>"
 
 
 def _format_goals_overview(chat_id: int) -> str:
@@ -912,7 +939,8 @@ def _format_goals_overview(chat_id: int) -> str:
         target = goal.get("target_amount", 0.0)
         current = sums.get(goal["id"], 0.0)
         pct = round(current / target * 100) if target > 0 else 0
-        lines.append(f"🎯 {goal['name']}: ${current:,.2f} / ${target:,.2f} ({pct}%)")
+        emoji = goal.get("emoji", "🎯")
+        lines.append(f"{emoji} {goal['name']}: ${current:,.2f} / ${target:,.2f} ({pct}%)")
     return "\n".join(lines)
 
 
@@ -939,10 +967,20 @@ async def _handle_new_goal_session(chat_id: int, text: str) -> bool:
         if _goal_name_taken(chat_id, name):
             await telegram.send_message(chat_id, f"⚠️ Goal <b>{name}</b> already exists. Send a different name.")
             return True
-        update_session(chat_id, step="awaiting_target", payload_updates={"name": name})
+        update_session(chat_id, step="awaiting_emoji", payload_updates={"name": name})
+        await telegram.send_message(chat_id, f"Now send an emoji for <b>{name}</b>:")
+        return True
+
+    if step == "awaiting_emoji":
+        emoji = text.strip()
+        if not emoji:
+            await telegram.send_message(chat_id, "⚠️ Send an emoji for the goal.")
+            return True
+        name = payload.get("name", "")
+        update_session(chat_id, step="awaiting_target", payload_updates={"emoji": emoji})
         await telegram.send_message(
             chat_id,
-            f"Send the target amount for <b>{name}</b>, for example <code>3000</code>.",
+            f"Send the target amount for {emoji} <b>{name}</b>, for example <code>3000</code>.",
         )
         return True
 
@@ -953,25 +991,32 @@ async def _handle_new_goal_session(chat_id: int, text: str) -> bool:
             await telegram.send_message(chat_id, "⚠️ Send a positive number, for example <code>3000</code>.")
             return True
         name = payload.get("name", "")
+        emoji = payload.get("emoji", "🎯")
         goal_id = save_goal(
             Goal(
                 chat_id=chat_id,
                 name=name,
                 target_amount=amount,
                 created_at=datetime.now(SGT).isoformat(),
+                emoji=emoji,
             )
         )
         clear_session(chat_id)
         inflow_id = payload.get("inflow_id")
         if inflow_id:
             update_inflow_goal(inflow_id, goal_id)
-            item = payload.get("item", "")
             await telegram.send_message(
                 chat_id,
-                f"✅ Goal <b>{name}</b> created (${amount:,.2f}) and <b>{item}</b> tagged to it.",
+                _income_summary(
+                    payload.get("item", ""),
+                    payload.get("amount", 0.0),
+                    payload.get("transaction_date"),
+                    goal_label=f"{emoji} <b>{name}</b>",
+                    goal_created=True,
+                ),
             )
         else:
-            await telegram.send_message(chat_id, f"✅ Goal <b>{name}</b> created (${amount:,.2f}).")
+            await telegram.send_message(chat_id, f"✅ Goal {emoji} <b>{name}</b> created (${amount:,.2f}).")
         return True
 
     return True
@@ -1014,6 +1059,18 @@ async def _handle_edit_goal_session(chat_id: int, text: str) -> bool:
         clear_session(chat_id)
         if update_goal(chat_id, goal_id, target_amount=amount):
             await telegram.send_message(chat_id, f"✅ Target for <b>{goal_name}</b> set to <b>${amount:,.2f}</b>.")
+        else:
+            await telegram.send_message(chat_id, f"⚠️ Goal <b>{goal_name}</b> no longer exists.")
+        return True
+
+    if step == "awaiting_new_emoji":
+        emoji = text.strip()
+        if not emoji:
+            await telegram.send_message(chat_id, "⚠️ Send an emoji for the goal.")
+            return True
+        clear_session(chat_id)
+        if update_goal(chat_id, goal_id, emoji=emoji):
+            await telegram.send_message(chat_id, f"✅ Emoji for <b>{goal_name}</b> set to {emoji}.")
         else:
             await telegram.send_message(chat_id, f"⚠️ Goal <b>{goal_name}</b> no longer exists.")
         return True
@@ -1085,7 +1142,14 @@ async def webhook(request: Request):
             if choice == "__none__":
                 clear_session(chat_id)
                 await telegram.answer_callback_query(callback_query_id, "No goal")
-                await telegram.send_message(chat_id, "👍 Recorded without a goal.")
+                await telegram.send_message(
+                    chat_id,
+                    _income_summary(
+                        payload.get("item", ""),
+                        payload.get("amount", 0.0),
+                        payload.get("transaction_date"),
+                    ),
+                )
                 return {"ok": True}
             if choice == "__new__":
                 start_session(
@@ -1096,6 +1160,7 @@ async def webhook(request: Request):
                         "inflow_id": payload.get("inflow_id"),
                         "item": payload.get("item", ""),
                         "amount": payload.get("amount", 0.0),
+                        "transaction_date": payload.get("transaction_date"),
                     },
                 )
                 await telegram.answer_callback_query(callback_query_id, "")
@@ -1114,7 +1179,12 @@ async def webhook(request: Request):
             await telegram.answer_callback_query(callback_query_id, "")
             await telegram.send_message(
                 chat_id,
-                f"🎯 <b>{payload.get('item', '')}</b> +${payload.get('amount', 0.0):.2f} → <b>{goal['name']}</b>",
+                _income_summary(
+                    payload.get("item", ""),
+                    payload.get("amount", 0.0),
+                    payload.get("transaction_date"),
+                    goal_label=_goal_label(goal),
+                ),
             )
             return {"ok": True}
 
@@ -1152,6 +1222,9 @@ async def webhook(request: Request):
             if field == "name":
                 update_session(chat_id, step="awaiting_new_name")
                 prompt = f"Send the new name for <b>{goal_name}</b>:"
+            elif field == "emoji":
+                update_session(chat_id, step="awaiting_new_emoji")
+                prompt = f"Send the new emoji for <b>{goal_name}</b>:"
             elif field == "target":
                 update_session(chat_id, step="awaiting_new_target")
                 prompt = f"Send the new target amount for <b>{goal_name}</b>, for example <code>3000</code>."

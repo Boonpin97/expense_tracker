@@ -207,7 +207,7 @@ class NewGoalFlowTests(unittest.TestCase):
 
         mock_start.assert_called_once_with(123, "new_goal", "awaiting_name")
 
-    def test_name_step_advances_to_target(self):
+    def test_name_step_advances_to_emoji(self):
         session = {"flow_type": "new_goal", "step": "awaiting_name", "payload": {}, "expires_at": _future_iso()}
         with (
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
@@ -220,7 +220,27 @@ class NewGoalFlowTests(unittest.TestCase):
             result = asyncio.run(webhook(_request_for_text("Vacation")))
 
         self.assertEqual(result, {"ok": True})
-        mock_update.assert_called_once_with(123, step="awaiting_target", payload_updates={"name": "Vacation"})
+        mock_update.assert_called_once_with(123, step="awaiting_emoji", payload_updates={"name": "Vacation"})
+        self.assertIn("emoji", mock_send.call_args.args[1].lower())
+
+    def test_emoji_step_advances_to_target(self):
+        session = {
+            "flow_type": "new_goal",
+            "step": "awaiting_emoji",
+            "payload": {"name": "Vacation"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_session") as mock_update,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            result = asyncio.run(webhook(_request_for_text("🏖")))
+
+        self.assertEqual(result, {"ok": True})
+        mock_update.assert_called_once_with(123, step="awaiting_target", payload_updates={"emoji": "🏖"})
         self.assertIn("target amount", mock_send.call_args.args[1].lower())
 
     def test_duplicate_name_keeps_session(self):
@@ -244,7 +264,7 @@ class NewGoalFlowTests(unittest.TestCase):
         session = {
             "flow_type": "new_goal",
             "step": "awaiting_target",
-            "payload": {"name": "Vacation"},
+            "payload": {"name": "Vacation", "emoji": "🏖"},
             "expires_at": _future_iso(),
         }
         with (
@@ -262,6 +282,7 @@ class NewGoalFlowTests(unittest.TestCase):
         mock_save.assert_called_once()
         goal = mock_save.call_args.args[0]
         self.assertEqual(goal.name, "Vacation")
+        self.assertEqual(goal.emoji, "🏖")
         self.assertEqual(goal.target_amount, 3000.0)
         self.assertEqual(goal.chat_id, 123)
         mock_tag.assert_not_called()
@@ -272,7 +293,7 @@ class NewGoalFlowTests(unittest.TestCase):
         session = {
             "flow_type": "new_goal",
             "step": "awaiting_target",
-            "payload": {"name": "Vacation"},
+            "payload": {"name": "Vacation", "emoji": "🏖"},
             "expires_at": _future_iso(),
         }
         with (
@@ -316,7 +337,14 @@ class NewGoalFlowTests(unittest.TestCase):
         session = {
             "flow_type": "new_goal",
             "step": "awaiting_target",
-            "payload": {"name": "Vacation", "inflow_id": "inflow-doc-1", "item": "Salary", "amount": 2000.0},
+            "payload": {
+                "name": "Vacation",
+                "emoji": "🏖",
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+            },
             "expires_at": _future_iso(),
         }
         with (
@@ -363,7 +391,12 @@ class IncomeGoalCallbackTests(unittest.TestCase):
         return {
             "flow_type": "income_goal",
             "step": "choosing_goal",
-            "payload": {"inflow_id": "inflow-doc-1", "item": "Salary", "amount": 2000.0},
+            "payload": {
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+            },
             "expires_at": _future_iso(),
         }
 
@@ -372,7 +405,7 @@ class IncomeGoalCallbackTests(unittest.TestCase):
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.get_session", return_value=self._session()),
             patch("routers.webhook.session_expired", return_value=False),
-            patch("routers.webhook.get_goal_by_id", return_value={"id": "g1", "name": "Vacation"}),
+            patch("routers.webhook.get_goal_by_id", return_value={"id": "g1", "name": "Vacation", "emoji": "🏖"}),
             patch("routers.webhook.update_inflow_goal") as mock_tag,
             patch("routers.webhook.clear_session") as mock_clear,
             patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
@@ -383,7 +416,9 @@ class IncomeGoalCallbackTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         mock_tag.assert_called_once_with("inflow-doc-1", "g1")
         mock_clear.assert_called_once_with(123)
-        self.assertIn("Vacation", mock_send.call_args.args[1])
+        message = mock_send.call_args.args[1]
+        self.assertIn("Income", message)
+        self.assertIn("Vacation", message)
 
     def test_no_goal_clears_without_tagging(self):
         with (
@@ -415,7 +450,12 @@ class IncomeGoalCallbackTests(unittest.TestCase):
             123,
             "new_goal",
             "awaiting_name",
-            payload={"inflow_id": "inflow-doc-1", "item": "Salary", "amount": 2000.0},
+            payload={
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+            },
         )
 
     def test_expired_session_rejects_without_tagging(self):
@@ -514,6 +554,26 @@ class EditGoalFlowTests(unittest.TestCase):
             asyncio.run(webhook(_request_for_callback("goalfield:target")))
 
         mock_update.assert_called_once_with(123, step="awaiting_new_target")
+
+    def test_emoji_field_updates_goal(self):
+        session = {
+            "flow_type": "edit_goal",
+            "step": "awaiting_new_emoji",
+            "payload": {"goal_id": "g1", "goal_name": "Vacation"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_goal", return_value=True) as mock_update,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_text("🏖")))
+
+        mock_update.assert_called_once_with(123, "g1", emoji="🏖")
+        mock_clear.assert_called_once_with(123)
 
     def test_expired_callback_rejected(self):
         session = {

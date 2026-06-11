@@ -26,6 +26,7 @@ export type DashboardInflow = {
 export type DashboardGoal = {
   id: string;
   name: string;
+  emoji: string;
   targetAmount: number;
   accumulated: number;
 };
@@ -205,6 +206,7 @@ function parseGoal(data: Record<string, unknown>): DashboardGoal {
   return {
     id: String(data.id ?? ""),
     name: String(data.name ?? ""),
+    emoji: String(data.emoji ?? "🎯"),
     targetAmount: typeof data.target_amount === "number" ? data.target_amount : 0,
     accumulated: typeof data.accumulated === "number" ? data.accumulated : 0,
   };

@@ -175,12 +175,19 @@ class InflowCommandTests(unittest.TestCase):
         self.assertEqual(inflow.item, "Salary")
         self.assertEqual(inflow.amount, 2000.0)
         self.assertEqual(inflow.chat_id, 123)
-        self.assertIn("Income", mock_send.call_args.args[1])
+        # Confirmation is deferred until after the goal enquiry, so no
+        # "Income" message is sent up front.
+        mock_send.assert_not_called()
         mock_start.assert_called_once_with(
             123,
             "income_goal",
             "choosing_goal",
-            payload={"inflow_id": "inflow-doc-1", "item": "Salary", "amount": 2000.0},
+            payload={
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+            },
         )
 
     def test_income_command_with_dollar_and_date(self):
@@ -274,12 +281,18 @@ class InflowSessionTests(unittest.TestCase):
         self.assertEqual(inflow.item, "Cashback")
         self.assertEqual(inflow.amount, 50.0)
         mock_clear.assert_called_once_with(123)
-        self.assertIn("Income", mock_send.call_args.args[1])
+        # Confirmation is deferred until after the goal enquiry.
+        mock_send.assert_not_called()
         mock_start.assert_called_once_with(
             123,
             "income_goal",
             "choosing_goal",
-            payload={"inflow_id": "inflow-doc-1", "item": "Cashback", "amount": 50.0},
+            payload={
+                "inflow_id": "inflow-doc-1",
+                "item": "Cashback",
+                "amount": 50.0,
+                "transaction_date": None,
+            },
         )
 
     def test_expired_session_clears_and_notifies_without_recording(self):
