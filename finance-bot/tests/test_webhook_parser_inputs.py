@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import sys
 import types
 import unittest
@@ -146,6 +146,8 @@ class WebhookParserInputTests(unittest.TestCase):
             patch("routers.webhook._handle_dashboard_account_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_set_budget_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_inflow_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_new_goal_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_edit_goal_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook.get_user_state", return_value=None),
             patch("routers.webhook.handle_expense", new=AsyncMock()) as mock_handle,
         ):
@@ -160,6 +162,8 @@ class WebhookParserInputTests(unittest.TestCase):
             patch("routers.webhook._handle_dashboard_account_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_set_budget_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_inflow_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_new_goal_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_edit_goal_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook.get_user_state", return_value=None),
             patch("routers.webhook.handle_expense", new=AsyncMock()) as mock_handle,
         ):
@@ -173,6 +177,8 @@ class WebhookParserInputTests(unittest.TestCase):
             patch("routers.webhook._handle_dashboard_account_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_set_budget_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_inflow_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_new_goal_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_edit_goal_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook.get_user_state", return_value=None),
             patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
         ):
@@ -187,6 +193,8 @@ class WebhookParserInputTests(unittest.TestCase):
             patch("routers.webhook._handle_dashboard_account_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_set_budget_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook._handle_inflow_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_new_goal_session", new=AsyncMock(return_value=False)),
+            patch("routers.webhook._handle_edit_goal_session", new=AsyncMock(return_value=False)),
             patch("routers.webhook.get_user_state", return_value=None),
             patch("routers.webhook.handle_expense", new=AsyncMock()) as mock_handle,
         ):

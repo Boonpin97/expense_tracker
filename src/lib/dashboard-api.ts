@@ -20,6 +20,14 @@ export type DashboardInflow = {
   amount: number;
   timestamp: Date;
   chatId: number;
+  goalId: string | null;
+};
+
+export type DashboardGoal = {
+  id: string;
+  name: string;
+  targetAmount: number;
+  accumulated: number;
 };
 
 export type DashboardCategory = {
@@ -189,6 +197,16 @@ function parseInflow(data: Record<string, unknown>): DashboardInflow {
     amount: typeof data.amount === "number" ? data.amount : 0,
     timestamp: new Date(String(data.timestamp ?? "")),
     chatId: typeof data.chat_id === "number" ? data.chat_id : 0,
+    goalId: data.goal_id ? String(data.goal_id) : null,
+  };
+}
+
+function parseGoal(data: Record<string, unknown>): DashboardGoal {
+  return {
+    id: String(data.id ?? ""),
+    name: String(data.name ?? ""),
+    targetAmount: typeof data.target_amount === "number" ? data.target_amount : 0,
+    accumulated: typeof data.accumulated === "number" ? data.accumulated : 0,
   };
 }
 
@@ -329,6 +347,15 @@ export async function fetchDashboardCategories() {
   );
 
   return (data.categories ?? []).map(parseCategory).sort((a, b) => a.order - b.order);
+}
+
+export async function fetchDashboardGoals() {
+  const data = await requestJson<{ goals?: Record<string, unknown>[] }>(
+    "GET",
+    "/dashboard/goals",
+  );
+
+  return (data.goals ?? []).map(parseGoal);
 }
 
 export async function fetchDashboardBudgets() {
