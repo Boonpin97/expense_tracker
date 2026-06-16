@@ -581,6 +581,29 @@ def update_category_emoji(chat_id: int, name: str, emoji: str) -> bool:
     return True
 
 
+def move_category(chat_id: int, name: str, direction: int) -> bool:
+    """Move a category up (-1) or down (+1), swapping with its neighbour.
+    Normalises every movable category's ``order`` to its sorted position so the
+    result is correct even when stored order values are non-contiguous. The
+    protected ``Other`` category keeps its sentinel order and is never moved."""
+    if name == "Other":
+        return False
+    collection = _category_list_collection(chat_id)
+    movable = [c for c in get_category_list(chat_id) if c.get("name") != "Other"]
+    index = next((i for i, c in enumerate(movable) if c.get("name") == name), None)
+    if index is None:
+        return False
+    swap_with = index + direction
+    if swap_with < 0 or swap_with >= len(movable):
+        return False
+    movable[index], movable[swap_with] = movable[swap_with], movable[index]
+    batch = get_db().batch()
+    for position, category in enumerate(movable):
+        batch.update(collection.document(_category_doc_id(category["name"])), {"order": position})
+    batch.commit()
+    return True
+
+
 def update_category_order(chat_id: int, name: str, order: int) -> bool:
     categories = _category_list_collection(chat_id)
     target_ref = categories.document(_category_doc_id(name))

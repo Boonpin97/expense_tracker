@@ -44,6 +44,7 @@ from services.firestore import (
     get_transactions_with_ids,
     get_web_session,
     delete_inflow,
+    move_category,
     move_goal,
     move_project,
     save_goal,
@@ -708,18 +709,12 @@ async def move_dashboard_category(
     if payload.direction not in {-1, 1}:
         raise HTTPException(status_code=400, detail="Direction must be -1 or 1.")
 
-    movable = [category for category in get_category_list(session["chat_id"]) if category["name"] != "Other"]
-    movable.sort(key=lambda category: category.get("order", 9998))
-    index = next((i for i, category in enumerate(movable) if category["name"] == category_name), -1)
-    if index == -1:
-        raise HTTPException(status_code=404, detail="Category not found.")
-    target_index = index + payload.direction
-    if target_index < 0 or target_index >= len(movable):
-        return {"ok": True}
-
-    target_order = target_index + 1
-    if not update_category_order(session["chat_id"], category_name, target_order):
-        raise HTTPException(status_code=404, detail="Category not found.")
+    # move_category swaps with the neighbour and renormalises order positions;
+    # a False result is either out-of-bounds (no-op) or a missing category.
+    if not move_category(session["chat_id"], category_name, payload.direction):
+        names = {category["name"] for category in get_category_list(session["chat_id"])}
+        if category_name not in names:
+            raise HTTPException(status_code=404, detail="Category not found.")
     return {"ok": True}
 
 
@@ -895,6 +890,7 @@ class PlanUpdateRequest(BaseModel):
     item: Optional[str] = None
     category: Optional[str] = None
     day_of_month: Optional[int] = None
+    start_date: Optional[str] = None  # split: ISO date — sets start month + recurring day
     amount: Optional[float] = None
     total_amount: Optional[float] = None
     installment_count: Optional[int] = None
@@ -929,6 +925,14 @@ async def update_dashboard_plan(plan_id: str, payload: PlanUpdateRequest, reques
         if not 1 <= payload.day_of_month <= 31:
             raise HTTPException(status_code=400, detail="Day must be between 1 and 31.")
         updates["day_of_month"] = payload.day_of_month
+    if payload.start_date is not None:
+        if plan.get("plan_type") != "split_payment":
+            raise HTTPException(status_code=400, detail="start_date is only supported for split payment plans.")
+        start_dt = _parse_dashboard_datetime(payload.start_date)
+        # The start date sets both when the plan begins and the recurring day.
+        updates["start_year"] = start_dt.year
+        updates["start_month"] = start_dt.month
+        updates["day_of_month"] = start_dt.day
     if payload.amount is not None:
         if plan.get("plan_type") != "recurring":
             raise HTTPException(status_code=400, detail="Use total_amount for split payment plans.")

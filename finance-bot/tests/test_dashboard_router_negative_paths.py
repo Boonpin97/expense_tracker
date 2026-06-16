@@ -236,12 +236,13 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
         with (
             patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
             patch.object(dashboard, "get_category_list", return_value=categories),
-            patch.object(dashboard, "update_category_order") as mock_update_order,
+            patch.object(dashboard, "move_category", return_value=False) as mock_move,
         ):
             result = asyncio.run(dashboard.move_dashboard_category("Food", payload, request))
 
+        # Out-of-bounds is a no-op success (Food still exists, so no 404).
         self.assertEqual(result, {"ok": True})
-        mock_update_order.assert_not_called()
+        mock_move.assert_called_once_with(123, "Food", -1)
 
     def test_update_dashboard_budget_rejects_negative_amount(self):
         request = SimpleNamespace(cookies={}, headers={})

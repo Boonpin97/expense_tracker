@@ -556,6 +556,7 @@ export async function updateDashboardPlan(
     item?: string;
     category?: string;
     dayOfMonth?: number;
+    startDate?: string;
     amount?: number;
     totalAmount?: number;
     installmentCount?: number;
@@ -566,6 +567,7 @@ export async function updateDashboardPlan(
       ...(payload.item !== undefined ? { item: payload.item } : {}),
       ...(payload.category !== undefined ? { category: payload.category } : {}),
       ...(payload.dayOfMonth !== undefined ? { day_of_month: payload.dayOfMonth } : {}),
+      ...(payload.startDate !== undefined ? { start_date: payload.startDate } : {}),
       ...(payload.amount !== undefined ? { amount: payload.amount } : {}),
       ...(payload.totalAmount !== undefined ? { total_amount: payload.totalAmount } : {}),
       ...(payload.installmentCount !== undefined
