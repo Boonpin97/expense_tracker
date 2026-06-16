@@ -79,8 +79,13 @@ if "httpx" not in sys.modules:
     sys.modules["httpx"] = httpx_stub
 
 from services.payment_plans import clamp_day, compute_split_amounts, compute_next_due_date
-from services.plan_manager import process_due_plans, rewrite_plan_history, post_next_occurrence
-from services import telegram
+from services.plan_manager import (
+    create_plan_and_post_first_charge,
+    process_due_plans,
+    rewrite_plan_history,
+    post_next_occurrence,
+)
+from services import telegram, firestore
 
 SGT = timezone(timedelta(hours=8))
 
@@ -229,6 +234,43 @@ class ProcessDuePlansTests(unittest.IsolatedAsyncioTestCase):
             status="completed",
         )
         self.assertIn("installment 2/2", mock_confirm.call_args.kwargs["note"])
+
+    async def test_post_next_occurrence_reconciles_when_charge_already_exists(self):
+        # Inconsistent state: the occurrence's transaction exists but the plan
+        # counter was never advanced. post_next_occurrence must advance the plan
+        # forward (not re-charge, not bail), so it stops being perpetually "due".
+        due_at = datetime(2026, 6, 1, 0, 0, 0, tzinfo=SGT)
+        plan = {
+            "id": "plan-1",
+            "chat_id": 123,
+            "plan_type": "recurring",
+            "item": "Phone Bill",
+            "category": "Other",
+            "day_of_month": 1,
+            "status": "active",
+            "start_year": 2026,
+            "start_month": 5,
+            "next_due_date": due_at.isoformat(),
+            "created_at": "2026-05-01T00:00:00+08:00",
+            "amount": 18.33,
+            "current_installment_number": 1,
+        }
+        with patch("services.plan_manager.firestore.find_transaction_by_plan_occurrence", return_value={"_doc_id": "tx-existing"}), \
+             patch("services.plan_manager.firestore.save_transaction") as mock_save_tx, \
+             patch("services.plan_manager.firestore.update_payment_plan") as mock_update_plan, \
+             patch("services.plan_manager.telegram.send_transaction_confirmation", new=AsyncMock()) as mock_confirm, \
+             patch("services.plan_manager._check_budget_exceeded", new=AsyncMock()):
+            posted = await post_next_occurrence(plan, timestamp=due_at)
+
+        self.assertFalse(posted)
+        mock_save_tx.assert_not_called()
+        mock_confirm.assert_not_called()
+        mock_update_plan.assert_called_once_with(
+            "plan-1",
+            current_installment_number=2,
+            next_due_date="2026-07-01T00:00:00+08:00",
+            status="active",
+        )
 
     async def test_post_next_occurrence_skips_inactive_plan(self):
         plan = {"id": "plan-1", "status": "completed"}
@@ -383,6 +425,156 @@ class ProcessDuePlansTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update_kwargs["current_installment_number"], 3)
         self.assertEqual(update_kwargs["next_due_date"], "2026-06-15T00:00:00+08:00")
         self.assertEqual(update_kwargs["status"], "active")
+
+
+class _FakeDueDoc:
+    def __init__(self, doc_id, data):
+        self.id = doc_id
+        self._data = data
+
+    def to_dict(self):
+        return dict(self._data)
+
+
+class _FakeDueQuery:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def where(self, *args, **kwargs):
+        return self
+
+    def stream(self):
+        return iter(self._docs)
+
+
+class _FakeDueDb:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def collection(self, _name):
+        return _FakeDueQuery(self._docs)
+
+
+class ListDuePaymentPlansTests(unittest.TestCase):
+    def test_includes_due_and_overdue_excludes_future_and_undated(self):
+        today = datetime(2026, 6, 16, tzinfo=SGT)
+        docs = [
+            _FakeDueDoc("overdue", {"next_due_date": "2026-06-01T00:00:00+08:00"}),
+            _FakeDueDoc("due-today", {"next_due_date": "2026-06-16T00:00:00+08:00"}),
+            _FakeDueDoc("future", {"next_due_date": "2026-07-01T00:00:00+08:00"}),
+            _FakeDueDoc("undated", {"next_due_date": ""}),
+        ]
+        with patch("services.firestore.get_db", return_value=_FakeDueDb(docs)):
+            due = firestore.list_due_payment_plans(today)
+        self.assertEqual({plan["id"] for plan in due}, {"overdue", "due-today"})
+
+
+class CatchUpAndIsolationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_overdue_charge_is_dated_to_its_due_month_not_run_date(self):
+        # Plan was due 2026-06-01 but is only processed on 2026-06-16 (a missed run).
+        # The caught-up charge must be recorded for June, not dated to the run date.
+        run_date = datetime(2026, 6, 16, 0, 0, 0, tzinfo=SGT)
+        plan = {
+            "id": "plan-1",
+            "chat_id": 123,
+            "plan_type": "recurring",
+            "item": "Phone Bill",
+            "category": "Other",
+            "day_of_month": 1,
+            "status": "active",
+            "start_year": 2026,
+            "start_month": 5,
+            "next_due_date": "2026-06-01T00:00:00+08:00",
+            "created_at": "2026-05-01T00:00:00+08:00",
+            "amount": 18.33,
+            "current_installment_number": 1,
+        }
+        saved = []
+        with patch("services.plan_manager.firestore.list_due_payment_plans", return_value=[plan]), \
+             patch("services.plan_manager.firestore.find_transaction_by_plan_occurrence", return_value=None), \
+             patch("services.plan_manager.firestore.save_transaction", side_effect=saved.append), \
+             patch("services.plan_manager.firestore.update_payment_plan"), \
+             patch("services.plan_manager.telegram.send_transaction_confirmation", new=AsyncMock()), \
+             patch("services.plan_manager._check_budget_exceeded", new=AsyncMock()):
+            processed = await process_due_plans(run_date)
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].occurrence_key, "2026-06")
+        self.assertTrue(saved[0].timestamp.startswith("2026-06-01"), saved[0].timestamp)
+
+    async def test_failing_plan_does_not_block_remaining_plans(self):
+        run_date = datetime(2026, 6, 16, 0, 0, 0, tzinfo=SGT)
+
+        def make_plan(plan_id, item):
+            return {
+                "id": plan_id,
+                "chat_id": 123,
+                "plan_type": "recurring",
+                "item": item,
+                "category": "Other",
+                "day_of_month": 1,
+                "status": "active",
+                "start_year": 2026,
+                "start_month": 5,
+                "next_due_date": "2026-06-01T00:00:00+08:00",
+                "created_at": "2026-05-01T00:00:00+08:00",
+                "amount": 9.99,
+                "current_installment_number": 1,
+            }
+
+        bad = make_plan("plan-bad", "Boom")
+        good = make_plan("plan-good", "Survivor")
+        saved = []
+
+        def save_side_effect(tx):
+            if tx.source_plan_id == "plan-bad":
+                raise RuntimeError("simulated Firestore failure")
+            saved.append(tx)
+
+        with patch("services.plan_manager.firestore.list_due_payment_plans", return_value=[bad, good]), \
+             patch("services.plan_manager.firestore.find_transaction_by_plan_occurrence", return_value=None), \
+             patch("services.plan_manager.firestore.save_transaction", side_effect=save_side_effect), \
+             patch("services.plan_manager.firestore.update_payment_plan"), \
+             patch("services.plan_manager.telegram.send_transaction_confirmation", new=AsyncMock()), \
+             patch("services.plan_manager._check_budget_exceeded", new=AsyncMock()):
+            processed = await process_due_plans(run_date)
+
+        self.assertEqual(processed, 1)
+        self.assertEqual([tx.source_plan_id for tx in saved], ["plan-good"])
+
+
+class CreateSplitPlanFromStartDateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_split_plan_derives_schedule_from_start_date(self):
+        pending = {
+            "plan_type": "split_payment",
+            "item": "Sofa",
+            "category": "Home",
+            "total_amount": 300.0,
+            "start_date": "2026-07-15",
+            "number_of_months": 3,
+        }
+        saved = {}
+
+        def capture_plan(plan):
+            saved.update(plan.__dict__)
+            return "plan-1"
+
+        with patch("services.plan_manager.firestore.save_payment_plan", side_effect=capture_plan), \
+             patch("services.plan_manager.firestore.get_payment_plan", return_value={"id": "plan-1", **{}}), \
+             patch("services.plan_manager.post_next_occurrence", new=AsyncMock()) as mock_post, \
+             patch("services.plan_manager.firestore.delete_pending_plan"), \
+             patch("services.plan_manager.firestore.clear_user_state"):
+            await create_plan_and_post_first_charge(123, pending)
+
+        # Schedule derives from the explicit start date, not "now".
+        self.assertEqual(saved["day_of_month"], 15)
+        self.assertEqual((saved["start_year"], saved["start_month"]), (2026, 7))
+        self.assertEqual(saved["installment_count"], 3)
+        self.assertEqual(saved["base_installment_amount"], 100.0)
+        # First charge is dated at the start date.
+        first_charge_time = mock_post.call_args.kwargs["timestamp"]
+        self.assertEqual((first_charge_time.year, first_charge_time.month, first_charge_time.day), (2026, 7, 15))
 
 
 if __name__ == "__main__":

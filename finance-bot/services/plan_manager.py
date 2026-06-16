@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from models.transaction import PaymentPlan, PendingPlan, Transaction
@@ -14,6 +15,8 @@ from services.payment_plans import (
 
 SGT = timezone(timedelta(hours=8))
 PENDING_PLAN_EXPIRY_SECONDS = 600
+
+logger = logging.getLogger(__name__)
 
 
 def _normalise(item: str) -> str:
@@ -53,24 +56,31 @@ async def send_plan_list(chat_id: int, plan_type: str) -> None:
 
 async def create_plan_and_post_first_charge(chat_id: int, pending: dict) -> None:
     now = datetime.now(SGT)
+    first_charge_time = now
     if pending["plan_type"] == "split_payment":
-        base, final_amount = compute_split_amounts(float(pending["total_amount"]), int(pending["installment_count"]))
+        # Split plans are defined by an explicit start date + number of months.
+        # The start date drives the schedule and dates the first charge.
+        raw_start = pending.get("start_date")
+        start = datetime.fromisoformat(raw_start).replace(tzinfo=SGT) if raw_start else now
+        months = int(pending.get("number_of_months") or pending.get("installment_count"))
+        base, final_amount = compute_split_amounts(float(pending["total_amount"]), months)
         plan = PaymentPlan(
             chat_id=chat_id,
             plan_type="split_payment",
             item=pending["item"],
             category=pending["category"],
-            day_of_month=int(pending["day_of_month"]),
-            start_year=now.year,
-            start_month=now.month,
-            next_due_date=now.isoformat(),
+            day_of_month=start.day,
+            start_year=start.year,
+            start_month=start.month,
+            next_due_date=start.isoformat(),
             created_at=now.isoformat(),
             total_amount=float(pending["total_amount"]),
-            installment_count=int(pending["installment_count"]),
+            installment_count=months,
             current_installment_number=0,
             base_installment_amount=base,
             final_installment_amount=final_amount,
         )
+        first_charge_time = start
     else:
         plan = PaymentPlan(
             chat_id=chat_id,
@@ -88,9 +98,23 @@ async def create_plan_and_post_first_charge(chat_id: int, pending: dict) -> None
 
     plan_id = firestore.save_payment_plan(plan)
     plan_data = firestore.get_payment_plan(plan_id)
-    await post_next_occurrence(plan_data, timestamp=now)
+    await post_next_occurrence(plan_data, timestamp=first_charge_time)
     firestore.delete_pending_plan(chat_id)
     firestore.clear_user_state(chat_id)
+
+
+def _advance_plan(plan: dict) -> None:
+    """Move the plan to its next occurrence: bump the counter, recompute the next
+    due date, and complete the plan if a split has no occurrences left."""
+    updated_count = int(plan.get("current_installment_number", 0)) + 1
+    next_due = compute_next_due_date({**plan, "current_installment_number": updated_count})
+    status = "completed" if next_due is None and plan["plan_type"] == "split_payment" else "active"
+    firestore.update_payment_plan(
+        plan["id"],
+        current_installment_number=updated_count,
+        next_due_date=next_due.isoformat() if next_due else "",
+        status=status,
+    )
 
 
 async def post_next_occurrence(plan: dict, timestamp: datetime | None = None) -> bool:
@@ -98,6 +122,11 @@ async def post_next_occurrence(plan: dict, timestamp: datetime | None = None) ->
         return False
     occurrence = plan_occurrence_for_index(plan, int(plan.get("current_installment_number", 0)))
     if firestore.find_transaction_by_plan_occurrence(plan["id"], occurrence.occurrence_key):
+        # The charge for this occurrence already exists but the plan counter was
+        # not advanced (e.g. a prior run saved the transaction then failed before
+        # updating the plan). Reconcile the plan forward so it stops being pinned
+        # to an already-charged occurrence and re-evaluated on every run.
+        _advance_plan(plan)
         return False
     tx_time = (timestamp or occurrence.due_date.replace(hour=0, minute=0, second=0, microsecond=0)).astimezone(SGT)
     tx = Transaction(
@@ -112,15 +141,7 @@ async def post_next_occurrence(plan: dict, timestamp: datetime | None = None) ->
         auto_generated=True,
     )
     firestore.save_transaction(tx)
-    updated_count = int(plan.get("current_installment_number", 0)) + 1
-    next_due = compute_next_due_date({**plan, "current_installment_number": updated_count})
-    status = "completed" if next_due is None and plan["plan_type"] == "split_payment" else "active"
-    firestore.update_payment_plan(
-        plan["id"],
-        current_installment_number=updated_count,
-        next_due_date=next_due.isoformat() if next_due else "",
-        status=status,
-    )
+    _advance_plan(plan)
     item_key = _normalise(plan["item"])
     await telegram.send_transaction_confirmation(
         plan["chat_id"],
@@ -138,7 +159,18 @@ async def process_due_plans(today: datetime | None = None) -> int:
     plans = firestore.list_due_payment_plans(now)
     count = 0
     for plan in plans:
-        posted = await post_next_occurrence(plan, timestamp=now.replace(hour=0, minute=0, second=0, microsecond=0))
+        # Isolate each plan: a failure on one (Telegram error, malformed plan,
+        # transient Firestore error) must not abort the run and silently skip
+        # every remaining plan. Skipped plans wouldn't be retried until their
+        # next due date, so the charge would be lost.
+        try:
+            # No explicit timestamp: post_next_occurrence dates the charge to the
+            # occurrence's own due date, so a caught-up overdue charge is recorded
+            # in the month it was actually due, not the day it was processed.
+            posted = await post_next_occurrence(plan)
+        except Exception:
+            logger.exception("Failed to process due payment plan %s", plan.get("id"))
+            continue
         if posted:
             count += 1
     return count

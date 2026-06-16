@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from models.transaction import Inflow, PaymentPlan, Transaction
+from models.transaction import Goal, Inflow, PaymentPlan, Project, Transaction
 from services.dashboard_auth import (
     build_session_token,
     normalize_username,
@@ -29,16 +29,26 @@ from services.firestore import (
     get_account_by_username,
     get_budgets,
     get_category_list,
+    current_month_window,
+    delete_goal,
+    delete_project,
     get_dashboard_preferences,
+    get_goal_by_id,
     get_goals,
     get_inflow_by_id,
     get_inflows_with_ids,
     get_payment_plan,
+    get_project_by_id,
+    get_projects,
     get_transaction_by_id,
     get_transactions_with_ids,
     get_web_session,
     delete_inflow,
+    move_goal,
+    move_project,
+    save_goal,
     save_inflow,
+    save_project,
     list_payment_plans,
     remove_budget,
     rename_category,
@@ -49,7 +59,10 @@ from services.firestore import (
     save_web_session,
     set_budget,
     sum_inflows_by_goal,
+    sum_inflows_by_project,
     update_dashboard_preferences,
+    update_goal,
+    update_project,
     update_category_emoji,
     update_category_order,
     update_payment_plan,
@@ -87,8 +100,10 @@ class TransactionCreateRequest(BaseModel):
     category: str
     timestamp: str
     payment_type: str
-    day_of_month: Optional[int] = None
-    installment_count: Optional[int] = None
+    day_of_month: Optional[int] = None  # recurring
+    installment_count: Optional[int] = None  # legacy split input
+    start_date: Optional[str] = None  # split: ISO date the plan starts
+    number_of_months: Optional[int] = None  # split: months to spread across
     create_first_transaction_now: bool = True
 
 
@@ -96,12 +111,16 @@ class InflowCreateRequest(BaseModel):
     item: str
     amount: float
     timestamp: str
+    goal_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class InflowUpdateRequest(BaseModel):
     item: str
     amount: float
     timestamp: str
+    goal_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class CategoryCreateRequest(BaseModel):
@@ -116,6 +135,36 @@ class CategoryUpdateRequest(BaseModel):
 
 class CategoryMoveRequest(BaseModel):
     direction: int
+
+
+class GoalCreateRequest(BaseModel):
+    name: str
+    target_amount: float
+    emoji: str = "🎯"
+
+
+class GoalUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    target_amount: Optional[float] = None
+    emoji: Optional[str] = None
+
+
+class MoveRequest(BaseModel):
+    direction: int
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    target_amount: float
+    deadline: str
+    emoji: str = "🚀"
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    target_amount: Optional[float] = None
+    deadline: Optional[str] = None
+    emoji: Optional[str] = None
 
 
 class BudgetSetRequest(BaseModel):
@@ -183,6 +232,65 @@ def _parse_dashboard_datetime(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=SGT)
     return parsed.astimezone(SGT)
+
+
+def _resolve_inflow_target(
+    chat_id: int,
+    goal_id: Optional[str],
+    project_id: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Validate an income → goal/project assignment. They are mutually exclusive."""
+    goal_id = (goal_id or "").strip() or None
+    project_id = (project_id or "").strip() or None
+    if goal_id and project_id:
+        raise HTTPException(status_code=400, detail="Assign income to a goal or a project, not both.")
+    if goal_id and not get_goal_by_id(chat_id, goal_id):
+        raise HTTPException(status_code=404, detail="Goal not found.")
+    if project_id and not get_project_by_id(chat_id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return goal_id, project_id
+
+
+def _goal_update_fields(payload: "GoalUpdateRequest") -> dict:
+    fields: dict = {}
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Goal name cannot be empty.")
+        fields["name"] = name
+    if payload.target_amount is not None:
+        if payload.target_amount <= 0:
+            raise HTTPException(status_code=400, detail="Target amount must be positive.")
+        fields["target_amount"] = payload.target_amount
+    if payload.emoji is not None and payload.emoji.strip():
+        fields["emoji"] = payload.emoji.strip()
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+    return fields
+
+
+def _project_update_fields(payload: "ProjectUpdateRequest") -> dict:
+    fields: dict = {}
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Project name cannot be empty.")
+        fields["name"] = name
+    if payload.target_amount is not None:
+        if payload.target_amount <= 0:
+            raise HTTPException(status_code=400, detail="Target amount must be positive.")
+        fields["target_amount"] = payload.target_amount
+    if payload.deadline is not None:
+        deadline = payload.deadline.strip()
+        if not deadline:
+            raise HTTPException(status_code=400, detail="Deadline cannot be empty.")
+        _parse_dashboard_datetime(deadline)
+        fields["deadline"] = deadline
+    if payload.emoji is not None and payload.emoji.strip():
+        fields["emoji"] = payload.emoji.strip()
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+    return fields
 
 
 def _scheduled_plan_start(timestamp: datetime, day_of_month: int) -> tuple[int, int]:
@@ -335,6 +443,39 @@ async def create_dashboard_transaction(payload: TransactionCreateRequest, reques
         )
         return {"ok": True}
 
+    if payment_type == "split_payment":
+        # Split plans are defined by an explicit start date + number of months.
+        if not payload.start_date:
+            raise HTTPException(status_code=400, detail="Start date is required.")
+        if payload.number_of_months is None or payload.number_of_months < 1:
+            raise HTTPException(status_code=400, detail="Number of months must be a positive integer.")
+        start_dt = _parse_dashboard_datetime(payload.start_date)
+        base_amount, final_amount = compute_split_amounts(payload.amount, payload.number_of_months)
+        plan = PaymentPlan(
+            chat_id=session["chat_id"],
+            plan_type="split_payment",
+            item=item,
+            category=category,
+            day_of_month=start_dt.day,
+            start_year=start_dt.year,
+            start_month=start_dt.month,
+            next_due_date=start_dt.isoformat(),
+            created_at=datetime.now(SGT).isoformat(),
+            total_amount=payload.amount,
+            installment_count=payload.number_of_months,
+            current_installment_number=0,
+            base_installment_amount=base_amount,
+            final_installment_amount=final_amount,
+        )
+        plan_id = save_payment_plan(plan)
+        stored_plan = get_payment_plan(plan_id)
+        update_payment_plan(
+            plan_id,
+            **_build_plan_creation_result(stored_plan, payload.create_first_transaction_now, start_dt),
+        )
+        return {"ok": True}
+
+    # Recurring: keep day-of-month input and the defer-to-next-month start logic.
     if payload.day_of_month is None or not 1 <= payload.day_of_month <= 31:
         raise HTTPException(status_code=400, detail="Day must be between 1 and 31.")
 
@@ -344,40 +485,19 @@ async def create_dashboard_transaction(payload: TransactionCreateRequest, reques
     else:
         start_year, start_month = _scheduled_plan_start(timestamp, payload.day_of_month)
 
-    if payment_type == "split_payment":
-        if payload.installment_count is None or payload.installment_count < 1:
-            raise HTTPException(status_code=400, detail="Months must be a positive integer.")
-        base_amount, final_amount = compute_split_amounts(payload.amount, payload.installment_count)
-        plan = PaymentPlan(
-            chat_id=session["chat_id"],
-            plan_type="split_payment",
-            item=item,
-            category=category,
-            day_of_month=payload.day_of_month,
-            start_year=start_year,
-            start_month=start_month,
-            next_due_date=timestamp.isoformat(),
-            created_at=datetime.now(SGT).isoformat(),
-            total_amount=payload.amount,
-            installment_count=payload.installment_count,
-            current_installment_number=0,
-            base_installment_amount=base_amount,
-            final_installment_amount=final_amount,
-        )
-    else:
-        plan = PaymentPlan(
-            chat_id=session["chat_id"],
-            plan_type="recurring",
-            item=item,
-            category=category,
-            day_of_month=payload.day_of_month,
-            start_year=start_year,
-            start_month=start_month,
-            next_due_date=timestamp.isoformat(),
-            created_at=datetime.now(SGT).isoformat(),
-            amount=payload.amount,
-            current_installment_number=0,
-        )
+    plan = PaymentPlan(
+        chat_id=session["chat_id"],
+        plan_type="recurring",
+        item=item,
+        category=category,
+        day_of_month=payload.day_of_month,
+        start_year=start_year,
+        start_month=start_month,
+        next_due_date=timestamp.isoformat(),
+        created_at=datetime.now(SGT).isoformat(),
+        amount=payload.amount,
+        current_installment_number=0,
+    )
 
     plan_id = save_payment_plan(plan)
     stored_plan = get_payment_plan(plan_id)
@@ -456,6 +576,7 @@ async def create_dashboard_inflow(payload: InflowCreateRequest, request: Request
         raise HTTPException(status_code=400, detail="Item cannot be empty.")
     if payload.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive.")
+    goal_id, project_id = _resolve_inflow_target(session["chat_id"], payload.goal_id, payload.project_id)
     timestamp = _parse_dashboard_datetime(payload.timestamp)
     save_inflow(
         Inflow(
@@ -464,6 +585,8 @@ async def create_dashboard_inflow(payload: InflowCreateRequest, request: Request
             timestamp=timestamp.isoformat(),
             chat_id=session["chat_id"],
             created_at=datetime.now(SGT).isoformat(),
+            goal_id=goal_id,
+            project_id=project_id,
         )
     )
     return {"ok": True}
@@ -485,6 +608,7 @@ async def update_dashboard_inflow(
         raise HTTPException(status_code=400, detail="Item cannot be empty.")
     if payload.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive.")
+    goal_id, project_id = _resolve_inflow_target(session["chat_id"], payload.goal_id, payload.project_id)
 
     from services.firestore import get_db
 
@@ -493,6 +617,8 @@ async def update_dashboard_inflow(
             "item": item,
             "amount": payload.amount,
             "timestamp": _parse_dashboard_datetime(payload.timestamp).isoformat(),
+            "goal_id": goal_id,
+            "project_id": project_id,
         }
     )
     return {"ok": True}
@@ -626,8 +752,124 @@ async def delete_dashboard_budget(category_name: str, request: Request):
 async def list_dashboard_goals(request: Request):
     session = _require_session(request)
     goals = get_goals(session["chat_id"])
-    sums = sum_inflows_by_goal(session["chat_id"])
-    return {"goals": [{**goal, "accumulated": sums.get(goal["id"], 0.0)} for goal in goals]}
+    # Goals are monthly savings targets: progress resets each calendar month.
+    start, end = current_month_window()
+    sums = sum_inflows_by_goal(session["chat_id"], start, end)
+    return {
+        "goals": [{**goal, "accumulated": sums.get(goal["id"], 0.0)} for goal in goals],
+        "period": "month",
+    }
+
+
+@router.post("/goals")
+async def create_dashboard_goal(payload: GoalCreateRequest, request: Request):
+    session = _require_session(request)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Goal name cannot be empty.")
+    if payload.target_amount <= 0:
+        raise HTTPException(status_code=400, detail="Target amount must be positive.")
+    goal_id = save_goal(
+        Goal(
+            chat_id=session["chat_id"],
+            name=name,
+            target_amount=payload.target_amount,
+            created_at=datetime.now(SGT).isoformat(),
+            emoji=payload.emoji.strip() or "🎯",
+        )
+    )
+    return {"ok": True, "id": goal_id}
+
+
+@router.patch("/goals/{goal_id}")
+async def update_dashboard_goal(goal_id: str, payload: GoalUpdateRequest, request: Request):
+    session = _require_session(request)
+    fields = _goal_update_fields(payload)
+    if not update_goal(session["chat_id"], goal_id, **fields):
+        raise HTTPException(status_code=404, detail="Goal not found.")
+    return {"ok": True}
+
+
+@router.delete("/goals/{goal_id}")
+async def delete_dashboard_goal(goal_id: str, request: Request):
+    session = _require_session(request)
+    if not delete_goal(session["chat_id"], goal_id):
+        raise HTTPException(status_code=404, detail="Goal not found.")
+    return {"ok": True}
+
+
+@router.post("/goals/{goal_id}/move")
+async def move_dashboard_goal(goal_id: str, payload: MoveRequest, request: Request):
+    session = _require_session(request)
+    if payload.direction not in {-1, 1}:
+        raise HTTPException(status_code=400, detail="Direction must be -1 or 1.")
+    if not move_goal(session["chat_id"], goal_id, payload.direction):
+        if not get_goal_by_id(session["chat_id"], goal_id):
+            raise HTTPException(status_code=404, detail="Goal not found.")
+    return {"ok": True}
+
+
+@router.get("/projects")
+async def list_dashboard_projects(request: Request):
+    session = _require_session(request)
+    projects = get_projects(session["chat_id"])
+    # Long-term projects accumulate all-time toward a deadline.
+    sums = sum_inflows_by_project(session["chat_id"])
+    return {"projects": [{**project, "accumulated": sums.get(project["id"], 0.0)} for project in projects]}
+
+
+@router.post("/projects")
+async def create_dashboard_project(payload: ProjectCreateRequest, request: Request):
+    session = _require_session(request)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Project name cannot be empty.")
+    if payload.target_amount <= 0:
+        raise HTTPException(status_code=400, detail="Target amount must be positive.")
+    deadline = payload.deadline.strip()
+    if not deadline:
+        raise HTTPException(status_code=400, detail="Deadline is required.")
+    # Validate the deadline parses as a date/datetime.
+    _parse_dashboard_datetime(deadline)
+    project_id = save_project(
+        Project(
+            chat_id=session["chat_id"],
+            name=name,
+            target_amount=payload.target_amount,
+            deadline=deadline,
+            created_at=datetime.now(SGT).isoformat(),
+            emoji=payload.emoji.strip() or "🚀",
+        )
+    )
+    return {"ok": True, "id": project_id}
+
+
+@router.patch("/projects/{project_id}")
+async def update_dashboard_project(project_id: str, payload: ProjectUpdateRequest, request: Request):
+    session = _require_session(request)
+    fields = _project_update_fields(payload)
+    if not update_project(session["chat_id"], project_id, **fields):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return {"ok": True}
+
+
+@router.delete("/projects/{project_id}")
+async def delete_dashboard_project(project_id: str, request: Request):
+    session = _require_session(request)
+    if not delete_project(session["chat_id"], project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return {"ok": True}
+
+
+@router.post("/projects/{project_id}/move")
+async def move_dashboard_project(project_id: str, payload: MoveRequest, request: Request):
+    session = _require_session(request)
+    if payload.direction not in {-1, 1}:
+        raise HTTPException(status_code=400, detail="Direction must be -1 or 1.")
+    if not move_project(session["chat_id"], project_id, payload.direction):
+        if not get_project_by_id(session["chat_id"], project_id):
+            raise HTTPException(status_code=404, detail="Project not found.")
+    return {"ok": True}
 
 
 @router.get("/preferences")

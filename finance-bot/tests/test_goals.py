@@ -754,5 +754,185 @@ class DashboardGoalsTests(unittest.TestCase):
         self.assertEqual(result["goals"][0]["name"], "Vacation")
 
 
+class GoalMonthlyWindowTests(unittest.TestCase):
+    def test_sum_inflows_by_goal_filters_to_window(self):
+        from services import firestore
+
+        docs = [
+            _FakeDoc("a", {"chat_id": 123, "amount": 100.0, "goal_id": "g1", "timestamp": "2026-06-05T00:00:00+08:00"}),
+            _FakeDoc("b", {"chat_id": 123, "amount": 40.0, "goal_id": "g1", "timestamp": "2026-05-30T00:00:00+08:00"}),
+            _FakeDoc("c", {"chat_id": 123, "amount": 25.0, "goal_id": "g1", "timestamp": "2026-07-01T00:00:00+08:00"}),
+        ]
+        start = datetime(2026, 6, 1, tzinfo=SGT)
+        end = datetime(2026, 7, 1, tzinfo=SGT)
+        with patch.object(firestore, "get_db", return_value=_FakeDB(docs)):
+            sums = firestore.sum_inflows_by_goal(123, start, end)
+
+        # Only the in-window inflow counts; prior-month and next-month are excluded.
+        self.assertEqual(sums, {"g1": 100.0})
+
+
+class DashboardGoalCrudTests(unittest.TestCase):
+    def _req(self):
+        return SimpleNamespace(cookies={}, headers={})
+
+    def test_list_goals_uses_month_window(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_goals", return_value=[{"id": "g1", "target_amount": 100.0}]),
+            patch.object(dashboard, "current_month_window", return_value=("S", "E")),
+            patch.object(dashboard, "sum_inflows_by_goal", return_value={"g1": 30.0}) as mock_sum,
+        ):
+            result = asyncio.run(dashboard.list_dashboard_goals(self._req()))
+
+        mock_sum.assert_called_once_with(123, "S", "E")
+        self.assertEqual(result["period"], "month")
+        self.assertEqual(result["goals"][0]["accumulated"], 30.0)
+
+    def test_create_goal_saves(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "save_goal", return_value="g-new") as mock_save,
+        ):
+            payload = dashboard.GoalCreateRequest(name="Car", target_amount=5000.0, emoji="🚗")
+            result = asyncio.run(dashboard.create_dashboard_goal(payload, self._req()))
+
+        self.assertEqual(result, {"ok": True, "id": "g-new"})
+        saved = mock_save.call_args.args[0]
+        self.assertEqual((saved.name, saved.target_amount, saved.emoji), ("Car", 5000.0, "🚗"))
+
+    def test_create_goal_rejects_non_positive_target(self):
+        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+            payload = dashboard.GoalCreateRequest(name="Car", target_amount=0.0)
+            with self.assertRaises(Exception):
+                asyncio.run(dashboard.create_dashboard_goal(payload, self._req()))
+
+    def test_update_goal(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "update_goal", return_value=True) as mock_update,
+        ):
+            payload = dashboard.GoalUpdateRequest(target_amount=750.0)
+            result = asyncio.run(dashboard.update_dashboard_goal("g1", payload, self._req()))
+
+        self.assertEqual(result, {"ok": True})
+        mock_update.assert_called_once_with(123, "g1", target_amount=750.0)
+
+    def test_update_goal_missing_raises(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "update_goal", return_value=False),
+        ):
+            payload = dashboard.GoalUpdateRequest(name="X")
+            with self.assertRaises(Exception):
+                asyncio.run(dashboard.update_dashboard_goal("g1", payload, self._req()))
+
+    def test_delete_goal(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "delete_goal", return_value=True) as mock_del,
+        ):
+            result = asyncio.run(dashboard.delete_dashboard_goal("g1", self._req()))
+
+        self.assertEqual(result, {"ok": True})
+        mock_del.assert_called_once_with(123, "g1")
+
+    def test_move_goal(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "move_goal", return_value=True) as mock_move,
+        ):
+            payload = dashboard.MoveRequest(direction=-1)
+            result = asyncio.run(dashboard.move_dashboard_goal("g1", payload, self._req()))
+
+        self.assertEqual(result, {"ok": True})
+        mock_move.assert_called_once_with(123, "g1", -1)
+
+
+class EditGoalReorderTests(unittest.TestCase):
+    def test_reorder_field_starts_reordering(self):
+        session = {
+            "flow_type": "edit_goal",
+            "step": "choosing_field",
+            "payload": {"goal_id": "g1", "goal_name": "Vacation"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_session") as mock_update,
+            patch("routers.webhook.get_goals", return_value=[{"id": "g1", "name": "Vacation", "emoji": "🎯"}]),
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_goal_reorder_keyboard", new=AsyncMock()) as mock_kb,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalfield:reorder")))
+
+        mock_update.assert_called_once_with(123, step="reordering")
+        mock_kb.assert_awaited_once()
+
+    def test_move_up_calls_move_goal_and_rerenders(self):
+        session = {
+            "flow_type": "edit_goal",
+            "step": "reordering",
+            "payload": {"goal_id": "g1", "goal_name": "Vacation"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.move_goal", return_value=True) as mock_move,
+            patch("routers.webhook.get_goals", return_value=[{"id": "g1", "name": "Vacation", "emoji": "🎯"}]),
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_goal_reorder_keyboard", new=AsyncMock()) as mock_kb,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalmove:up")))
+
+        mock_move.assert_called_once_with(123, "g1", -1)
+        mock_kb.assert_awaited_once()
+
+    def test_move_done_clears_session(self):
+        session = {
+            "flow_type": "edit_goal",
+            "step": "reordering",
+            "payload": {"goal_id": "g1"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_callback("goalmove:done")))
+
+        mock_clear.assert_called_once_with(123)
+
+    def test_move_expired_rejected(self):
+        session = {
+            "flow_type": "edit_goal",
+            "step": "reordering",
+            "payload": {"goal_id": "g1"},
+            "expires_at": "2000-01-01T00:00:00+08:00",
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=True),
+            patch("routers.webhook.clear_session"),
+            patch("routers.webhook.clear_user_state"),
+            patch("routers.webhook.move_goal") as mock_move,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()) as mock_answer,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_callback("goalmove:up")))
+
+        mock_move.assert_not_called()
+        self.assertIn("Expired", mock_answer.call_args.args[1])
+
+
 if __name__ == "__main__":
     unittest.main()

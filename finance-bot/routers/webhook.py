@@ -24,6 +24,7 @@ from services.dashboard_auth import hash_password, is_valid_username, validate_p
 from services.firestore import (
     add_category_to_list,
     clear_user_state,
+    current_month_window,
     delete_category,
     delete_pending,
     delete_pending_change,
@@ -51,6 +52,7 @@ from services.firestore import (
     get_user_state,
     get_web_account_by_chat_id,
     list_payment_plans,
+    move_goal,
     reassign_transactions_category,
     remove_category_from_list,
     remove_budget,
@@ -933,8 +935,10 @@ def _format_goals_overview(chat_id: int) -> str:
     goals = get_goals(chat_id)
     if not goals:
         return "No goals yet. Send /new_goal to create one."
-    sums = sum_inflows_by_goal(chat_id)
-    lines = []
+    # Goals are monthly savings targets — progress resets each calendar month.
+    start, end = current_month_window()
+    sums = sum_inflows_by_goal(chat_id, start, end)
+    lines = ["🎯 <b>Goals this month</b>"]
     for goal in goals:
         target = goal.get("target_amount", 0.0)
         current = sums.get(goal["id"], 0.0)
@@ -1218,7 +1222,8 @@ async def webhook(request: Request):
                 return {"ok": True}
 
             field = callback_data.split(":", 1)[1]
-            goal_name = session.get("payload", {}).get("goal_name", "")
+            payload = session.get("payload", {})
+            goal_name = payload.get("goal_name", "")
             if field == "name":
                 update_session(chat_id, step="awaiting_new_name")
                 prompt = f"Send the new name for <b>{goal_name}</b>:"
@@ -1228,11 +1233,36 @@ async def webhook(request: Request):
             elif field == "target":
                 update_session(chat_id, step="awaiting_new_target")
                 prompt = f"Send the new target amount for <b>{goal_name}</b>, for example <code>3000</code>."
+            elif field == "reorder":
+                update_session(chat_id, step="reordering")
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_goal_reorder_keyboard(chat_id, get_goals(chat_id), payload.get("goal_id", ""))
+                return {"ok": True}
             else:
                 await telegram.answer_callback_query(callback_query_id, "Invalid")
                 return {"ok": True}
             await telegram.answer_callback_query(callback_query_id, "")
             await telegram.send_message(chat_id, prompt)
+            return {"ok": True}
+
+        if callback_data.startswith("goalmove:"):
+            session = await _get_active_session_or_expire(chat_id, "edit_goal")
+            if not session or session.get("step") != "reordering":
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+
+            action = callback_data.split(":", 1)[1]
+            goal_id = session.get("payload", {}).get("goal_id", "")
+            if action == "done":
+                clear_session(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "Done")
+                await telegram.send_message(chat_id, "✅ Goal order saved.")
+                return {"ok": True}
+
+            direction = -1 if action == "up" else 1
+            move_goal(chat_id, goal_id, direction)
+            await telegram.answer_callback_query(callback_query_id, "")
+            await telegram.send_goal_reorder_keyboard(chat_id, get_goals(chat_id), goal_id)
             return {"ok": True}
 
         if callback_data.startswith("goaldelconfirm:"):
@@ -2058,19 +2088,19 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, "⚠️ Amount must be a positive number.")
             return {"ok": True}
         update_pending_plan(chat_id, total_amount=amount)
-        set_user_state(chat_id, "awaiting_split_day")
-        await telegram.send_message(chat_id, "Which day of the month should each monthly charge post? Send a number from 1 to 31.")
+        set_user_state(chat_id, "awaiting_split_start_date")
+        await telegram.send_message(chat_id, "When should this plan start? Send a date as DDMMYY, for example <code>150726</code>.")
         return {"ok": True}
 
-    if user_state == "awaiting_split_day":
+    if user_state == "awaiting_split_start_date":
         pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
         if not pending:
             return {"ok": True}
-        day = _valid_day(text)
-        if day is None:
-            await telegram.send_message(chat_id, "⚠️ Day must be a number from 1 to 31.")
+        start_date = _valid_transaction_date(text)
+        if start_date is None:
+            await telegram.send_message(chat_id, "⚠️ Send a date as DDMMYY, for example <code>150726</code>.")
             return {"ok": True}
-        update_pending_plan(chat_id, day_of_month=day)
+        update_pending_plan(chat_id, start_date=start_date)
         set_user_state(chat_id, "awaiting_split_count")
         await telegram.send_message(chat_id, "How many months should this be split across?")
         return {"ok": True}
@@ -2083,7 +2113,7 @@ async def webhook(request: Request):
         if months is None:
             await telegram.send_message(chat_id, "⚠️ Months must be a positive integer.")
             return {"ok": True}
-        update_pending_plan(chat_id, installment_count=months)
+        update_pending_plan(chat_id, number_of_months=months)
         pending = get_pending_plan(chat_id)
         await create_plan_and_post_first_charge(chat_id, pending)
         return {"ok": True}

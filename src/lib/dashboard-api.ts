@@ -21,6 +21,7 @@ export type DashboardInflow = {
   timestamp: Date;
   chatId: number;
   goalId: string | null;
+  projectId: string | null;
 };
 
 export type DashboardGoal = {
@@ -29,6 +30,17 @@ export type DashboardGoal = {
   emoji: string;
   targetAmount: number;
   accumulated: number;
+  order: number;
+};
+
+export type DashboardProject = {
+  id: string;
+  name: string;
+  emoji: string;
+  targetAmount: number;
+  accumulated: number;
+  deadline: string;
+  order: number;
 };
 
 export type DashboardCategory = {
@@ -199,6 +211,7 @@ function parseInflow(data: Record<string, unknown>): DashboardInflow {
     timestamp: new Date(String(data.timestamp ?? "")),
     chatId: typeof data.chat_id === "number" ? data.chat_id : 0,
     goalId: data.goal_id ? String(data.goal_id) : null,
+    projectId: data.project_id ? String(data.project_id) : null,
   };
 }
 
@@ -209,6 +222,19 @@ function parseGoal(data: Record<string, unknown>): DashboardGoal {
     emoji: String(data.emoji ?? "🎯"),
     targetAmount: typeof data.target_amount === "number" ? data.target_amount : 0,
     accumulated: typeof data.accumulated === "number" ? data.accumulated : 0,
+    order: typeof data.order === "number" ? data.order : 0,
+  };
+}
+
+function parseProject(data: Record<string, unknown>): DashboardProject {
+  return {
+    id: String(data.id ?? ""),
+    name: String(data.name ?? ""),
+    emoji: String(data.emoji ?? "🚀"),
+    targetAmount: typeof data.target_amount === "number" ? data.target_amount : 0,
+    accumulated: typeof data.accumulated === "number" ? data.accumulated : 0,
+    deadline: String(data.deadline ?? ""),
+    order: typeof data.order === "number" ? data.order : 0,
   };
 }
 
@@ -328,12 +354,16 @@ export async function createDashboardInflow(payload: {
   item: string;
   amount: number;
   timestamp: Date;
+  goalId?: string | null;
+  projectId?: string | null;
 }) {
   await requestJson("POST", "/dashboard/inflows", {
     body: {
       item: payload.item,
       amount: payload.amount,
       timestamp: payload.timestamp.toISOString(),
+      ...(payload.goalId ? { goal_id: payload.goalId } : {}),
+      ...(payload.projectId ? { project_id: payload.projectId } : {}),
     },
   });
 }
@@ -351,6 +381,31 @@ export async function fetchDashboardCategories() {
   return (data.categories ?? []).map(parseCategory).sort((a, b) => a.order - b.order);
 }
 
+export async function createDashboardCategory(payload: { name: string; emoji: string }) {
+  await requestJson("POST", "/dashboard/categories", {
+    body: { name: payload.name, emoji: payload.emoji },
+  });
+}
+
+export async function updateDashboardCategory(
+  categoryName: string,
+  payload: { name: string; emoji: string },
+) {
+  await requestJson("PATCH", `/dashboard/categories/${encodeURIComponent(categoryName)}`, {
+    body: { name: payload.name, emoji: payload.emoji },
+  });
+}
+
+export async function deleteDashboardCategory(categoryName: string) {
+  await requestJson("DELETE", `/dashboard/categories/${encodeURIComponent(categoryName)}`);
+}
+
+export async function moveDashboardCategory(categoryName: string, direction: -1 | 1) {
+  await requestJson("POST", `/dashboard/categories/${encodeURIComponent(categoryName)}/move`, {
+    body: { direction },
+  });
+}
+
 export async function fetchDashboardGoals() {
   const data = await requestJson<{ goals?: Record<string, unknown>[] }>(
     "GET",
@@ -358,6 +413,88 @@ export async function fetchDashboardGoals() {
   );
 
   return (data.goals ?? []).map(parseGoal);
+}
+
+export async function createDashboardGoal(payload: {
+  name: string;
+  targetAmount: number;
+  emoji: string;
+}) {
+  await requestJson("POST", "/dashboard/goals", {
+    body: { name: payload.name, target_amount: payload.targetAmount, emoji: payload.emoji },
+  });
+}
+
+export async function updateDashboardGoal(
+  goalId: string,
+  payload: { name?: string; targetAmount?: number; emoji?: string },
+) {
+  await requestJson("PATCH", `/dashboard/goals/${goalId}`, {
+    body: {
+      ...(payload.name !== undefined ? { name: payload.name } : {}),
+      ...(payload.targetAmount !== undefined ? { target_amount: payload.targetAmount } : {}),
+      ...(payload.emoji !== undefined ? { emoji: payload.emoji } : {}),
+    },
+  });
+}
+
+export async function deleteDashboardGoal(goalId: string) {
+  await requestJson("DELETE", `/dashboard/goals/${goalId}`);
+}
+
+export async function moveDashboardGoal(goalId: string, direction: -1 | 1) {
+  await requestJson("POST", `/dashboard/goals/${goalId}/move`, {
+    body: { direction },
+  });
+}
+
+export async function fetchDashboardProjects() {
+  const data = await requestJson<{ projects?: Record<string, unknown>[] }>(
+    "GET",
+    "/dashboard/projects",
+  );
+
+  return (data.projects ?? []).map(parseProject);
+}
+
+export async function createDashboardProject(payload: {
+  name: string;
+  targetAmount: number;
+  deadline: string;
+  emoji: string;
+}) {
+  await requestJson("POST", "/dashboard/projects", {
+    body: {
+      name: payload.name,
+      target_amount: payload.targetAmount,
+      deadline: payload.deadline,
+      emoji: payload.emoji,
+    },
+  });
+}
+
+export async function updateDashboardProject(
+  projectId: string,
+  payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+) {
+  await requestJson("PATCH", `/dashboard/projects/${projectId}`, {
+    body: {
+      ...(payload.name !== undefined ? { name: payload.name } : {}),
+      ...(payload.targetAmount !== undefined ? { target_amount: payload.targetAmount } : {}),
+      ...(payload.deadline !== undefined ? { deadline: payload.deadline } : {}),
+      ...(payload.emoji !== undefined ? { emoji: payload.emoji } : {}),
+    },
+  });
+}
+
+export async function deleteDashboardProject(projectId: string) {
+  await requestJson("DELETE", `/dashboard/projects/${projectId}`);
+}
+
+export async function moveDashboardProject(projectId: string, direction: -1 | 1) {
+  await requestJson("POST", `/dashboard/projects/${projectId}/move`, {
+    body: { direction },
+  });
 }
 
 export async function fetchDashboardBudgets() {
@@ -463,7 +600,8 @@ export async function createDashboardTransaction(payload: {
   timestamp: Date;
   paymentType: DashboardPaymentType;
   dayOfMonth?: number;
-  installmentCount?: number;
+  startDate?: string; // split: ISO date the plan starts
+  numberOfMonths?: number; // split: months to spread across
   createFirstTransactionNow?: boolean;
 }) {
   await requestJson("POST", "/dashboard/transactions", {
@@ -474,8 +612,9 @@ export async function createDashboardTransaction(payload: {
       timestamp: payload.timestamp.toISOString(),
       payment_type: payload.paymentType,
       ...(payload.dayOfMonth !== undefined ? { day_of_month: payload.dayOfMonth } : {}),
-      ...(payload.installmentCount !== undefined
-        ? { installment_count: payload.installmentCount }
+      ...(payload.startDate !== undefined ? { start_date: payload.startDate } : {}),
+      ...(payload.numberOfMonths !== undefined
+        ? { number_of_months: payload.numberOfMonths }
         : {}),
       ...(payload.createFirstTransactionNow !== undefined
         ? { create_first_transaction_now: payload.createFirstTransactionNow }

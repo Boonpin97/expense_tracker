@@ -183,11 +183,14 @@ async def send_goal_keyboard(chat_id: int, goals: list[dict], action: str, promp
 
 
 async def send_goal_field_keyboard(chat_id: int, goal_name: str) -> dict:
-    keyboard = [[
-        {"text": "📝 Name", "callback_data": "goalfield:name"},
-        {"text": "😀 Emoji", "callback_data": "goalfield:emoji"},
-        {"text": "🎯 Target", "callback_data": "goalfield:target"},
-    ]]
+    keyboard = [
+        [
+            {"text": "📝 Name", "callback_data": "goalfield:name"},
+            {"text": "😀 Emoji", "callback_data": "goalfield:emoji"},
+            {"text": "🎯 Target", "callback_data": "goalfield:target"},
+        ],
+        [{"text": "🔄 Reorder", "callback_data": "goalfield:reorder"}],
+    ]
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
@@ -195,6 +198,33 @@ async def send_goal_field_keyboard(chat_id: int, goal_name: str) -> dict:
             json={
                 "chat_id": chat_id,
                 "text": f"What do you want to change on <b>{goal_name}</b>?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_goal_reorder_keyboard(chat_id: int, goals: list[dict], goal_id: str) -> dict:
+    """Show the goal's position with ⬆️/⬇️ buttons to move it, plus Done.
+    Callback data is `goalmove:up`/`goalmove:down`/`goalmove:done`."""
+    lines = ["Reordering goals — tap ⬆️/⬇️ to move the selected goal:"]
+    for index, goal in enumerate(goals, start=1):
+        marker = "👉 " if goal["id"] == goal_id else ""
+        lines.append(f"{marker}{index}. {goal.get('emoji', '🎯')} {goal['name']}")
+    keyboard = [
+        [
+            {"text": "⬆️ Up", "callback_data": "goalmove:up"},
+            {"text": "⬇️ Down", "callback_data": "goalmove:down"},
+        ],
+        [{"text": "✅ Done", "callback_data": "goalmove:done"}],
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "\n".join(lines),
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
             },

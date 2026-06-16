@@ -14,6 +14,7 @@ from models.transaction import (
     PaymentPlan,
     PendingPlan,
     PendingTransaction,
+    Project,
     Transaction,
 )
 from services.payment_plans import compute_next_due_date
@@ -140,6 +141,8 @@ def _goals_collection(chat_id: int):
 
 
 def save_goal(goal: Goal) -> str:
+    # New goals append to the end of the user's ordering.
+    goal.order = max((g.get("order", 0) for g in get_goals(goal.chat_id)), default=-1) + 1
     doc_ref = _goals_collection(goal.chat_id).document()
     goal.id = doc_ref.id
     doc_ref.set(goal.model_dump())
@@ -152,8 +155,17 @@ def get_goals(chat_id: int) -> list[dict]:
         data = doc.to_dict() or {}
         data["id"] = doc.id
         goals.append(data)
-    goals.sort(key=lambda goal: goal.get("created_at", ""))
+    # Sort by explicit order; goals predating the order field default to 0 and
+    # fall back to creation time, preserving their original display order.
+    goals.sort(key=lambda goal: (goal.get("order", 0), goal.get("created_at", "")))
     return goals
+
+
+def move_goal(chat_id: int, goal_id: str, direction: int) -> bool:
+    """Move a goal up (-1) or down (+1) in the user's ordering. Normalises all
+    goal ``order`` values to their sorted positions, then swaps the target with
+    its neighbour."""
+    return _move_ordered(_goals_collection(chat_id), get_goals(chat_id), goal_id, direction)
 
 
 def get_goal_by_id(chat_id: int, goal_id: str) -> Optional[dict]:
@@ -181,20 +193,125 @@ def delete_goal(chat_id: int, goal_id: str) -> bool:
     return True
 
 
-def sum_inflows_by_goal(chat_id: int) -> dict[str, float]:
-    """Sum all-time inflow amounts per goal_id.
+def _move_ordered(collection, ordered: list[dict], target_id: str, direction: int) -> bool:
+    """Reorder a list of order-bearing docs (each with an ``id``) by swapping the
+    target with its neighbour in ``direction`` (-1 up, +1 down). Normalises every
+    ``order`` to its sorted index and writes them in one batch, so docs predating
+    the order field get backfilled. Returns False if the move is out of bounds."""
+    index = next((i for i, item in enumerate(ordered) if item.get("id") == target_id), None)
+    if index is None:
+        return False
+    swap_with = index + direction
+    if swap_with < 0 or swap_with >= len(ordered):
+        return False
+    ordered[index], ordered[swap_with] = ordered[swap_with], ordered[index]
+    batch = get_db().batch()
+    for position, item in enumerate(ordered):
+        batch.update(collection.document(item["id"]), {"order": position})
+    batch.commit()
+    return True
 
-    Filters by chat_id only (single-field index) and groups in Python — the
-    same composite-index-avoiding approach as ``_stream_inflows``.
+
+def _sum_inflows_grouped(
+    chat_id: int,
+    field: str,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, float]:
+    """Sum inflow amounts grouped by ``field`` (e.g. ``goal_id``/``project_id``).
+
+    Filters by chat_id only (single-field index) and groups in Python — the same
+    composite-index-avoiding approach as ``_stream_inflows``. When ``start``/``end``
+    are given, only inflows whose timestamp falls in ``[start, end)`` are counted.
     """
+    start_iso = start.isoformat() if start else None
+    end_iso = end.isoformat() if end else None
     sums: dict[str, float] = {}
     for doc in get_db().collection("inflows").where("chat_id", "==", chat_id).stream():
         data = doc.to_dict() or {}
-        goal_id = data.get("goal_id")
-        if not goal_id:
+        key = data.get(field)
+        if not key:
             continue
-        sums[goal_id] = sums.get(goal_id, 0.0) + data.get("amount", 0.0)
+        if start_iso is not None:
+            timestamp = data.get("timestamp", "")
+            if not (start_iso <= timestamp < end_iso):
+                continue
+        sums[key] = sums.get(key, 0.0) + data.get("amount", 0.0)
     return sums
+
+
+def sum_inflows_by_goal(
+    chat_id: int,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, float]:
+    """Sum inflow amounts per goal_id. Goals are monthly savings targets, so
+    callers pass the current-month window; with no window this sums all-time."""
+    return _sum_inflows_grouped(chat_id, "goal_id", start, end)
+
+
+def current_month_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+    """Return [first-of-month, first-of-next-month) in SGT for monthly goal sums."""
+    now = now or datetime.now(SGT)
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
+    return start, end
+
+
+def _projects_collection(chat_id: int):
+    return get_db().collection(f"users/{chat_id}/projects")
+
+
+def save_project(project: Project) -> str:
+    project.order = max((p.get("order", 0) for p in get_projects(project.chat_id)), default=-1) + 1
+    doc_ref = _projects_collection(project.chat_id).document()
+    project.id = doc_ref.id
+    doc_ref.set(project.model_dump())
+    return doc_ref.id
+
+
+def get_projects(chat_id: int) -> list[dict]:
+    projects = []
+    for doc in _projects_collection(chat_id).stream():
+        data = doc.to_dict() or {}
+        data["id"] = doc.id
+        projects.append(data)
+    projects.sort(key=lambda project: (project.get("order", 0), project.get("created_at", "")))
+    return projects
+
+
+def get_project_by_id(chat_id: int, project_id: str) -> Optional[dict]:
+    doc = _projects_collection(chat_id).document(project_id).get()
+    if not doc.exists:
+        return None
+    data = doc.to_dict() or {}
+    data["id"] = doc.id
+    return data
+
+
+def update_project(chat_id: int, project_id: str, **fields) -> bool:
+    doc_ref = _projects_collection(chat_id).document(project_id)
+    if not doc_ref.get().exists:
+        return False
+    doc_ref.update(fields)
+    return True
+
+
+def delete_project(chat_id: int, project_id: str) -> bool:
+    doc_ref = _projects_collection(chat_id).document(project_id)
+    if not doc_ref.get().exists:
+        return False
+    doc_ref.delete()
+    return True
+
+
+def move_project(chat_id: int, project_id: str, direction: int) -> bool:
+    return _move_ordered(_projects_collection(chat_id), get_projects(chat_id), project_id, direction)
+
+
+def sum_inflows_by_project(chat_id: int) -> dict[str, float]:
+    """Sum all-time inflow amounts per project_id. Projects are cumulative."""
+    return _sum_inflows_grouped(chat_id, "project_id")
 
 
 def delete_transactions_for_plan(plan_id: str) -> int:
@@ -804,8 +921,15 @@ def list_due_payment_plans(today: datetime) -> list[dict]:
     for doc in docs:
         data = doc.to_dict()
         data["id"] = doc.id
-        next_due = datetime.fromisoformat(data["next_due_date"]).astimezone(SGT)
-        if next_due.date() == today.date():
+        raw_due = data.get("next_due_date")
+        if not raw_due:
+            continue
+        next_due = datetime.fromisoformat(raw_due).astimezone(SGT)
+        # Catch up any charge that is due today OR overdue. Using exact-date
+        # equality means a plan missed on its due date (scheduler down, a
+        # partial-failure run, etc.) would never be retried, because its
+        # next_due_date stays pinned to a past date that never matches again.
+        if next_due.date() <= today.date():
             due_plans.append(data)
     return due_plans
 

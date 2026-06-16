@@ -22,11 +22,15 @@ import {
   Plus,
   Repeat2,
   Trash2,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -76,11 +80,17 @@ import {
 } from "recharts";
 import {
   DashboardApiError,
+  createDashboardCategory,
+  createDashboardGoal,
   createDashboardInflow,
+  createDashboardProject,
   createDashboardTransaction,
   deleteDashboardBudget,
+  deleteDashboardCategory,
+  deleteDashboardGoal,
   deleteDashboardInflow,
   deleteDashboardPlan,
+  deleteDashboardProject,
   deleteDashboardTransaction,
   fetchDashboardBudgets,
   fetchDashboardCategories,
@@ -88,13 +98,20 @@ import {
   fetchDashboardInflows,
   fetchDashboardPlans,
   fetchDashboardPreferences,
+  fetchDashboardProjects,
   fetchDashboardSession,
   fetchDashboardTransactions,
   loginToDashboard,
   logoutFromDashboard,
+  moveDashboardCategory,
+  moveDashboardGoal,
+  moveDashboardProject,
   updateDashboardBudget,
+  updateDashboardCategory,
+  updateDashboardGoal,
   updateDashboardPreferences,
   updateDashboardPlan,
+  updateDashboardProject,
   updateDashboardTransaction,
   type DashboardCategory,
   type DashboardGoal,
@@ -102,6 +119,7 @@ import {
   type DashboardPaymentType,
   type DashboardPreferences,
   type DashboardPlan,
+  type DashboardProject,
   type DashboardSession,
   type DashboardTransaction,
 } from "@/lib/dashboard-api";
@@ -128,7 +146,16 @@ const currency = new Intl.NumberFormat("en-US", {
 const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
 const TRANSACTIONS_PAGE_SIZE = 25;
 
-type DashboardTab = "overview" | "charts" | "budget" | "transactions" | "income" | "goals" | "plans";
+type DashboardTab =
+  | "overview"
+  | "charts"
+  | "budget"
+  | "categories"
+  | "transactions"
+  | "income"
+  | "goals"
+  | "projects"
+  | "plans";
 type RangeKey = "today" | "yesterday" | "weekly" | "current-month" | "30d" | "ytd" | "custom";
 type TxnJump = {
   category: string | null;
@@ -375,6 +402,7 @@ function DashboardShell({
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
   const [inflows, setInflows] = useState<DashboardInflow[]>([]);
   const [goals, setGoals] = useState<DashboardGoal[]>([]);
+  const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [plans, setPlans] = useState<DashboardPlan[]>([]);
   const [preferences, setPreferences] = useState<DashboardPreferences>({
     overviewVisibleCards: [],
@@ -392,16 +420,18 @@ function DashboardShell({
       fetchDashboardTransactions({ start: HISTORY_START, end: endOfDay(now) }),
       fetchDashboardInflows({ start: HISTORY_START, end: endOfDay(now) }),
       fetchDashboardGoals(),
+      fetchDashboardProjects(),
       fetchDashboardPlans(),
       fetchDashboardPreferences(),
     ])
-      .then(([cats, buds, txns, infs, gls, pls, prefs]) => {
+      .then(([cats, buds, txns, infs, gls, prjs, pls, prefs]) => {
         if (!active) return;
         setCategories(cats);
         setBudgets(buds);
         setTransactions(txns);
         setInflows(infs);
         setGoals(gls);
+        setProjects(prjs);
         setPlans(pls);
         setPreferences(prefs);
         setLoading(false);
@@ -457,7 +487,8 @@ function DashboardShell({
     timestamp: Date;
     paymentType: DashboardPaymentType;
     dayOfMonth?: number;
-    installmentCount?: number;
+    startDate?: string;
+    numberOfMonths?: number;
     createFirstTransactionNow?: boolean;
   }) {
     await createDashboardTransaction(payload);
@@ -470,20 +501,118 @@ function DashboardShell({
     setPlans(pls);
   }
 
-  async function handleCreateInflow(payload: { item: string; amount: number; timestamp: Date }) {
-    await createDashboardInflow(payload);
-    const end = endOfDay(new Date(Math.max(Date.now(), payload.timestamp.getTime())));
-    setInflows(await fetchDashboardInflows({ start: HISTORY_START, end }));
-  }
-
-  async function handleDeleteInflow(inflowId: string) {
-    await deleteDashboardInflow(inflowId);
-    setInflows((current) => current.filter((inflow) => inflow.id !== inflowId));
+  const refreshGoals = useCallback(async () => {
     try {
       setGoals(await fetchDashboardGoals());
     } catch {
       // silent — stale progress remains visible until the next refresh
     }
+  }, []);
+
+  const refreshProjects = useCallback(async () => {
+    try {
+      setProjects(await fetchDashboardProjects());
+    } catch {
+      // silent — stale progress remains visible until the next refresh
+    }
+  }, []);
+
+  const refreshCategories = useCallback(async () => {
+    try {
+      setCategories(await fetchDashboardCategories());
+    } catch {
+      // silent — stale data remains visible
+    }
+  }, []);
+
+  async function handleCreateInflow(payload: {
+    item: string;
+    amount: number;
+    timestamp: Date;
+    goalId?: string | null;
+    projectId?: string | null;
+  }) {
+    await createDashboardInflow(payload);
+    const end = endOfDay(new Date(Math.max(Date.now(), payload.timestamp.getTime())));
+    setInflows(await fetchDashboardInflows({ start: HISTORY_START, end }));
+    await Promise.all([refreshGoals(), refreshProjects()]);
+  }
+
+  async function handleDeleteInflow(inflowId: string) {
+    await deleteDashboardInflow(inflowId);
+    setInflows((current) => current.filter((inflow) => inflow.id !== inflowId));
+    await Promise.all([refreshGoals(), refreshProjects()]);
+  }
+
+  async function handleCreateGoal(payload: { name: string; targetAmount: number; emoji: string }) {
+    await createDashboardGoal(payload);
+    await refreshGoals();
+  }
+
+  async function handleUpdateGoal(
+    goalId: string,
+    payload: { name?: string; targetAmount?: number; emoji?: string },
+  ) {
+    await updateDashboardGoal(goalId, payload);
+    await refreshGoals();
+  }
+
+  async function handleDeleteGoal(goalId: string) {
+    await deleteDashboardGoal(goalId);
+    setGoals((current) => current.filter((goal) => goal.id !== goalId));
+  }
+
+  async function handleMoveGoal(goalId: string, direction: -1 | 1) {
+    await moveDashboardGoal(goalId, direction);
+    await refreshGoals();
+  }
+
+  async function handleCreateProject(payload: {
+    name: string;
+    targetAmount: number;
+    deadline: string;
+    emoji: string;
+  }) {
+    await createDashboardProject(payload);
+    await refreshProjects();
+  }
+
+  async function handleUpdateProject(
+    projectId: string,
+    payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+  ) {
+    await updateDashboardProject(projectId, payload);
+    await refreshProjects();
+  }
+
+  async function handleDeleteProject(projectId: string) {
+    await deleteDashboardProject(projectId);
+    setProjects((current) => current.filter((project) => project.id !== projectId));
+  }
+
+  async function handleMoveProject(projectId: string, direction: -1 | 1) {
+    await moveDashboardProject(projectId, direction);
+    await refreshProjects();
+  }
+
+  async function handleCreateCategory(payload: { name: string; emoji: string }) {
+    await createDashboardCategory(payload);
+    await refreshCategories();
+  }
+
+  async function handleUpdateCategory(categoryName: string, payload: { name: string; emoji: string }) {
+    await updateDashboardCategory(categoryName, payload);
+    await refreshCategories();
+  }
+
+  async function handleDeleteCategory(categoryName: string) {
+    await deleteDashboardCategory(categoryName);
+    await refreshCategories();
+  }
+
+  async function handleMoveCategory(categoryName: string, direction: -1 | 1) {
+    await moveDashboardCategory(categoryName, direction);
+    await refreshCategories();
   }
 
   const refreshBudgets = useCallback(async () => {
@@ -532,6 +661,7 @@ function DashboardShell({
       transactions={transactions}
       inflows={inflows}
       goals={goals}
+      projects={projects}
       plans={plans}
       preferences={preferences}
       onDeleteTransaction={handleDeleteTransaction}
@@ -544,6 +674,18 @@ function DashboardShell({
       onUpdatePlan={handleUpdatePlan}
       onDeletePlan={handleDeletePlan}
       onUpdatePreferences={handleUpdatePreferences}
+      onCreateGoal={handleCreateGoal}
+      onUpdateGoal={handleUpdateGoal}
+      onDeleteGoal={handleDeleteGoal}
+      onMoveGoal={handleMoveGoal}
+      onCreateProject={handleCreateProject}
+      onUpdateProject={handleUpdateProject}
+      onDeleteProject={handleDeleteProject}
+      onMoveProject={handleMoveProject}
+      onCreateCategory={handleCreateCategory}
+      onUpdateCategory={handleUpdateCategory}
+      onDeleteCategory={handleDeleteCategory}
+      onMoveCategory={handleMoveCategory}
     />
   );
 }
@@ -557,6 +699,7 @@ function DashboardLayout({
   transactions,
   inflows,
   goals,
+  projects,
   plans,
   preferences,
   onDeleteTransaction,
@@ -569,6 +712,18 @@ function DashboardLayout({
   onUpdatePlan,
   onDeletePlan,
   onUpdatePreferences,
+  onCreateGoal,
+  onUpdateGoal,
+  onDeleteGoal,
+  onMoveGoal,
+  onCreateProject,
+  onUpdateProject,
+  onDeleteProject,
+  onMoveProject,
+  onCreateCategory,
+  onUpdateCategory,
+  onDeleteCategory,
+  onMoveCategory,
 }: {
   session: DashboardSession;
   loading: boolean;
@@ -578,6 +733,7 @@ function DashboardLayout({
   transactions: DashboardTransaction[];
   inflows: DashboardInflow[];
   goals: DashboardGoal[];
+  projects: DashboardProject[];
   plans: DashboardPlan[];
   preferences: DashboardPreferences;
   onDeleteTransaction: (transactionId: string) => Promise<void>;
@@ -598,10 +754,17 @@ function DashboardLayout({
     timestamp: Date;
     paymentType: DashboardPaymentType;
     dayOfMonth?: number;
-    installmentCount?: number;
+    startDate?: string;
+    numberOfMonths?: number;
     createFirstTransactionNow?: boolean;
   }) => Promise<void>;
-  onCreateInflow: (payload: { item: string; amount: number; timestamp: Date }) => Promise<void>;
+  onCreateInflow: (payload: {
+    item: string;
+    amount: number;
+    timestamp: Date;
+    goalId?: string | null;
+    projectId?: string | null;
+  }) => Promise<void>;
   onDeleteInflow: (inflowId: string) => Promise<void>;
   onRefreshBudgets: () => Promise<void>;
   onUpdatePlan: (
@@ -617,6 +780,29 @@ function DashboardLayout({
   ) => Promise<void>;
   onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
   onUpdatePreferences: (next: DashboardPreferences) => Promise<void>;
+  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string }) => Promise<void>;
+  onUpdateGoal: (
+    goalId: string,
+    payload: { name?: string; targetAmount?: number; emoji?: string },
+  ) => Promise<void>;
+  onDeleteGoal: (goalId: string) => Promise<void>;
+  onMoveGoal: (goalId: string, direction: -1 | 1) => Promise<void>;
+  onCreateProject: (payload: {
+    name: string;
+    targetAmount: number;
+    deadline: string;
+    emoji: string;
+  }) => Promise<void>;
+  onUpdateProject: (
+    projectId: string,
+    payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+  ) => Promise<void>;
+  onDeleteProject: (projectId: string) => Promise<void>;
+  onMoveProject: (projectId: string, direction: -1 | 1) => Promise<void>;
+  onCreateCategory: (payload: { name: string; emoji: string }) => Promise<void>;
+  onUpdateCategory: (categoryName: string, payload: { name: string; emoji: string }) => Promise<void>;
+  onDeleteCategory: (categoryName: string) => Promise<void>;
+  onMoveCategory: (categoryName: string, direction: -1 | 1) => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [visibleOverviewCards, setVisibleOverviewCards] = useState<string[]>([]);
@@ -631,6 +817,7 @@ function DashboardLayout({
   const [newInflowItem, setNewInflowItem] = useState("");
   const [newInflowAmount, setNewInflowAmount] = useState("");
   const [newInflowTimestamp, setNewInflowTimestamp] = useState(formatDateTimeInputValue(new Date()));
+  const [newInflowTarget, setNewInflowTarget] = useState("none");
   const [creatingInflow, setCreatingInflow] = useState(false);
   const [createInflowError, setCreateInflowError] = useState<string | null>(null);
   const [newItem, setNewItem] = useState("");
@@ -639,6 +826,7 @@ function DashboardLayout({
   const [newTimestamp, setNewTimestamp] = useState(formatDateTimeInputValue(new Date()));
   const [newPaymentType, setNewPaymentType] = useState<DashboardPaymentType>("one_time");
   const [newDayOfMonth, setNewDayOfMonth] = useState("");
+  const [newStartDate, setNewStartDate] = useState("");
   const [newInstallmentCount, setNewInstallmentCount] = useState("");
   const [createFirstTransactionNow, setCreateFirstTransactionNow] = useState(true);
   const [creatingTransaction, setCreatingTransaction] = useState(false);
@@ -757,6 +945,7 @@ function DashboardLayout({
     setNewTimestamp(formatDateTimeInputValue(new Date()));
     setNewPaymentType("one_time");
     setNewDayOfMonth("");
+    setNewStartDate("");
     setNewInstallmentCount("");
     setCreateFirstTransactionNow(true);
     setCreateTransactionError(null);
@@ -777,6 +966,7 @@ function DashboardLayout({
     setNewInflowItem("");
     setNewInflowAmount("");
     setNewInflowTimestamp(formatDateTimeInputValue(new Date()));
+    setNewInflowTarget("none");
     setCreateInflowError(null);
     setAddInflowOpen(true);
   }
@@ -789,9 +979,11 @@ function DashboardLayout({
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) { setCreateInflowError("Amount must be a positive number."); return; }
     const when = new Date(newInflowTimestamp);
     if (Number.isNaN(when.getTime())) { setCreateInflowError("Date is invalid."); return; }
+    const goalId = newInflowTarget.startsWith("goal:") ? newInflowTarget.slice("goal:".length) : null;
+    const projectId = newInflowTarget.startsWith("project:") ? newInflowTarget.slice("project:".length) : null;
     setCreatingInflow(true);
     try {
-      await onCreateInflow({ item: trimmed, amount: parsedAmount, timestamp: when });
+      await onCreateInflow({ item: trimmed, amount: parsedAmount, timestamp: when, goalId, projectId });
       setAddInflowOpen(false);
     } catch (caught) {
       setCreateInflowError(caught instanceof Error ? caught.message : "Could not add inflow.");
@@ -926,9 +1118,11 @@ function DashboardLayout({
     const amount = Number(newAmount);
     const timestamp = new Date(newTimestamp);
     const needsPlanFields = newPaymentType !== "one_time";
-    const dayOfMonth = needsPlanFields ? parseInt(newDayOfMonth, 10) : undefined;
-    const installmentCount =
-      newPaymentType === "split_payment" ? parseInt(newInstallmentCount, 10) : undefined;
+    const isSplit = newPaymentType === "split_payment";
+    const isRecurring = newPaymentType === "recurring";
+    const dayOfMonth = isRecurring ? parseInt(newDayOfMonth, 10) : undefined;
+    const numberOfMonths = isSplit ? parseInt(newInstallmentCount, 10) : undefined;
+    const startDate = isSplit ? newStartDate : undefined;
 
     if (!item) {
       setCreateTransactionError("Item is required.");
@@ -940,9 +1134,7 @@ function DashboardLayout({
     }
     if (Number.isNaN(amount) || amount <= 0) {
       setCreateTransactionError(
-        newPaymentType === "split_payment"
-          ? "Total amount must be a positive number."
-          : "Amount must be a positive number.",
+        isSplit ? "Total amount must be a positive number." : "Amount must be a positive number.",
       );
       return;
     }
@@ -950,14 +1142,15 @@ function DashboardLayout({
       setCreateTransactionError("Date is invalid.");
       return;
     }
-    if (needsPlanFields && (dayOfMonth === undefined || Number.isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31)) {
+    if (isRecurring && (dayOfMonth === undefined || Number.isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31)) {
       setCreateTransactionError("Day of month must be between 1 and 31.");
       return;
     }
-    if (
-      newPaymentType === "split_payment" &&
-      (installmentCount === undefined || Number.isNaN(installmentCount) || installmentCount < 1)
-    ) {
+    if (isSplit && (!startDate || Number.isNaN(new Date(startDate).getTime()))) {
+      setCreateTransactionError("Start date is required.");
+      return;
+    }
+    if (isSplit && (numberOfMonths === undefined || Number.isNaN(numberOfMonths) || numberOfMonths < 1)) {
       setCreateTransactionError("Number of months must be at least 1.");
       return;
     }
@@ -972,7 +1165,8 @@ function DashboardLayout({
         timestamp,
         paymentType: newPaymentType,
         ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
-        ...(installmentCount !== undefined ? { installmentCount } : {}),
+        ...(startDate ? { startDate } : {}),
+        ...(numberOfMonths !== undefined ? { numberOfMonths } : {}),
         ...(needsPlanFields ? { createFirstTransactionNow } : {}),
       });
       setAddTransactionOpen(false);
@@ -1031,14 +1225,16 @@ function DashboardLayout({
           onValueChange={(value) => setActiveTab(value as DashboardTab)}
           className="space-y-6"
         >
-          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-7 sm:inline-grid">
+          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-9 sm:inline-grid">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
+            <TabsTrigger value="categories">Category</TabsTrigger>
             <TabsTrigger value="transactions">Expenses</TabsTrigger>
             <TabsTrigger value="income">Income</TabsTrigger>
             <TabsTrigger value="goals">Goals</TabsTrigger>
-            <TabsTrigger value="plans">Plans</TabsTrigger>
+            <TabsTrigger value="projects">Long-Term Projects</TabsTrigger>
+            <TabsTrigger value="plans">Subscriptions</TabsTrigger>
           </TabsList>
           <div className="flex min-h-9 items-center justify-start gap-2">
             <div className="flex items-center gap-2">
@@ -1294,6 +1490,17 @@ function DashboardLayout({
             </Card>
           </TabsContent>
 
+          <TabsContent value="categories" className="space-y-6">
+            <CategoriesTab
+              categories={categories}
+              loading={loading}
+              onCreateCategory={onCreateCategory}
+              onUpdateCategory={onUpdateCategory}
+              onDeleteCategory={onDeleteCategory}
+              onMoveCategory={onMoveCategory}
+            />
+          </TabsContent>
+
           <TabsContent value="transactions" className="space-y-6">
             <TransactionsTab
               transactions={transactions}
@@ -1310,13 +1517,33 @@ function DashboardLayout({
           <TabsContent value="income" className="space-y-6">
             <IncomeTab
               inflows={inflows}
+              goals={goals}
+              projects={projects}
               loading={loading}
               onDeleteInflow={onDeleteInflow}
             />
           </TabsContent>
 
           <TabsContent value="goals" className="space-y-6">
-            <GoalsTab goals={goals} loading={loading} />
+            <GoalsTab
+              goals={goals}
+              loading={loading}
+              onCreateGoal={onCreateGoal}
+              onUpdateGoal={onUpdateGoal}
+              onDeleteGoal={onDeleteGoal}
+              onMoveGoal={onMoveGoal}
+            />
+          </TabsContent>
+
+          <TabsContent value="projects" className="space-y-6">
+            <ProjectsTab
+              projects={projects}
+              loading={loading}
+              onCreateProject={onCreateProject}
+              onUpdateProject={onUpdateProject}
+              onDeleteProject={onDeleteProject}
+              onMoveProject={onMoveProject}
+            />
           </TabsContent>
 
           <TabsContent value="plans" className="space-y-6">
@@ -1418,33 +1645,47 @@ function DashboardLayout({
               </div>
               {newPaymentType !== "one_time" ? (
                 <>
-                  <div className="space-y-2">
-                    <Label htmlFor="new-day-of-month">Monthly Charge Day</Label>
-                    <Input
-                      id="new-day-of-month"
-                      type="number"
-                      inputMode="numeric"
-                      min="1"
-                      max="31"
-                      value={newDayOfMonth}
-                      onChange={(e) => setNewDayOfMonth(e.target.value)}
-                      disabled={creatingTransaction}
-                    />
-                  </div>
-                  {newPaymentType === "split_payment" ? (
+                  {newPaymentType === "recurring" ? (
                     <div className="space-y-2">
-                      <Label htmlFor="new-installment-count">Number of Months</Label>
+                      <Label htmlFor="new-day-of-month">Monthly Charge Day</Label>
                       <Input
-                        id="new-installment-count"
+                        id="new-day-of-month"
                         type="number"
                         inputMode="numeric"
                         min="1"
-                        step="1"
-                        value={newInstallmentCount}
-                        onChange={(e) => setNewInstallmentCount(e.target.value)}
+                        max="31"
+                        value={newDayOfMonth}
+                        onChange={(e) => setNewDayOfMonth(e.target.value)}
                         disabled={creatingTransaction}
                       />
                     </div>
+                  ) : null}
+                  {newPaymentType === "split_payment" ? (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="new-start-date">Start Date</Label>
+                        <Input
+                          id="new-start-date"
+                          type="date"
+                          value={newStartDate}
+                          onChange={(e) => setNewStartDate(e.target.value)}
+                          disabled={creatingTransaction}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="new-installment-count">Number of Months</Label>
+                        <Input
+                          id="new-installment-count"
+                          type="number"
+                          inputMode="numeric"
+                          min="1"
+                          step="1"
+                          value={newInstallmentCount}
+                          onChange={(e) => setNewInstallmentCount(e.target.value)}
+                          disabled={creatingTransaction}
+                        />
+                      </div>
+                    </>
                   ) : null}
                   <div className="rounded-xl border border-border/70 bg-secondary/30 px-4 py-3">
                     <label className="flex items-start gap-3 text-sm">
@@ -1528,6 +1769,37 @@ function DashboardLayout({
                   onChange={(e) => setNewInflowTimestamp(e.target.value)}
                   disabled={creatingInflow}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-target">Assign to</Label>
+                <Select value={newInflowTarget} onValueChange={setNewInflowTarget} disabled={creatingInflow}>
+                  <SelectTrigger id="new-inflow-target">
+                    <SelectValue placeholder="None" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {goals.length > 0 ? (
+                      <SelectGroup>
+                        <SelectLabel>Goals (monthly)</SelectLabel>
+                        {goals.map((goal) => (
+                          <SelectItem key={`goal:${goal.id}`} value={`goal:${goal.id}`}>
+                            {goal.emoji} {goal.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ) : null}
+                    {projects.length > 0 ? (
+                      <SelectGroup>
+                        <SelectLabel>Long-term projects</SelectLabel>
+                        {projects.map((project) => (
+                          <SelectItem key={`project:${project.id}`} value={`project:${project.id}`}>
+                            {project.emoji} {project.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ) : null}
+                  </SelectContent>
+                </Select>
               </div>
               {createInflowError && <p className="text-sm text-destructive">{createInflowError}</p>}
             </div>
@@ -3120,14 +3392,29 @@ function CategoryFilterPopover({
 
 function IncomeTab({
   inflows,
+  goals,
+  projects,
   loading,
   onDeleteInflow,
 }: {
   inflows: DashboardInflow[];
+  goals: DashboardGoal[];
+  projects: DashboardProject[];
   loading: boolean;
   onDeleteInflow: (inflowId: string) => Promise<void>;
 }) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const targetLabels = useMemo(() => {
+    const map: Record<string, string> = {};
+    goals.forEach((goal) => {
+      map[`goal:${goal.id}`] = `${goal.emoji} ${goal.name}`;
+    });
+    projects.forEach((project) => {
+      map[`project:${project.id}`] = `${project.emoji} ${project.name}`;
+    });
+    return map;
+  }, [goals, projects]);
 
   const sorted = useMemo(
     () => [...inflows].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()),
@@ -3147,6 +3434,12 @@ function IncomeTab({
     } finally {
       setDeletingId(null);
     }
+  }
+
+  function assignmentLabel(inflow: DashboardInflow) {
+    if (inflow.goalId) return targetLabels[`goal:${inflow.goalId}`] ?? null;
+    if (inflow.projectId) return targetLabels[`project:${inflow.projectId}`] ?? null;
+    return null;
   }
 
   return (
@@ -3172,31 +3465,41 @@ function IncomeTab({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sorted.map((inflow) => (
-                  <TableRow key={inflow.id}>
-                    <TableCell className="font-medium">{inflow.item}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {format(inflow.timestamp, "MMM d, yyyy")}
-                    </TableCell>
-                    <TableCell className="text-right font-semibold text-emerald-500">
-                      +{currency.format(inflow.amount)}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        disabled={deletingId === inflow.id}
-                        onClick={() => void handleDelete(inflow.id)}
-                      >
-                        {deletingId === inflow.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {sorted.map((inflow) => {
+                  const assigned = assignmentLabel(inflow);
+                  return (
+                    <TableRow key={inflow.id}>
+                      <TableCell className="font-medium">
+                        {inflow.item}
+                        {assigned ? (
+                          <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
+                            {assigned}
+                          </span>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {format(inflow.timestamp, "MMM d, yyyy")}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold text-emerald-500">
+                        +{currency.format(inflow.amount)}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          disabled={deletingId === inflow.id}
+                          onClick={() => void handleDelete(inflow.id)}
+                        >
+                          {deletingId === inflow.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -3206,22 +3509,122 @@ function IncomeTab({
   );
 }
 
-function GoalsTab({ goals, loading }: { goals: DashboardGoal[]; loading: boolean }) {
+function GoalsTab({
+  goals,
+  loading,
+  onCreateGoal,
+  onUpdateGoal,
+  onDeleteGoal,
+  onMoveGoal,
+}: {
+  goals: DashboardGoal[];
+  loading: boolean;
+  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string }) => Promise<void>;
+  onUpdateGoal: (
+    goalId: string,
+    payload: { name?: string; targetAmount?: number; emoji?: string },
+  ) => Promise<void>;
+  onDeleteGoal: (goalId: string) => Promise<void>;
+  onMoveGoal: (goalId: string, direction: -1 | 1) => Promise<void>;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formName, setFormName] = useState("");
+  const [formEmoji, setFormEmoji] = useState("🎯");
+  const [formTarget, setFormTarget] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  function openAdd() {
+    setEditingId(null);
+    setFormName("");
+    setFormEmoji("🎯");
+    setFormTarget("");
+    setFormError(null);
+    setDialogOpen(true);
+  }
+
+  function openEdit(goal: DashboardGoal) {
+    setEditingId(goal.id);
+    setFormName(goal.name);
+    setFormEmoji(goal.emoji);
+    setFormTarget(String(goal.targetAmount));
+    setFormError(null);
+    setDialogOpen(true);
+  }
+
+  async function handleSubmit() {
+    const name = formName.trim();
+    const target = Number(formTarget);
+    if (!name) {
+      setFormError("Name is required.");
+      return;
+    }
+    if (!Number.isFinite(target) || target <= 0) {
+      setFormError("Target must be a positive number.");
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    try {
+      if (editingId) {
+        await onUpdateGoal(editingId, { name, targetAmount: target, emoji: formEmoji.trim() || "🎯" });
+      } else {
+        await onCreateGoal({ name, targetAmount: target, emoji: formEmoji.trim() || "🎯" });
+      }
+      setDialogOpen(false);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Unable to save goal.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(goal: DashboardGoal) {
+    if (!window.confirm(`Delete goal "${goal.name}"?`)) return;
+    setBusyId(goal.id);
+    try {
+      await onDeleteGoal(goal.id);
+    } catch {
+      // next refresh reconciles
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleMove(goal: DashboardGoal, direction: -1 | 1) {
+    setBusyId(goal.id);
+    try {
+      await onMoveGoal(goal.id, direction);
+    } catch {
+      // next refresh reconciles
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Goals</CardTitle>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-lg">Goals</CardTitle>
+            <p className="text-xs text-muted-foreground">Monthly savings targets — progress resets each month.</p>
+          </div>
+          <Button size="sm" className="gap-1" onClick={openAdd}>
+            <Plus className="h-4 w-4" />
+            Add Goal
+          </Button>
         </CardHeader>
         <CardContent className="space-y-5">
           {loading ? (
             <CenteredListMessage label="Loading goals..." />
           ) : goals.length === 0 ? (
-            <CenteredListMessage label="No goals yet — create one in Telegram with /new_goal." />
+            <CenteredListMessage label="No goals yet — add one to start tracking a monthly target." />
           ) : (
-            goals.map((goal) => {
-              const pct =
-                goal.targetAmount > 0 ? (goal.accumulated / goal.targetAmount) * 100 : 0;
+            goals.map((goal, index) => {
+              const pct = goal.targetAmount > 0 ? (goal.accumulated / goal.targetAmount) * 100 : 0;
               const reached = goal.targetAmount > 0 && goal.accumulated >= goal.targetAmount;
               return (
                 <div key={goal.id} className="space-y-2">
@@ -3232,14 +3635,57 @@ function GoalsTab({ goals, loading }: { goals: DashboardGoal[]; loading: boolean
                       </span>
                       <p className="font-medium text-sm">{goal.name}</p>
                     </div>
-                    <p
-                      className={`text-sm font-semibold shrink-0 ${reached ? "text-emerald-500" : "text-foreground"}`}
-                    >
-                      {currency.format(goal.accumulated)}{" "}
-                      <span className="text-muted-foreground font-normal">
-                        / {currency.format(goal.targetAmount)} ({Math.round(pct)}%)
-                      </span>
-                    </p>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <p className={`text-sm font-semibold ${reached ? "text-emerald-500" : "text-foreground"}`}>
+                        {currency.format(goal.accumulated)}{" "}
+                        <span className="text-muted-foreground font-normal">
+                          / {currency.format(goal.targetAmount)} ({Math.round(pct)}%)
+                        </span>
+                      </p>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={busyId === goal.id || index === 0}
+                        aria-label={`Move ${goal.name} up`}
+                        onClick={() => void handleMove(goal, -1)}
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={busyId === goal.id || index === goals.length - 1}
+                        aria-label={`Move ${goal.name} down`}
+                        onClick={() => void handleMove(goal, 1)}
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        aria-label={`Edit ${goal.name}`}
+                        onClick={() => openEdit(goal)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        disabled={busyId === goal.id}
+                        aria-label={`Delete ${goal.name}`}
+                        onClick={() => void handleDelete(goal)}
+                      >
+                        {busyId === goal.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </div>
                   </div>
                   <Progress
                     value={Math.min(pct, 100)}
@@ -3251,6 +3697,527 @@ function GoalsTab({ goals, loading }: { goals: DashboardGoal[]; loading: boolean
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open && !saving) setDialogOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingId ? "Edit Goal" : "Add Goal"}</DialogTitle>
+            <DialogDescription>A monthly savings target funded by income you assign to it.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="goal-name">Name</Label>
+              <Input id="goal-name" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={saving} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="goal-emoji">Emoji</Label>
+              <Input id="goal-emoji" value={formEmoji} onChange={(e) => setFormEmoji(e.target.value)} disabled={saving} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="goal-target">Monthly Target</Label>
+              <Input
+                id="goal-target"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                step="0.01"
+                value={formTarget}
+                onChange={(e) => setFormTarget(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+            {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleSubmit()} disabled={saving}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {editingId ? "Save" : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function deadlineLabel(deadline: string): { text: string; overdue: boolean } {
+  const due = new Date(deadline);
+  if (Number.isNaN(due.getTime())) return { text: "", overdue: false };
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startOfDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const days = Math.round((startOfDue.getTime() - startOfToday.getTime()) / 86400000);
+  if (days < 0) return { text: `Overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"}`, overdue: true };
+  if (days === 0) return { text: "Due today", overdue: false };
+  return { text: `${days} day${days === 1 ? "" : "s"} left`, overdue: false };
+}
+
+function ProjectsTab({
+  projects,
+  loading,
+  onCreateProject,
+  onUpdateProject,
+  onDeleteProject,
+  onMoveProject,
+}: {
+  projects: DashboardProject[];
+  loading: boolean;
+  onCreateProject: (payload: { name: string; targetAmount: number; deadline: string; emoji: string }) => Promise<void>;
+  onUpdateProject: (
+    projectId: string,
+    payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+  ) => Promise<void>;
+  onDeleteProject: (projectId: string) => Promise<void>;
+  onMoveProject: (projectId: string, direction: -1 | 1) => Promise<void>;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formName, setFormName] = useState("");
+  const [formEmoji, setFormEmoji] = useState("🚀");
+  const [formTarget, setFormTarget] = useState("");
+  const [formDeadline, setFormDeadline] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  function openAdd() {
+    setEditingId(null);
+    setFormName("");
+    setFormEmoji("🚀");
+    setFormTarget("");
+    setFormDeadline("");
+    setFormError(null);
+    setDialogOpen(true);
+  }
+
+  function openEdit(project: DashboardProject) {
+    setEditingId(project.id);
+    setFormName(project.name);
+    setFormEmoji(project.emoji);
+    setFormTarget(String(project.targetAmount));
+    setFormDeadline(project.deadline ? project.deadline.slice(0, 10) : "");
+    setFormError(null);
+    setDialogOpen(true);
+  }
+
+  async function handleSubmit() {
+    const name = formName.trim();
+    const target = Number(formTarget);
+    if (!name) {
+      setFormError("Name is required.");
+      return;
+    }
+    if (!Number.isFinite(target) || target <= 0) {
+      setFormError("Target must be a positive number.");
+      return;
+    }
+    if (!formDeadline || Number.isNaN(new Date(formDeadline).getTime())) {
+      setFormError("A deadline date is required.");
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    try {
+      if (editingId) {
+        await onUpdateProject(editingId, {
+          name,
+          targetAmount: target,
+          deadline: formDeadline,
+          emoji: formEmoji.trim() || "🚀",
+        });
+      } else {
+        await onCreateProject({ name, targetAmount: target, deadline: formDeadline, emoji: formEmoji.trim() || "🚀" });
+      }
+      setDialogOpen(false);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Unable to save project.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(project: DashboardProject) {
+    if (!window.confirm(`Delete project "${project.name}"?`)) return;
+    setBusyId(project.id);
+    try {
+      await onDeleteProject(project.id);
+    } catch {
+      // next refresh reconciles
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleMove(project: DashboardProject, direction: -1 | 1) {
+    setBusyId(project.id);
+    try {
+      await onMoveProject(project.id, direction);
+    } catch {
+      // next refresh reconciles
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-lg">Long-Term Projects</CardTitle>
+            <p className="text-xs text-muted-foreground">Cumulative savings toward a deadline — progress never resets.</p>
+          </div>
+          <Button size="sm" className="gap-1" onClick={openAdd}>
+            <Plus className="h-4 w-4" />
+            Add Project
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {loading ? (
+            <CenteredListMessage label="Loading projects..." />
+          ) : projects.length === 0 ? (
+            <CenteredListMessage label="No long-term projects yet — add one with a target and deadline." />
+          ) : (
+            projects.map((project, index) => {
+              const pct = project.targetAmount > 0 ? (project.accumulated / project.targetAmount) * 100 : 0;
+              const reached = project.targetAmount > 0 && project.accumulated >= project.targetAmount;
+              const due = deadlineLabel(project.deadline);
+              return (
+                <div key={project.id} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
+                        {project.emoji}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm">{project.name}</p>
+                        {due.text ? (
+                          <p className={`text-xs ${due.overdue ? "text-destructive" : "text-muted-foreground"}`}>{due.text}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <p className={`text-sm font-semibold ${reached ? "text-emerald-500" : "text-foreground"}`}>
+                        {currency.format(project.accumulated)}{" "}
+                        <span className="text-muted-foreground font-normal">
+                          / {currency.format(project.targetAmount)} ({Math.round(pct)}%)
+                        </span>
+                      </p>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={busyId === project.id || index === 0}
+                        aria-label={`Move ${project.name} up`}
+                        onClick={() => void handleMove(project, -1)}
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={busyId === project.id || index === projects.length - 1}
+                        aria-label={`Move ${project.name} down`}
+                        onClick={() => void handleMove(project, 1)}
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        aria-label={`Edit ${project.name}`}
+                        onClick={() => openEdit(project)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        disabled={busyId === project.id}
+                        aria-label={`Delete ${project.name}`}
+                        onClick={() => void handleDelete(project)}
+                      >
+                        {busyId === project.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                  <Progress
+                    value={Math.min(pct, 100)}
+                    className={reached ? "[&>div]:bg-emerald-500" : "[&>div]:bg-accent"}
+                  />
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open && !saving) setDialogOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingId ? "Edit Project" : "Add Project"}</DialogTitle>
+            <DialogDescription>A long-term savings target with a deadline, funded by assigned income.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="project-name">Name</Label>
+              <Input id="project-name" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={saving} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-emoji">Emoji</Label>
+              <Input id="project-emoji" value={formEmoji} onChange={(e) => setFormEmoji(e.target.value)} disabled={saving} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-target">Target Amount</Label>
+              <Input
+                id="project-target"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                step="0.01"
+                value={formTarget}
+                onChange={(e) => setFormTarget(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-deadline">Deadline</Label>
+              <Input
+                id="project-deadline"
+                type="date"
+                value={formDeadline}
+                onChange={(e) => setFormDeadline(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+            {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleSubmit()} disabled={saving}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {editingId ? "Save" : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function CategoriesTab({
+  categories,
+  loading,
+  onCreateCategory,
+  onUpdateCategory,
+  onDeleteCategory,
+  onMoveCategory,
+}: {
+  categories: DashboardCategory[];
+  loading: boolean;
+  onCreateCategory: (payload: { name: string; emoji: string }) => Promise<void>;
+  onUpdateCategory: (categoryName: string, payload: { name: string; emoji: string }) => Promise<void>;
+  onDeleteCategory: (categoryName: string) => Promise<void>;
+  onMoveCategory: (categoryName: string, direction: -1 | 1) => Promise<void>;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingName, setEditingName] = useState<string | null>(null);
+  const [formName, setFormName] = useState("");
+  const [formEmoji, setFormEmoji] = useState("🏷️");
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busyName, setBusyName] = useState<string | null>(null);
+
+  // "Other" is a protected fallback category — it cannot be renamed, removed, or reordered.
+  const movable = categories.filter((category) => category.name !== "Other");
+
+  function openAdd() {
+    setEditingName(null);
+    setFormName("");
+    setFormEmoji("🏷️");
+    setFormError(null);
+    setDialogOpen(true);
+  }
+
+  function openEdit(category: DashboardCategory) {
+    setEditingName(category.name);
+    setFormName(category.name);
+    setFormEmoji(category.emoji);
+    setFormError(null);
+    setDialogOpen(true);
+  }
+
+  async function handleSubmit() {
+    const name = formName.trim();
+    const emoji = formEmoji.trim() || "🏷️";
+    if (!name) {
+      setFormError("Name is required.");
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    try {
+      if (editingName) {
+        await onUpdateCategory(editingName, { name, emoji });
+      } else {
+        await onCreateCategory({ name, emoji });
+      }
+      setDialogOpen(false);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Unable to save category.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(category: DashboardCategory) {
+    if (!window.confirm(`Delete category "${category.name}"? Its transactions move to "Other".`)) return;
+    setBusyName(category.name);
+    try {
+      await onDeleteCategory(category.name);
+    } catch {
+      // next refresh reconciles
+    } finally {
+      setBusyName(null);
+    }
+  }
+
+  async function handleMove(category: DashboardCategory, direction: -1 | 1) {
+    setBusyName(category.name);
+    try {
+      await onMoveCategory(category.name, direction);
+    } catch {
+      // next refresh reconciles
+    } finally {
+      setBusyName(null);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-lg">Categories</CardTitle>
+          <Button size="sm" className="gap-1" onClick={openAdd}>
+            <Plus className="h-4 w-4" />
+            Add Category
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <CenteredListMessage label="Loading categories..." />
+          ) : categories.length === 0 ? (
+            <CenteredListMessage label="No categories found." />
+          ) : (
+            <div className="space-y-1">
+              {categories.map((category) => {
+                const isOther = category.name === "Other";
+                const movableIndex = movable.findIndex((entry) => entry.name === category.name);
+                return (
+                  <div
+                    key={category.name}
+                    className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-secondary/50"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
+                        {category.emoji}
+                      </span>
+                      <p className="font-medium text-sm">{category.name}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={isOther || busyName === category.name || movableIndex <= 0}
+                        aria-label={`Move ${category.name} up`}
+                        onClick={() => void handleMove(category, -1)}
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={isOther || busyName === category.name || movableIndex === movable.length - 1}
+                        aria-label={`Move ${category.name} down`}
+                        onClick={() => void handleMove(category, 1)}
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        disabled={isOther}
+                        aria-label={`Edit ${category.name}`}
+                        onClick={() => openEdit(category)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        disabled={isOther || busyName === category.name}
+                        aria-label={`Delete ${category.name}`}
+                        onClick={() => void handleDelete(category)}
+                      >
+                        {busyName === category.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open && !saving) setDialogOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingName ? "Edit Category" : "Add Category"}</DialogTitle>
+            <DialogDescription>Categories organise your expenses and budgets.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="category-name">Name</Label>
+              <Input id="category-name" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={saving} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="category-emoji">Emoji</Label>
+              <Input id="category-emoji" value={formEmoji} onChange={(e) => setFormEmoji(e.target.value)} disabled={saving} />
+            </div>
+            {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleSubmit()} disabled={saving}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {editingName ? "Save" : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

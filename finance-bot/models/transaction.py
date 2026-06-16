@@ -23,6 +23,7 @@ class Inflow(BaseModel):
     chat_id: int
     created_at: str
     goal_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class Goal(BaseModel):
@@ -32,6 +33,21 @@ class Goal(BaseModel):
     target_amount: float
     created_at: str
     emoji: str = "🎯"
+    order: int = 0
+
+
+class Project(BaseModel):
+    """A long-term savings project: like a Goal but cumulative (never resets)
+    and carrying a fixed deadline date."""
+
+    id: Optional[str] = None
+    chat_id: int
+    name: str
+    target_amount: float
+    deadline: str  # ISO 8601 date — when the project should be funded by
+    created_at: str
+    emoji: str = "🚀"
+    order: int = 0
 
 
 class PendingTransaction(BaseModel):
@@ -86,6 +102,8 @@ class PendingPlan(BaseModel):
     total_amount: Optional[float] = None
     day_of_month: Optional[int] = None
     installment_count: Optional[int] = None
+    start_date: Optional[str] = None  # ISO date — split flow start date
+    number_of_months: Optional[int] = None  # split flow: months to spread across
     selected_plan_id: Optional[str] = None
     edit_field: Optional[str] = None
     edit_value: Optional[str] = None

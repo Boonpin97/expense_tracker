@@ -279,8 +279,8 @@ class DashboardRouterSessionTests(unittest.TestCase):
             category="Shopping",
             timestamp="2026-05-20T09:30:00+08:00",
             payment_type="split_payment",
-            day_of_month=15,
-            installment_count=3,
+            start_date="2026-06-15",
+            number_of_months=3,
             create_first_transaction_now=False,
         )
         saved_plan = {}

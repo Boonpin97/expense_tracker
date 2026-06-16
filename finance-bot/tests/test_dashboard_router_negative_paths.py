@@ -144,8 +144,23 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
             category="Shopping",
             timestamp="2026-05-20T09:30:00+08:00",
             payment_type="split_payment",
-            day_of_month=12,
-            installment_count=0,
+            start_date="2026-06-15",
+            number_of_months=0,
+        )
+        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(dashboard.create_dashboard_transaction(payload, request))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_create_dashboard_split_requires_start_date(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        payload = dashboard.TransactionCreateRequest(
+            item="Laptop",
+            amount=120.0,
+            category="Shopping",
+            timestamp="2026-05-20T09:30:00+08:00",
+            payment_type="split_payment",
+            number_of_months=3,
         )
         with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
             with self.assertRaises(HTTPException) as ctx:
