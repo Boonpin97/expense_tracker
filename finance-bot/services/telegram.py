@@ -142,34 +142,50 @@ async def send_budget_category_keyboard(chat_id: int, prompt: str) -> dict:
 async def send_income_goal_keyboard(
     chat_id: int,
     goals: list[dict],
-    projects: list[dict],
     item: str,
     amount: float,
 ) -> dict:
-    """Ask which goal/project a just-recorded income belongs to. Expiry comes from the
+    """Ask which goal a just-recorded income belongs to. Expiry comes from the
     interaction session, so callback_data carries no timestamps."""
     keyboard = [
-        [{"text": f"Goal: {goal.get('emoji', '🎯')} {goal['name']}", "callback_data": f"inflowgoal:{goal['id']}"}]
+        [{"text": f"{goal.get('emoji', '🎯')} {goal['name']}", "callback_data": f"inflowgoal:{goal['id']}"}]
         for goal in goals
     ]
-    keyboard.extend(
-        [
-            [{
-                "text": f"Project: {project.get('emoji', '🚀')} {project['name']}",
-                "callback_data": f"inflowgoal:project:{project['id']}",
-            }]
-            for project in projects
-        ]
-    )
     keyboard.append([{"text": "➕ Add new goal", "callback_data": "inflowgoal:__new__"}])
-    keyboard.append([{"text": "🚫 No goal/project", "callback_data": "inflowgoal:__none__"}])
+    keyboard.append([{"text": "🚫 No goal", "callback_data": "inflowgoal:__none__"}])
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             _api_url("sendMessage"),
             json={
                 "chat_id": chat_id,
-                "text": f"Tag <b>{item}</b> +${amount:.2f} to a goal or long-term project?",
+                "text": f"Tag <b>{item}</b> +${amount:.2f} to a goal?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_income_project_keyboard(
+    chat_id: int,
+    projects: list[dict],
+    item: str,
+    amount: float,
+) -> dict:
+    """Ask which long-term project a just-recorded income belongs to."""
+    keyboard = [
+        [{"text": f"{project.get('emoji', '🚀')} {project['name']}", "callback_data": f"inflowproject:{project['id']}"}]
+        for project in projects
+    ]
+    keyboard.append([{"text": "🚫 No project", "callback_data": "inflowproject:__none__"}])
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Tag <b>{item}</b> +${amount:.2f} to a long-term project?",
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
             },

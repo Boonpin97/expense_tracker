@@ -555,13 +555,21 @@ class DashboardInflowTargetTests(unittest.TestCase):
         self.assertEqual(saved.project_id, "p1")
         self.assertIsNone(saved.goal_id)
 
-    def test_create_inflow_rejects_both_targets(self):
-        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+    def test_create_inflow_accepts_goal_and_project(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_goal_by_id", return_value={"id": "g1"}),
+            patch.object(dashboard, "get_project_by_id", return_value={"id": "p1"}),
+            patch.object(dashboard, "save_inflow") as mock_save,
+        ):
             payload = dashboard.InflowCreateRequest(
                 item="X", amount=10.0, timestamp="2026-06-01T00:00:00+08:00", goal_id="g1", project_id="p1"
             )
-            with self.assertRaises(Exception):
-                asyncio.run(dashboard.create_dashboard_inflow(payload, self._req()))
+            asyncio.run(dashboard.create_dashboard_inflow(payload, self._req()))
+
+        saved = mock_save.call_args.args[0]
+        self.assertEqual(saved.goal_id, "g1")
+        self.assertEqual(saved.project_id, "p1")
 
     def test_create_inflow_rejects_missing_goal(self):
         with (

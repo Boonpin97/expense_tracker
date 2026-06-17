@@ -242,11 +242,9 @@ def _resolve_inflow_target(
     goal_id: Optional[str],
     project_id: Optional[str],
 ) -> tuple[Optional[str], Optional[str]]:
-    """Validate an income → goal/project assignment. They are mutually exclusive."""
+    """Validate an income → goal/project assignment."""
     goal_id = (goal_id or "").strip() or None
     project_id = (project_id or "").strip() or None
-    if goal_id and project_id:
-        raise HTTPException(status_code=400, detail="Assign income to a goal or a project, not both.")
     if goal_id and not get_goal_by_id(chat_id, goal_id):
         raise HTTPException(status_code=404, detail="Goal not found.")
     if project_id and not get_project_by_id(chat_id, project_id):
