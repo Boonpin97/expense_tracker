@@ -150,7 +150,6 @@ type DashboardTab =
   | "overview"
   | "charts"
   | "budget"
-  | "categories"
   | "transactions"
   | "income"
   | "goals"
@@ -570,6 +569,7 @@ function DashboardShell({
   async function handleCreateProject(payload: {
     name: string;
     targetAmount: number;
+    initialAmount: number;
     deadline: string;
     emoji: string;
   }) {
@@ -579,7 +579,13 @@ function DashboardShell({
 
   async function handleUpdateProject(
     projectId: string,
-    payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+    payload: {
+      name?: string;
+      targetAmount?: number;
+      initialAmount?: number;
+      deadline?: string;
+      emoji?: string;
+    },
   ) {
     await updateDashboardProject(projectId, payload);
     await refreshProjects();
@@ -792,12 +798,19 @@ function DashboardLayout({
   onCreateProject: (payload: {
     name: string;
     targetAmount: number;
+    initialAmount: number;
     deadline: string;
     emoji: string;
   }) => Promise<void>;
   onUpdateProject: (
     projectId: string,
-    payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+    payload: {
+      name?: string;
+      targetAmount?: number;
+      initialAmount?: number;
+      deadline?: string;
+      emoji?: string;
+    },
   ) => Promise<void>;
   onDeleteProject: (projectId: string) => Promise<void>;
   onMoveProject: (projectId: string, direction: -1 | 1) => Promise<void>;
@@ -1245,11 +1258,10 @@ function DashboardLayout({
           onValueChange={(value) => setActiveTab(value as DashboardTab)}
           className="space-y-6"
         >
-          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-9 sm:inline-grid">
+          <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:grid-cols-8 sm:inline-grid">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
-            <TabsTrigger value="categories">Category</TabsTrigger>
             <TabsTrigger value="transactions">Expenses</TabsTrigger>
             <TabsTrigger value="income">Income</TabsTrigger>
             <TabsTrigger value="goals">Goals</TabsTrigger>
@@ -1274,7 +1286,7 @@ function DashboardLayout({
                 <Plus className="mr-1 h-4 w-4" />
                 Income
               </Button>
-              {activeTab === "overview" ? (
+              {activeTab === "transactions" ? (
                 <OverviewInfoPopover
                   visible={visibleOverviewCards}
                   onVisibleChange={handleOverviewVisibleCardsChange}
@@ -1284,11 +1296,10 @@ function DashboardLayout({
           </div>
 
           <TabsContent value="overview" className="space-y-6">
-            <OverviewCards
+            <OverviewHero
               transactions={transactions}
               inflows={inflows}
               budgetTotal={budgetTotal}
-              visible={visibleOverviewCards}
             />
 
             <Card>
@@ -1510,18 +1521,13 @@ function DashboardLayout({
             </Card>
           </TabsContent>
 
-          <TabsContent value="categories" className="space-y-6">
-            <CategoriesTab
-              categories={categories}
-              loading={loading}
-              onCreateCategory={onCreateCategory}
-              onUpdateCategory={onUpdateCategory}
-              onDeleteCategory={onDeleteCategory}
-              onMoveCategory={onMoveCategory}
-            />
-          </TabsContent>
-
           <TabsContent value="transactions" className="space-y-6">
+            <ExpenseSummaryCards
+              transactions={transactions}
+              inflows={inflows}
+              budgetTotal={budgetTotal}
+              visible={visibleOverviewCards}
+            />
             <TransactionsTab
               transactions={transactions}
               categories={categories}
@@ -2034,7 +2040,95 @@ function DashboardLayout({
   );
 }
 
-function OverviewCards({
+function OverviewHero({
+  transactions,
+  inflows,
+  budgetTotal,
+}: {
+  transactions: DashboardTransaction[];
+  inflows: DashboardInflow[];
+  budgetTotal: number;
+}) {
+  const stats = useMemo(() => {
+    const now = new Date();
+    const end = endOfDay(now);
+    const sumFrom = (from: Date) =>
+      transactions
+        .filter((transaction) => transaction.timestamp >= from && transaction.timestamp <= end)
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
+    const monthTotal = sumFrom(startOfMonth(now));
+    const remaining = Math.max(budgetTotal - monthTotal, 0);
+    return {
+      todayTotal: sumFrom(startOfDay(now)),
+      weekTotal: sumFrom(startOfDay(subDays(now, 6))),
+      monthTotal,
+      remaining,
+    };
+  }, [transactions, budgetTotal]);
+
+  const monthIncome = useMemo(() => {
+    const now = new Date();
+    const from = startOfMonth(now);
+    const end = endOfDay(now);
+    return inflows
+      .filter((inflow) => inflow.timestamp >= from && inflow.timestamp <= end)
+      .reduce((sum, inflow) => sum + inflow.amount, 0);
+  }, [inflows]);
+
+  const monthNet = monthIncome - stats.monthTotal;
+
+  return (
+    <div className="space-y-5">
+      {/* Net hero banner — always visible */}
+      <Card className="overflow-hidden border-0 shadow-md">
+        <div className="relative px-6 pt-6 pb-5 bg-gradient-to-br from-accent/10 via-accent/5 to-background">
+          {/* Decorative blurred orb */}
+          <div className="pointer-events-none absolute -top-6 -right-6 h-36 w-36 rounded-full blur-3xl opacity-30 bg-accent" />
+
+          {/* Net headline */}
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            Net this month
+          </p>
+          <p className="mt-1 text-3xl font-extrabold tracking-tight leading-none text-foreground">
+            {monthNet < 0 ? "-" : "+"}
+            {currency.format(Math.abs(monthNet))}
+          </p>
+
+          {/* Expenses / Inflow pills */}
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:gap-4">
+            {/* Expenses pill */}
+            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+                <TrendingDown className="h-4 w-4 text-destructive" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Expenses</p>
+                <p className="text-lg font-bold text-destructive leading-tight">
+                  -{currency.format(stats.monthTotal)}
+                </p>
+              </div>
+            </div>
+
+            {/* Inflow pill */}
+            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/10">
+                <TrendingUp className="h-4 w-4 text-emerald-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Inflow</p>
+                <p className="text-lg font-bold text-emerald-500 leading-tight">
+                  +{currency.format(monthIncome)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function ExpenseSummaryCards({
   transactions,
   inflows,
   budgetTotal,
@@ -2073,8 +2167,6 @@ function OverviewCards({
       .filter((inflow) => inflow.timestamp >= from && inflow.timestamp <= end)
       .reduce((sum, inflow) => sum + inflow.amount, 0);
   }, [inflows]);
-
-  const monthNet = monthIncome - stats.monthTotal;
 
   const statCards = [
     {
@@ -2142,80 +2234,30 @@ function OverviewCards({
   const showInflowCard = visible.includes("inflow");
   const hasCards = cards.length > 0 || showInflowCard;
 
-  return (
-    <div className="space-y-5">
-      {/* Net hero banner — always visible */}
-      <Card className="overflow-hidden border-0 shadow-md">
-        <div className="relative px-6 pt-6 pb-5 bg-gradient-to-br from-accent/10 via-accent/5 to-background">
-          {/* Decorative blurred orb */}
-          <div className="pointer-events-none absolute -top-6 -right-6 h-36 w-36 rounded-full blur-3xl opacity-30 bg-accent" />
-
-          {/* Net headline */}
-          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Net this month
-          </p>
-          <p className="mt-1 text-3xl font-extrabold tracking-tight leading-none text-foreground">
-            {monthNet < 0 ? "-" : "+"}
-            {currency.format(Math.abs(monthNet))}
-          </p>
-
-          {/* Expenses / Inflow pills */}
-          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:gap-4">
-            {/* Expenses pill */}
-            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10">
-                <TrendingDown className="h-4 w-4 text-destructive" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">Expenses</p>
-                <p className="text-lg font-bold text-destructive leading-tight">
-                  -{currency.format(stats.monthTotal)}
-                </p>
-              </div>
-            </div>
-
-            {/* Inflow pill */}
-            <div className="flex flex-1 items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-4 py-3 backdrop-blur-sm">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/10">
-                <TrendingUp className="h-4 w-4 text-emerald-500" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">Inflow</p>
-                <p className="text-lg font-bold text-emerald-500 leading-tight">
-                  +{currency.format(monthIncome)}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {hasCards ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {cards.map((card) => (
-            <StatCard
-              key={card.key}
-              label={card.label}
-              value={card.value}
-              sub={card.sub}
-              icon={card.icon}
-              trend={card.trend}
-            />
-          ))}
-          {showInflowCard && (
-            <StatCard
-              label="Inflow"
-              value={currency.format(monthIncome)}
-              sub="This month"
-              icon={TrendingUp}
-              trend="up"
-            />
-          )}
-        </div>
-      ) : (
-        <p className="text-sm text-muted-foreground text-center py-8">No cards selected.</p>
-      )}
+  return hasCards ? (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {cards.map((card) => (
+        <StatCard
+          key={card.key}
+          label={card.label}
+          value={card.value}
+          sub={card.sub}
+          icon={card.icon}
+          trend={card.trend}
+        />
+      ))}
+      {showInflowCard ? (
+        <StatCard
+          label="Inflow"
+          value={currency.format(monthIncome)}
+          sub="This month"
+          icon={TrendingUp}
+          trend="up"
+        />
+      ) : null}
     </div>
+  ) : (
+    <p className="text-sm text-muted-foreground text-center py-8">No cards selected.</p>
   );
 }
 
@@ -3800,10 +3842,22 @@ function ProjectsTab({
 }: {
   projects: DashboardProject[];
   loading: boolean;
-  onCreateProject: (payload: { name: string; targetAmount: number; deadline: string; emoji: string }) => Promise<void>;
+  onCreateProject: (payload: {
+    name: string;
+    targetAmount: number;
+    initialAmount: number;
+    deadline: string;
+    emoji: string;
+  }) => Promise<void>;
   onUpdateProject: (
     projectId: string,
-    payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+    payload: {
+      name?: string;
+      targetAmount?: number;
+      initialAmount?: number;
+      deadline?: string;
+      emoji?: string;
+    },
   ) => Promise<void>;
   onDeleteProject: (projectId: string) => Promise<void>;
   onMoveProject: (projectId: string, direction: -1 | 1) => Promise<void>;
@@ -3813,6 +3867,7 @@ function ProjectsTab({
   const [formName, setFormName] = useState("");
   const [formEmoji, setFormEmoji] = useState("🚀");
   const [formTarget, setFormTarget] = useState("");
+  const [formInitialAmount, setFormInitialAmount] = useState("");
   const [formDeadline, setFormDeadline] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -3823,6 +3878,7 @@ function ProjectsTab({
     setFormName("");
     setFormEmoji("🚀");
     setFormTarget("");
+    setFormInitialAmount("");
     setFormDeadline("");
     setFormError(null);
     setDialogOpen(true);
@@ -3833,6 +3889,7 @@ function ProjectsTab({
     setFormName(project.name);
     setFormEmoji(project.emoji);
     setFormTarget(String(project.targetAmount));
+    setFormInitialAmount(project.initialAmount > 0 ? String(project.initialAmount) : "");
     setFormDeadline(project.deadline ? project.deadline.slice(0, 10) : "");
     setFormError(null);
     setDialogOpen(true);
@@ -3841,12 +3898,17 @@ function ProjectsTab({
   async function handleSubmit() {
     const name = formName.trim();
     const target = Number(formTarget);
+    const initialAmount = formInitialAmount.trim() ? Number(formInitialAmount) : 0;
     if (!name) {
       setFormError("Name is required.");
       return;
     }
     if (!Number.isFinite(target) || target <= 0) {
       setFormError("Target must be a positive number.");
+      return;
+    }
+    if (!Number.isFinite(initialAmount) || initialAmount < 0) {
+      setFormError("Initial amount must be zero or more.");
       return;
     }
     if (!formDeadline || Number.isNaN(new Date(formDeadline).getTime())) {
@@ -3860,11 +3922,18 @@ function ProjectsTab({
         await onUpdateProject(editingId, {
           name,
           targetAmount: target,
+          initialAmount,
           deadline: formDeadline,
           emoji: formEmoji.trim() || "🚀",
         });
       } else {
-        await onCreateProject({ name, targetAmount: target, deadline: formDeadline, emoji: formEmoji.trim() || "🚀" });
+        await onCreateProject({
+          name,
+          targetAmount: target,
+          initialAmount,
+          deadline: formDeadline,
+          emoji: formEmoji.trim() || "🚀",
+        });
       }
       setDialogOpen(false);
     } catch (caught) {
@@ -4022,6 +4091,19 @@ function ProjectsTab({
                 step="0.01"
                 value={formTarget}
                 onChange={(e) => setFormTarget(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-initial">Initial Amount</Label>
+              <Input
+                id="project-initial"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                value={formInitialAmount}
+                onChange={(e) => setFormInitialAmount(e.target.value)}
                 disabled={saving}
               />
             </div>

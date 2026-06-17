@@ -136,6 +136,10 @@ def update_inflow_goal(doc_id: str, goal_id: Optional[str]) -> None:
     get_db().collection("inflows").document(doc_id).update({"goal_id": goal_id})
 
 
+def update_inflow_project(doc_id: str, project_id: Optional[str]) -> None:
+    get_db().collection("inflows").document(doc_id).update({"project_id": project_id})
+
+
 def _goals_collection(chat_id: int):
     return get_db().collection(f"users/{chat_id}/goals")
 

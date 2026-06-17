@@ -353,15 +353,21 @@ class NewGoalFlowTests(unittest.TestCase):
             patch("routers.webhook.session_expired", return_value=False),
             patch("routers.webhook.save_goal", return_value="goal-1") as mock_save,
             patch("routers.webhook.update_inflow_goal") as mock_tag,
+            patch("routers.webhook.get_projects", return_value=[]),
+            patch("routers.webhook.start_session") as mock_start,
             patch("routers.webhook.clear_session") as mock_clear,
-            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+            patch("routers.webhook.telegram.send_income_project_keyboard", new=AsyncMock()) as mock_keyboard,
         ):
             asyncio.run(webhook(_request_for_text("3000")))
 
         mock_save.assert_called_once()
         mock_tag.assert_called_once_with("inflow-doc-1", "goal-1")
         mock_clear.assert_called_once_with(123)
-        self.assertIn("Salary", mock_send.call_args.args[1])
+        mock_start.assert_called_once()
+        self.assertEqual(mock_start.call_args.args[:3], (123, "income_project", "choosing_project"))
+        self.assertEqual(mock_start.call_args.kwargs["payload"]["item"], "Salary")
+        self.assertTrue(mock_start.call_args.kwargs["payload"]["goal_created"])
+        mock_keyboard.assert_awaited_once()
 
     def test_expiry_from_income_prompt_leaves_inflow_untagged(self):
         session = {
@@ -400,40 +406,123 @@ class IncomeGoalCallbackTests(unittest.TestCase):
             "expires_at": _future_iso(),
         }
 
-    def test_pick_goal_tags_inflow_and_clears(self):
+    def test_pick_goal_tags_inflow_and_prompts_for_project(self):
         with (
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.get_session", return_value=self._session()),
             patch("routers.webhook.session_expired", return_value=False),
             patch("routers.webhook.get_goal_by_id", return_value={"id": "g1", "name": "Vacation", "emoji": "🏖"}),
             patch("routers.webhook.update_inflow_goal") as mock_tag,
-            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.get_projects", return_value=[]),
+            patch("routers.webhook.start_session") as mock_start,
             patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
-            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+            patch("routers.webhook.telegram.send_income_project_keyboard", new=AsyncMock()) as mock_keyboard,
         ):
             result = asyncio.run(webhook(_request_for_callback("inflowgoal:g1")))
 
         self.assertEqual(result, {"ok": True})
         mock_tag.assert_called_once_with("inflow-doc-1", "g1")
-        mock_clear.assert_called_once_with(123)
-        message = mock_send.call_args.args[1]
-        self.assertIn("Income", message)
-        self.assertIn("Vacation", message)
+        mock_start.assert_called_once()
+        self.assertEqual(mock_start.call_args.args[:3], (123, "income_project", "choosing_project"))
+        self.assertIn("Vacation", mock_start.call_args.kwargs["payload"]["goal_label"])
+        mock_keyboard.assert_awaited_once()
 
-    def test_no_goal_clears_without_tagging(self):
+    def test_no_goal_prompts_for_project_without_tagging(self):
         with (
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.get_session", return_value=self._session()),
             patch("routers.webhook.session_expired", return_value=False),
             patch("routers.webhook.update_inflow_goal") as mock_tag,
-            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.get_projects", return_value=[]),
+            patch("routers.webhook.start_session") as mock_start,
             patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
-            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_income_project_keyboard", new=AsyncMock()) as mock_keyboard,
         ):
             asyncio.run(webhook(_request_for_callback("inflowgoal:__none__")))
 
         mock_tag.assert_not_called()
+        mock_start.assert_called_once()
+        self.assertEqual(mock_start.call_args.args[:3], (123, "income_project", "choosing_project"))
+        self.assertIsNone(mock_start.call_args.kwargs["payload"]["goal_label"])
+        mock_keyboard.assert_awaited_once()
+
+    def test_project_step_tags_inflow_and_clears(self):
+        session = self._session()
+        session["flow_type"] = "income_project"
+        session["step"] = "choosing_project"
+        session["payload"]["goal_label"] = "Goal <b>Vacation</b>"
+        session["payload"]["goal_created"] = False
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_project_by_id", return_value={"id": "p1", "name": "House", "emoji": "P"}),
+            patch("routers.webhook.update_inflow_project") as mock_tag,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            result = asyncio.run(webhook(_request_for_callback("inflowproject:p1")))
+
+        self.assertEqual(result, {"ok": True})
+        mock_tag.assert_called_once_with("inflow-doc-1", "p1")
         mock_clear.assert_called_once_with(123)
+        message = mock_send.call_args.args[1]
+        self.assertIn("Vacation", message)
+        self.assertIn("Project", message)
+        self.assertIn("House", message)
+
+    def test_project_step_add_new_project_chains_session_with_income_context(self):
+        session = self._session()
+        session["flow_type"] = "income_project"
+        session["step"] = "choosing_project"
+        session["payload"]["goal_label"] = "Goal <b>Vacation</b>"
+        session["payload"]["goal_created"] = False
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_callback("inflowproject:__new__")))
+
+        mock_start.assert_called_once_with(
+            123,
+            "new_project",
+            "awaiting_name",
+            payload={
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+                "goal_label": "Goal <b>Vacation</b>",
+                "goal_created": False,
+            },
+        )
+
+    def test_project_step_no_project_finalises_with_goal_only(self):
+        session = self._session()
+        session["flow_type"] = "income_project"
+        session["step"] = "choosing_project"
+        session["payload"]["goal_label"] = "Goal <b>Vacation</b>"
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_inflow_project") as mock_tag,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("inflowproject:__none__")))
+
+        mock_tag.assert_not_called()
+        mock_clear.assert_called_once_with(123)
+        message = mock_send.call_args.args[1]
+        self.assertIn("Vacation", message)
+        self.assertNotIn("Project", message)
 
     def test_add_new_goal_chains_session_with_inflow_id(self):
         with (

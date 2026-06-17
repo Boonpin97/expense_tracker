@@ -38,6 +38,7 @@ export type DashboardProject = {
   name: string;
   emoji: string;
   targetAmount: number;
+  initialAmount: number;
   accumulated: number;
   deadline: string;
   order: number;
@@ -232,6 +233,7 @@ function parseProject(data: Record<string, unknown>): DashboardProject {
     name: String(data.name ?? ""),
     emoji: String(data.emoji ?? "🚀"),
     targetAmount: typeof data.target_amount === "number" ? data.target_amount : 0,
+    initialAmount: typeof data.initial_amount === "number" ? data.initial_amount : 0,
     accumulated: typeof data.accumulated === "number" ? data.accumulated : 0,
     deadline: String(data.deadline ?? ""),
     order: typeof data.order === "number" ? data.order : 0,
@@ -460,6 +462,7 @@ export async function fetchDashboardProjects() {
 export async function createDashboardProject(payload: {
   name: string;
   targetAmount: number;
+  initialAmount: number;
   deadline: string;
   emoji: string;
 }) {
@@ -467,6 +470,7 @@ export async function createDashboardProject(payload: {
     body: {
       name: payload.name,
       target_amount: payload.targetAmount,
+      initial_amount: payload.initialAmount,
       deadline: payload.deadline,
       emoji: payload.emoji,
     },
@@ -475,12 +479,19 @@ export async function createDashboardProject(payload: {
 
 export async function updateDashboardProject(
   projectId: string,
-  payload: { name?: string; targetAmount?: number; deadline?: string; emoji?: string },
+  payload: {
+    name?: string;
+    targetAmount?: number;
+    initialAmount?: number;
+    deadline?: string;
+    emoji?: string;
+  },
 ) {
   await requestJson("PATCH", `/dashboard/projects/${projectId}`, {
     body: {
       ...(payload.name !== undefined ? { name: payload.name } : {}),
       ...(payload.targetAmount !== undefined ? { target_amount: payload.targetAmount } : {}),
+      ...(payload.initialAmount !== undefined ? { initial_amount: payload.initialAmount } : {}),
       ...(payload.deadline !== undefined ? { deadline: payload.deadline } : {}),
       ...(payload.emoji !== undefined ? { emoji: payload.emoji } : {}),
     },

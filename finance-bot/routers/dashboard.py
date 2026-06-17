@@ -157,6 +157,7 @@ class MoveRequest(BaseModel):
 class ProjectCreateRequest(BaseModel):
     name: str
     target_amount: float
+    initial_amount: float = 0.0
     deadline: str
     emoji: str = "🚀"
 
@@ -164,6 +165,7 @@ class ProjectCreateRequest(BaseModel):
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
     target_amount: Optional[float] = None
+    initial_amount: Optional[float] = None
     deadline: Optional[str] = None
     emoji: Optional[str] = None
 
@@ -240,11 +242,9 @@ def _resolve_inflow_target(
     goal_id: Optional[str],
     project_id: Optional[str],
 ) -> tuple[Optional[str], Optional[str]]:
-    """Validate an income → goal/project assignment. They are mutually exclusive."""
+    """Validate an income → goal/project assignment."""
     goal_id = (goal_id or "").strip() or None
     project_id = (project_id or "").strip() or None
-    if goal_id and project_id:
-        raise HTTPException(status_code=400, detail="Assign income to a goal or a project, not both.")
     if goal_id and not get_goal_by_id(chat_id, goal_id):
         raise HTTPException(status_code=404, detail="Goal not found.")
     if project_id and not get_project_by_id(chat_id, project_id):
@@ -281,6 +281,10 @@ def _project_update_fields(payload: "ProjectUpdateRequest") -> dict:
         if payload.target_amount <= 0:
             raise HTTPException(status_code=400, detail="Target amount must be positive.")
         fields["target_amount"] = payload.target_amount
+    if payload.initial_amount is not None:
+        if payload.initial_amount < 0:
+            raise HTTPException(status_code=400, detail="Initial amount cannot be negative.")
+        fields["initial_amount"] = payload.initial_amount
     if payload.deadline is not None:
         deadline = payload.deadline.strip()
         if not deadline:
@@ -810,7 +814,17 @@ async def list_dashboard_projects(request: Request):
     projects = get_projects(session["chat_id"])
     # Long-term projects accumulate all-time toward a deadline.
     sums = sum_inflows_by_project(session["chat_id"])
-    return {"projects": [{**project, "accumulated": sums.get(project["id"], 0.0)} for project in projects]}
+    return {
+        "projects": [
+            {
+                **project,
+                "initial_amount": float(project.get("initial_amount", 0.0) or 0.0),
+                "accumulated": float(project.get("initial_amount", 0.0) or 0.0)
+                + sums.get(project["id"], 0.0),
+            }
+            for project in projects
+        ]
+    }
 
 
 @router.post("/projects")
@@ -821,6 +835,8 @@ async def create_dashboard_project(payload: ProjectCreateRequest, request: Reque
         raise HTTPException(status_code=400, detail="Project name cannot be empty.")
     if payload.target_amount <= 0:
         raise HTTPException(status_code=400, detail="Target amount must be positive.")
+    if payload.initial_amount < 0:
+        raise HTTPException(status_code=400, detail="Initial amount cannot be negative.")
     deadline = payload.deadline.strip()
     if not deadline:
         raise HTTPException(status_code=400, detail="Deadline is required.")
@@ -831,6 +847,7 @@ async def create_dashboard_project(payload: ProjectCreateRequest, request: Reque
             chat_id=session["chat_id"],
             name=name,
             target_amount=payload.target_amount,
+            initial_amount=payload.initial_amount,
             deadline=deadline,
             created_at=datetime.now(SGT).isoformat(),
             emoji=payload.emoji.strip() or "🚀",

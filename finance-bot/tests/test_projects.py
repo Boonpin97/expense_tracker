@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -130,8 +130,39 @@ if "fastapi" not in sys.modules:
     sys.modules["fastapi"] = fastapi_stub
 
 from routers import dashboard
+from routers.webhook import webhook
 
 SGT = timezone(timedelta(hours=8))
+
+
+def _future_iso():
+    return (datetime.now(SGT) + timedelta(minutes=10)).isoformat()
+
+
+def _request_for_text(text: str, chat_id: int = 123):
+    payload = {"message": {"chat": {"id": chat_id}, "text": text}}
+
+    class DummyRequest:
+        async def json(self_nonlocal):
+            return payload
+
+    return DummyRequest()
+
+
+def _request_for_callback(data: str, chat_id: int = 123):
+    payload = {
+        "callback_query": {
+            "id": "cbq-1",
+            "data": data,
+            "message": {"chat": {"id": chat_id}},
+        }
+    }
+
+    class DummyRequest:
+        async def json(self_nonlocal):
+            return payload
+
+    return DummyRequest()
 
 
 class _FakeDoc:
@@ -179,13 +210,265 @@ class ProjectFirestoreTests(unittest.TestCase):
         self.assertEqual(sums, {"p1": 150.0})
 
 
+class ProjectCommandTests(unittest.TestCase):
+    def test_projects_lists_initial_plus_inflows(self):
+        projects = [
+            {
+                "id": "p1",
+                "name": "House",
+                "target_amount": 50000.0,
+                "initial_amount": 1000.0,
+                "deadline": "2027-01-01",
+            }
+        ]
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_projects", return_value=projects),
+            patch("routers.webhook.sum_inflows_by_project", return_value={"p1": 500.0}),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            result = asyncio.run(webhook(_request_for_text("/projects")))
+
+        self.assertEqual(result, {"ok": True})
+        body = mock_send.call_args.args[1]
+        self.assertIn("House", body)
+        self.assertIn("$1,500.00 / $50,000.00", body)
+
+
+class NewProjectFlowTests(unittest.TestCase):
+    def test_new_projects_command_starts_session(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_text("/new_projects")))
+
+        mock_start.assert_called_once_with(123, "new_project", "awaiting_name")
+
+    def test_new_project_flow_saves_all_fields(self):
+        session = {
+            "flow_type": "new_project",
+            "step": "awaiting_deadline",
+            "payload": {
+                "name": "House",
+                "emoji": "🏠",
+                "target_amount": 50000.0,
+                "initial_amount": 1000.0,
+            },
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.save_project", return_value="p1") as mock_save,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_text("010127")))
+
+        saved = mock_save.call_args.args[0]
+        self.assertEqual(saved.name, "House")
+        self.assertEqual(saved.target_amount, 50000.0)
+        self.assertEqual(saved.initial_amount, 1000.0)
+        self.assertEqual(saved.deadline, "2027-01-01")
+        self.assertEqual(saved.emoji, "🏠")
+        mock_clear.assert_called_once_with(123)
+        self.assertIn("House", mock_send.call_args.args[1])
+
+    def test_new_project_from_income_tags_inflow(self):
+        session = {
+            "flow_type": "new_project",
+            "step": "awaiting_deadline",
+            "payload": {
+                "name": "House",
+                "emoji": "P",
+                "target_amount": 50000.0,
+                "initial_amount": 1000.0,
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+                "goal_label": "Goal <b>Vacation</b>",
+                "goal_created": False,
+            },
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.save_project", return_value="p1") as mock_save,
+            patch("routers.webhook.update_inflow_project") as mock_tag,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_text("010127")))
+
+        mock_save.assert_called_once()
+        mock_tag.assert_called_once_with("inflow-doc-1", "p1")
+        mock_clear.assert_called_once_with(123)
+        message = mock_send.call_args.args[1]
+        self.assertIn("Salary", message)
+        self.assertIn("Vacation", message)
+        self.assertIn("Project", message)
+        self.assertIn("House", message)
+
+    def test_invalid_initial_amount_keeps_session(self):
+        session = {
+            "flow_type": "new_project",
+            "step": "awaiting_initial",
+            "payload": {"name": "House", "emoji": "🏠", "target_amount": 50000.0},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_session") as mock_update,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_text("-1")))
+
+        mock_update.assert_not_called()
+        self.assertIn("zero or more", mock_send.call_args.args[1])
+
+
+class EditProjectFlowTests(unittest.TestCase):
+    def test_command_starts_session_with_keyboard(self):
+        projects = [{"id": "p1", "name": "House", "target_amount": 50000.0}]
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_projects", return_value=projects),
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.telegram.send_project_keyboard", new=AsyncMock()) as mock_keyboard,
+        ):
+            asyncio.run(webhook(_request_for_text("/edit_projects")))
+
+        mock_start.assert_called_once_with(123, "edit_project", "choosing_project")
+        self.assertEqual(mock_keyboard.call_args.args[2], "projectedit")
+
+    def test_callback_field_selection_advances_to_initial_step(self):
+        session = {
+            "flow_type": "edit_project",
+            "step": "choosing_field",
+            "payload": {"project_id": "p1", "project_name": "House"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_session") as mock_update,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_callback("projectfield:initial")))
+
+        mock_update.assert_called_once_with(123, step="awaiting_new_initial")
+
+    def test_new_initial_updates_project(self):
+        session = {
+            "flow_type": "edit_project",
+            "step": "awaiting_new_initial",
+            "payload": {"project_id": "p1", "project_name": "House"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_project", return_value=True) as mock_update,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_text("1500")))
+
+        mock_update.assert_called_once_with(123, "p1", initial_amount=1500.0)
+        mock_clear.assert_called_once_with(123)
+
+    def test_new_deadline_updates_project(self):
+        session = {
+            "flow_type": "edit_project",
+            "step": "awaiting_new_deadline",
+            "payload": {"project_id": "p1", "project_name": "House"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_project", return_value=True) as mock_update,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_text("010127")))
+
+        mock_update.assert_called_once_with(123, "p1", deadline="2027-01-01")
+        mock_clear.assert_called_once_with(123)
+
+
+class DeleteProjectFlowTests(unittest.TestCase):
+    def test_pick_project_advances_to_confirmation(self):
+        session = {
+            "flow_type": "delete_project",
+            "step": "choosing_project",
+            "payload": {},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_project_by_id", return_value={"id": "p1", "name": "House"}),
+            patch("routers.webhook.update_session") as mock_update,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_project_delete_confirm_keyboard", new=AsyncMock()) as mock_keyboard,
+        ):
+            asyncio.run(webhook(_request_for_callback("projectdel:p1")))
+
+        mock_update.assert_called_once_with(
+            123, step="confirming", payload_updates={"project_id": "p1", "project_name": "House"}
+        )
+        mock_keyboard.assert_awaited_once()
+
+    def test_confirm_yes_deletes_project_only(self):
+        session = {
+            "flow_type": "delete_project",
+            "step": "confirming",
+            "payload": {"project_id": "p1", "project_name": "House"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.delete_project", return_value=True) as mock_delete,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("projectdelconfirm:yes")))
+
+        mock_delete.assert_called_once_with(123, "p1")
+        mock_clear.assert_called_once_with(123)
+        self.assertIn("unchanged", mock_send.call_args.args[1])
+
+
 class DashboardProjectCrudTests(unittest.TestCase):
     def _req(self):
         return SimpleNamespace(cookies={}, headers={})
 
     def test_list_projects_merges_accumulated(self):
         projects = [
-            {"id": "p1", "name": "House", "target_amount": 50000.0, "deadline": "2027-01-01"},
+            {
+                "id": "p1",
+                "name": "House",
+                "target_amount": 50000.0,
+                "initial_amount": 300.0,
+                "deadline": "2027-01-01",
+            },
             {"id": "p2", "name": "Wedding", "target_amount": 20000.0, "deadline": "2026-12-01"},
         ]
         with (
@@ -195,8 +478,10 @@ class DashboardProjectCrudTests(unittest.TestCase):
         ):
             result = asyncio.run(dashboard.list_dashboard_projects(self._req()))
 
-        self.assertEqual(result["projects"][0]["accumulated"], 1200.0)
+        self.assertEqual(result["projects"][0]["accumulated"], 1500.0)
+        self.assertEqual(result["projects"][0]["initial_amount"], 300.0)
         self.assertEqual(result["projects"][1]["accumulated"], 0.0)
+        self.assertEqual(result["projects"][1]["initial_amount"], 0.0)
         self.assertEqual(result["projects"][0]["deadline"], "2027-01-01")
 
     def test_create_project_saves_with_deadline(self):
@@ -205,13 +490,28 @@ class DashboardProjectCrudTests(unittest.TestCase):
             patch.object(dashboard, "save_project", return_value="p-new") as mock_save,
         ):
             payload = dashboard.ProjectCreateRequest(
-                name="House", target_amount=50000.0, deadline="2027-01-01", emoji="🏠"
+                name="House",
+                target_amount=50000.0,
+                initial_amount=1000.0,
+                deadline="2027-01-01",
+                emoji="🏠",
             )
             result = asyncio.run(dashboard.create_dashboard_project(payload, self._req()))
 
         self.assertEqual(result, {"ok": True, "id": "p-new"})
         saved = mock_save.call_args.args[0]
-        self.assertEqual((saved.name, saved.target_amount, saved.deadline), ("House", 50000.0, "2027-01-01"))
+        self.assertEqual(
+            (saved.name, saved.target_amount, saved.initial_amount, saved.deadline),
+            ("House", 50000.0, 1000.0, "2027-01-01"),
+        )
+
+    def test_create_project_rejects_negative_initial_amount(self):
+        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+            payload = dashboard.ProjectCreateRequest(
+                name="House", target_amount=50000.0, initial_amount=-1.0, deadline="2027-01-01"
+            )
+            with self.assertRaises(Exception):
+                asyncio.run(dashboard.create_dashboard_project(payload, self._req()))
 
     def test_create_project_requires_deadline(self):
         with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
@@ -224,11 +524,17 @@ class DashboardProjectCrudTests(unittest.TestCase):
             patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
             patch.object(dashboard, "update_project", return_value=True) as mock_update,
         ):
-            payload = dashboard.ProjectUpdateRequest(target_amount=60000.0)
+            payload = dashboard.ProjectUpdateRequest(target_amount=60000.0, initial_amount=500.0)
             result = asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
 
         self.assertEqual(result, {"ok": True})
-        mock_update.assert_called_once_with(123, "p1", target_amount=60000.0)
+        mock_update.assert_called_once_with(123, "p1", target_amount=60000.0, initial_amount=500.0)
+
+    def test_update_project_rejects_negative_initial_amount(self):
+        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+            payload = dashboard.ProjectUpdateRequest(initial_amount=-1.0)
+            with self.assertRaises(Exception):
+                asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
 
     def test_delete_project(self):
         with (
@@ -287,13 +593,21 @@ class DashboardInflowTargetTests(unittest.TestCase):
         self.assertEqual(saved.project_id, "p1")
         self.assertIsNone(saved.goal_id)
 
-    def test_create_inflow_rejects_both_targets(self):
-        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+    def test_create_inflow_accepts_goal_and_project(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_goal_by_id", return_value={"id": "g1"}),
+            patch.object(dashboard, "get_project_by_id", return_value={"id": "p1"}),
+            patch.object(dashboard, "save_inflow") as mock_save,
+        ):
             payload = dashboard.InflowCreateRequest(
                 item="X", amount=10.0, timestamp="2026-06-01T00:00:00+08:00", goal_id="g1", project_id="p1"
             )
-            with self.assertRaises(Exception):
-                asyncio.run(dashboard.create_dashboard_inflow(payload, self._req()))
+            asyncio.run(dashboard.create_dashboard_inflow(payload, self._req()))
+
+        saved = mock_save.call_args.args[0]
+        self.assertEqual(saved.goal_id, "g1")
+        self.assertEqual(saved.project_id, "p1")
 
     def test_create_inflow_rejects_missing_goal(self):
         with (

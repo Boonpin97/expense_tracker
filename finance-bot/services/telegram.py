@@ -139,7 +139,12 @@ async def send_budget_category_keyboard(chat_id: int, prompt: str) -> dict:
         return resp.json()
 
 
-async def send_income_goal_keyboard(chat_id: int, goals: list[dict], item: str, amount: float) -> dict:
+async def send_income_goal_keyboard(
+    chat_id: int,
+    goals: list[dict],
+    item: str,
+    amount: float,
+) -> dict:
     """Ask which goal a just-recorded income belongs to. Expiry comes from the
     interaction session, so callback_data carries no timestamps."""
     keyboard = [
@@ -155,6 +160,33 @@ async def send_income_goal_keyboard(chat_id: int, goals: list[dict], item: str, 
             json={
                 "chat_id": chat_id,
                 "text": f"Tag <b>{item}</b> +${amount:.2f} to a goal?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_income_project_keyboard(
+    chat_id: int,
+    projects: list[dict],
+    item: str,
+    amount: float,
+) -> dict:
+    """Ask which long-term project a just-recorded income belongs to."""
+    keyboard = [
+        [{"text": f"{project.get('emoji', '🚀')} {project['name']}", "callback_data": f"inflowproject:{project['id']}"}]
+        for project in projects
+    ]
+    keyboard.append([{"text": "➕ Add new project", "callback_data": "inflowproject:__new__"}])
+    keyboard.append([{"text": "🚫 No project", "callback_data": "inflowproject:__none__"}])
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Tag <b>{item}</b> +${amount:.2f} to a long-term project?",
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
             },
@@ -244,6 +276,100 @@ async def send_goal_delete_confirm_keyboard(chat_id: int, goal_name: str) -> dic
             json={
                 "chat_id": chat_id,
                 "text": f"Delete goal <b>{goal_name}</b>? Income entries tagged to it stay recorded.",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_project_keyboard(chat_id: int, projects: list[dict], action: str, prompt: str) -> dict:
+    """Generic project picker; callback_data is `{action}:{project_id}`."""
+    keyboard = [
+        [{"text": f"{project.get('emoji', '🚀')} {project['name']}", "callback_data": f"{action}:{project['id']}"}]
+        for project in projects
+    ]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_project_field_keyboard(chat_id: int, project_name: str) -> dict:
+    keyboard = [
+        [
+            {"text": "📝 Name", "callback_data": "projectfield:name"},
+            {"text": "😀 Emoji", "callback_data": "projectfield:emoji"},
+        ],
+        [
+            {"text": "🎯 Target", "callback_data": "projectfield:target"},
+            {"text": "💰 Initial", "callback_data": "projectfield:initial"},
+        ],
+        [
+            {"text": "📅 Deadline", "callback_data": "projectfield:deadline"},
+            {"text": "🔄 Reorder", "callback_data": "projectfield:reorder"},
+        ],
+    ]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"What do you want to change on <b>{project_name}</b>?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_project_reorder_keyboard(chat_id: int, projects: list[dict], project_id: str) -> dict:
+    """Show the project's position with ⬆️/⬇️ buttons to move it, plus Done."""
+    lines = ["Reordering long-term projects — tap ⬆️/⬇️ to move the selected project:"]
+    for index, project in enumerate(projects, start=1):
+        marker = "👉 " if project["id"] == project_id else ""
+        lines.append(f"{marker}{index}. {project.get('emoji', '🚀')} {project['name']}")
+    keyboard = [
+        [
+            {"text": "⬆️ Up", "callback_data": "projectmove:up"},
+            {"text": "⬇️ Down", "callback_data": "projectmove:down"},
+        ],
+        [{"text": "✅ Done", "callback_data": "projectmove:done"}],
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "\n".join(lines),
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_project_delete_confirm_keyboard(chat_id: int, project_name: str) -> dict:
+    keyboard = [[
+        {"text": "🗑️ Delete", "callback_data": "projectdelconfirm:yes"},
+        {"text": "Cancel", "callback_data": "projectdelconfirm:no"},
+    ]]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Delete long-term project <b>{project_name}</b>? Income entries tagged to it stay recorded.",
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
             },
@@ -542,6 +668,10 @@ async def set_my_commands() -> dict:
         {"command": "new_goal", "description": "Create a savings goal"},
         {"command": "edit_goal", "description": "Edit a goal's name or target"},
         {"command": "delete_goal", "description": "Delete a goal"},
+        {"command": "projects", "description": "List long-term projects"},
+        {"command": "new_projects", "description": "Create a long-term project"},
+        {"command": "edit_projects", "description": "Edit a long-term project"},
+        {"command": "delete_projects", "description": "Delete a long-term project"},
         {"command": "set_budget", "description": "Set a monthly budget for a category"},
         {"command": "list_budget", "description": "List monthly budgets"},
         {"command": "budget_report", "description": "Show this month's budget report"},
