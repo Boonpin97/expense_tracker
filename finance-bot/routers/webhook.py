@@ -73,6 +73,7 @@ from services.firestore import (
     update_category_order,
     update_goal,
     update_inflow_goal,
+    update_inflow_project,
     update_payment_plan,
     update_pending_plan,
     update_project,
@@ -557,7 +558,7 @@ async def _get_active_session_or_expire(chat_id: int, flow_type: str) -> dict | 
         elif flow_type == "set_budget":
             await telegram.send_message(chat_id, "⏰ The /set_budget request has expired. Please send /set_budget again.")
         elif flow_type == "income_goal":
-            await telegram.send_message(chat_id, "⏰ These goal options have expired — the income stays recorded without a goal.")
+            await telegram.send_message(chat_id, "⏰ These goal/project options have expired — the income stays recorded without a goal or project.")
         elif flow_type == "new_goal":
             await telegram.send_message(chat_id, "⏰ The /new_goal request has expired. Please send /new_goal again.")
         elif flow_type == "edit_goal":
@@ -871,6 +872,7 @@ def _income_summary(
     transaction_date: str | None = None,
     goal_label: str | None = None,
     goal_created: bool = False,
+    project_label: str | None = None,
 ) -> str:
     message = f"✅ Income: <b>{item}</b> +${amount:.2f}"
     if transaction_date:
@@ -878,6 +880,8 @@ def _income_summary(
         message += f"\n🗓 {date_obj.strftime('%d %b %Y')}"
     if goal_label:
         message += f"\n🎯 Goal: {goal_label}{' (created)' if goal_created else ''}"
+    if project_label:
+        message += f"\n🚀 Project: {project_label}"
     return message
 
 
@@ -888,8 +892,9 @@ async def _prompt_income_goal(
     amount: float,
     transaction_date: str | None = None,
 ) -> None:
-    """Ask which goal the income belongs to — after every entry, no learning."""
+    """Ask which goal or long-term project the income belongs to."""
     goals = get_goals(chat_id)
+    projects = get_projects(chat_id)
     start_session(
         chat_id,
         "income_goal",
@@ -901,7 +906,7 @@ async def _prompt_income_goal(
             "transaction_date": transaction_date,
         },
     )
-    await telegram.send_income_goal_keyboard(chat_id, goals, item, amount)
+    await telegram.send_income_goal_keyboard(chat_id, goals, projects, item, amount)
 
 
 async def _handle_inflow_command(chat_id: int, text: str) -> None:
@@ -942,6 +947,10 @@ async def _handle_inflow_session(chat_id: int, text: str) -> bool:
 
 def _goal_label(goal: dict) -> str:
     return f"{goal.get('emoji', '🎯')} <b>{goal.get('name', '')}</b>"
+
+
+def _project_label(project: dict) -> str:
+    return f"{project.get('emoji', '🚀')} <b>{project.get('name', '')}</b>"
 
 
 def _format_goals_overview(chat_id: int) -> str:
@@ -1364,7 +1373,7 @@ async def webhook(request: Request):
             choice = callback_data.split(":", 1)[1]
             if choice == "__none__":
                 clear_session(chat_id)
-                await telegram.answer_callback_query(callback_query_id, "No goal")
+                await telegram.answer_callback_query(callback_query_id, "No target")
                 await telegram.send_message(
                     chat_id,
                     _income_summary(
@@ -1390,11 +1399,37 @@ async def webhook(request: Request):
                 await telegram.send_message(chat_id, "🎯 Send a name for the new goal:")
                 return {"ok": True}
 
+            if choice.startswith("project:"):
+                project_id = choice.split(":", 1)[1]
+                project = get_project_by_id(chat_id, project_id)
+                if not project:
+                    clear_session(chat_id)
+                    await telegram.answer_callback_query(callback_query_id, "Not found")
+                    await telegram.send_message(
+                        chat_id,
+                        "⚠️ That project is no longer available. The income stays recorded without a goal or project.",
+                    )
+                    return {"ok": True}
+
+                update_inflow_project(payload.get("inflow_id"), project_id)
+                clear_session(chat_id)
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_message(
+                    chat_id,
+                    _income_summary(
+                        payload.get("item", ""),
+                        payload.get("amount", 0.0),
+                        payload.get("transaction_date"),
+                        project_label=_project_label(project),
+                    ),
+                )
+                return {"ok": True}
+
             goal = get_goal_by_id(chat_id, choice)
             if not goal:
                 clear_session(chat_id)
                 await telegram.answer_callback_query(callback_query_id, "Not found")
-                await telegram.send_message(chat_id, "⚠️ That goal is no longer available. The income stays recorded without a goal.")
+                await telegram.send_message(chat_id, "⚠️ That goal is no longer available. The income stays recorded without a goal or project.")
                 return {"ok": True}
 
             update_inflow_goal(payload.get("inflow_id"), choice)

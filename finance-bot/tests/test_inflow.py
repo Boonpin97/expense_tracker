@@ -154,14 +154,15 @@ class InflowCommandTests(unittest.TestCase):
     def _goal_prompt_patches(self):
         return (
             patch("routers.webhook.get_goals", return_value=[]),
+            patch("routers.webhook.get_projects", return_value=[]),
             patch("routers.webhook.start_session"),
             patch("routers.webhook.telegram.send_income_goal_keyboard", new=AsyncMock()),
         )
 
     def test_income_command_with_args_records_inflow(self):
-        goals, start, keyboard = self._goal_prompt_patches()
+        goals, projects, start, keyboard = self._goal_prompt_patches()
         with (
-            goals, keyboard,
+            goals, projects, keyboard,
             start as mock_start,
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.save_inflow", return_value="inflow-doc-1") as mock_save,
@@ -191,9 +192,9 @@ class InflowCommandTests(unittest.TestCase):
         )
 
     def test_income_command_with_dollar_and_date(self):
-        goals, start, keyboard = self._goal_prompt_patches()
+        goals, projects, start, keyboard = self._goal_prompt_patches()
         with (
-            goals, start, keyboard,
+            goals, projects, start, keyboard,
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.save_inflow", return_value="inflow-doc-1") as mock_save,
             patch("routers.webhook.telegram.send_message", new=AsyncMock()),
@@ -268,6 +269,7 @@ class InflowSessionTests(unittest.TestCase):
             patch("routers.webhook.session_expired", return_value=False),
             patch("routers.webhook.clear_session") as mock_clear,
             patch("routers.webhook.get_goals", return_value=[]),
+            patch("routers.webhook.get_projects", return_value=[]),
             patch("routers.webhook.start_session") as mock_start,
             patch("routers.webhook.telegram.send_income_goal_keyboard", new=AsyncMock()),
             patch("routers.webhook.save_inflow", return_value="inflow-doc-1") as mock_save,

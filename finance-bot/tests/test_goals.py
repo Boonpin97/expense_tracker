@@ -420,6 +420,27 @@ class IncomeGoalCallbackTests(unittest.TestCase):
         self.assertIn("Income", message)
         self.assertIn("Vacation", message)
 
+    def test_pick_project_tags_inflow_and_clears(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_project_by_id", return_value={"id": "p1", "name": "House", "emoji": "🏠"}),
+            patch("routers.webhook.update_inflow_project") as mock_tag,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            result = asyncio.run(webhook(_request_for_callback("inflowgoal:project:p1")))
+
+        self.assertEqual(result, {"ok": True})
+        mock_tag.assert_called_once_with("inflow-doc-1", "p1")
+        mock_clear.assert_called_once_with(123)
+        message = mock_send.call_args.args[1]
+        self.assertIn("Income", message)
+        self.assertIn("Project", message)
+        self.assertIn("House", message)
+
     def test_no_goal_clears_without_tagging(self):
         with (
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),

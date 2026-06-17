@@ -133,7 +133,11 @@ def delete_inflow(doc_id: str) -> None:
 
 
 def update_inflow_goal(doc_id: str, goal_id: Optional[str]) -> None:
-    get_db().collection("inflows").document(doc_id).update({"goal_id": goal_id})
+    get_db().collection("inflows").document(doc_id).update({"goal_id": goal_id, "project_id": None})
+
+
+def update_inflow_project(doc_id: str, project_id: Optional[str]) -> None:
+    get_db().collection("inflows").document(doc_id).update({"project_id": project_id, "goal_id": None})
 
 
 def _goals_collection(chat_id: int):
