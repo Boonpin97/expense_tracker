@@ -251,6 +251,100 @@ async def send_goal_delete_confirm_keyboard(chat_id: int, goal_name: str) -> dic
         return resp.json()
 
 
+async def send_project_keyboard(chat_id: int, projects: list[dict], action: str, prompt: str) -> dict:
+    """Generic project picker; callback_data is `{action}:{project_id}`."""
+    keyboard = [
+        [{"text": f"{project.get('emoji', '🚀')} {project['name']}", "callback_data": f"{action}:{project['id']}"}]
+        for project in projects
+    ]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": prompt,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_project_field_keyboard(chat_id: int, project_name: str) -> dict:
+    keyboard = [
+        [
+            {"text": "📝 Name", "callback_data": "projectfield:name"},
+            {"text": "😀 Emoji", "callback_data": "projectfield:emoji"},
+        ],
+        [
+            {"text": "🎯 Target", "callback_data": "projectfield:target"},
+            {"text": "💰 Initial", "callback_data": "projectfield:initial"},
+        ],
+        [
+            {"text": "📅 Deadline", "callback_data": "projectfield:deadline"},
+            {"text": "🔄 Reorder", "callback_data": "projectfield:reorder"},
+        ],
+    ]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"What do you want to change on <b>{project_name}</b>?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_project_reorder_keyboard(chat_id: int, projects: list[dict], project_id: str) -> dict:
+    """Show the project's position with ⬆️/⬇️ buttons to move it, plus Done."""
+    lines = ["Reordering long-term projects — tap ⬆️/⬇️ to move the selected project:"]
+    for index, project in enumerate(projects, start=1):
+        marker = "👉 " if project["id"] == project_id else ""
+        lines.append(f"{marker}{index}. {project.get('emoji', '🚀')} {project['name']}")
+    keyboard = [
+        [
+            {"text": "⬆️ Up", "callback_data": "projectmove:up"},
+            {"text": "⬇️ Down", "callback_data": "projectmove:down"},
+        ],
+        [{"text": "✅ Done", "callback_data": "projectmove:done"}],
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "\n".join(lines),
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_project_delete_confirm_keyboard(chat_id: int, project_name: str) -> dict:
+    keyboard = [[
+        {"text": "🗑️ Delete", "callback_data": "projectdelconfirm:yes"},
+        {"text": "Cancel", "callback_data": "projectdelconfirm:no"},
+    ]]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Delete long-term project <b>{project_name}</b>? Income entries tagged to it stay recorded.",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
 async def send_transaction_keyboard(chat_id: int, transactions: list[dict], prompt: str) -> dict:
     """Send an inline keyboard where each button is a transaction to delete."""
     ts = datetime.now(SGT).isoformat(timespec="seconds")
@@ -542,6 +636,10 @@ async def set_my_commands() -> dict:
         {"command": "new_goal", "description": "Create a savings goal"},
         {"command": "edit_goal", "description": "Edit a goal's name or target"},
         {"command": "delete_goal", "description": "Delete a goal"},
+        {"command": "projects", "description": "List long-term projects"},
+        {"command": "new_projects", "description": "Create a long-term project"},
+        {"command": "edit_projects", "description": "Edit a long-term project"},
+        {"command": "delete_projects", "description": "Delete a long-term project"},
         {"command": "set_budget", "description": "Set a monthly budget for a category"},
         {"command": "list_budget", "description": "List monthly budgets"},
         {"command": "budget_report", "description": "Show this month's budget report"},
