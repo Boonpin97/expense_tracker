@@ -44,6 +44,7 @@ class Project(BaseModel):
     chat_id: int
     name: str
     target_amount: float
+    initial_amount: float = 0.0
     deadline: str  # ISO 8601 date — when the project should be funded by
     created_at: str
     emoji: str = "🚀"

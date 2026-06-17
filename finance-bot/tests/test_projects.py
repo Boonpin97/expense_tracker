@@ -185,7 +185,13 @@ class DashboardProjectCrudTests(unittest.TestCase):
 
     def test_list_projects_merges_accumulated(self):
         projects = [
-            {"id": "p1", "name": "House", "target_amount": 50000.0, "deadline": "2027-01-01"},
+            {
+                "id": "p1",
+                "name": "House",
+                "target_amount": 50000.0,
+                "initial_amount": 300.0,
+                "deadline": "2027-01-01",
+            },
             {"id": "p2", "name": "Wedding", "target_amount": 20000.0, "deadline": "2026-12-01"},
         ]
         with (
@@ -195,8 +201,10 @@ class DashboardProjectCrudTests(unittest.TestCase):
         ):
             result = asyncio.run(dashboard.list_dashboard_projects(self._req()))
 
-        self.assertEqual(result["projects"][0]["accumulated"], 1200.0)
+        self.assertEqual(result["projects"][0]["accumulated"], 1500.0)
+        self.assertEqual(result["projects"][0]["initial_amount"], 300.0)
         self.assertEqual(result["projects"][1]["accumulated"], 0.0)
+        self.assertEqual(result["projects"][1]["initial_amount"], 0.0)
         self.assertEqual(result["projects"][0]["deadline"], "2027-01-01")
 
     def test_create_project_saves_with_deadline(self):
@@ -205,13 +213,28 @@ class DashboardProjectCrudTests(unittest.TestCase):
             patch.object(dashboard, "save_project", return_value="p-new") as mock_save,
         ):
             payload = dashboard.ProjectCreateRequest(
-                name="House", target_amount=50000.0, deadline="2027-01-01", emoji="🏠"
+                name="House",
+                target_amount=50000.0,
+                initial_amount=1000.0,
+                deadline="2027-01-01",
+                emoji="🏠",
             )
             result = asyncio.run(dashboard.create_dashboard_project(payload, self._req()))
 
         self.assertEqual(result, {"ok": True, "id": "p-new"})
         saved = mock_save.call_args.args[0]
-        self.assertEqual((saved.name, saved.target_amount, saved.deadline), ("House", 50000.0, "2027-01-01"))
+        self.assertEqual(
+            (saved.name, saved.target_amount, saved.initial_amount, saved.deadline),
+            ("House", 50000.0, 1000.0, "2027-01-01"),
+        )
+
+    def test_create_project_rejects_negative_initial_amount(self):
+        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+            payload = dashboard.ProjectCreateRequest(
+                name="House", target_amount=50000.0, initial_amount=-1.0, deadline="2027-01-01"
+            )
+            with self.assertRaises(Exception):
+                asyncio.run(dashboard.create_dashboard_project(payload, self._req()))
 
     def test_create_project_requires_deadline(self):
         with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
@@ -224,11 +247,17 @@ class DashboardProjectCrudTests(unittest.TestCase):
             patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
             patch.object(dashboard, "update_project", return_value=True) as mock_update,
         ):
-            payload = dashboard.ProjectUpdateRequest(target_amount=60000.0)
+            payload = dashboard.ProjectUpdateRequest(target_amount=60000.0, initial_amount=500.0)
             result = asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
 
         self.assertEqual(result, {"ok": True})
-        mock_update.assert_called_once_with(123, "p1", target_amount=60000.0)
+        mock_update.assert_called_once_with(123, "p1", target_amount=60000.0, initial_amount=500.0)
+
+    def test_update_project_rejects_negative_initial_amount(self):
+        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+            payload = dashboard.ProjectUpdateRequest(initial_amount=-1.0)
+            with self.assertRaises(Exception):
+                asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
 
     def test_delete_project(self):
         with (
