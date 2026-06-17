@@ -472,6 +472,36 @@ class IncomeGoalCallbackTests(unittest.TestCase):
         self.assertIn("Project", message)
         self.assertIn("House", message)
 
+    def test_project_step_add_new_project_chains_session_with_income_context(self):
+        session = self._session()
+        session["flow_type"] = "income_project"
+        session["step"] = "choosing_project"
+        session["payload"]["goal_label"] = "Goal <b>Vacation</b>"
+        session["payload"]["goal_created"] = False
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_callback("inflowproject:__new__")))
+
+        mock_start.assert_called_once_with(
+            123,
+            "new_project",
+            "awaiting_name",
+            payload={
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+                "goal_label": "Goal <b>Vacation</b>",
+                "goal_created": False,
+            },
+        )
+
     def test_project_step_no_project_finalises_with_goal_only(self):
         session = self._session()
         session["flow_type"] = "income_project"

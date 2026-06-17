@@ -1249,6 +1249,21 @@ async def _handle_new_project_session(chat_id: int, text: str) -> bool:
             )
         )
         clear_session(chat_id)
+        inflow_id = payload.get("inflow_id")
+        if inflow_id:
+            update_inflow_project(inflow_id, project_id)
+            await telegram.send_message(
+                chat_id,
+                _income_summary(
+                    payload.get("item", ""),
+                    payload.get("amount", 0.0),
+                    payload.get("transaction_date"),
+                    goal_label=payload.get("goal_label"),
+                    goal_created=bool(payload.get("goal_created")),
+                    project_label=f"{emoji} <b>{name}</b>",
+                ),
+            )
+            return True
         await telegram.send_message(
             chat_id,
             f"✅ Project {emoji} <b>{name}</b> created (${initial:,.2f} / ${target:,.2f}, due {deadline}).",
@@ -1458,6 +1473,24 @@ async def webhook(request: Request):
 
             payload = session.get("payload", {})
             choice = callback_data.split(":", 1)[1]
+            if choice == "__new__":
+                start_session(
+                    chat_id,
+                    "new_project",
+                    "awaiting_name",
+                    payload={
+                        "inflow_id": payload.get("inflow_id"),
+                        "item": payload.get("item", ""),
+                        "amount": payload.get("amount", 0.0),
+                        "transaction_date": payload.get("transaction_date"),
+                        "goal_label": payload.get("goal_label"),
+                        "goal_created": bool(payload.get("goal_created")),
+                    },
+                )
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_message(chat_id, "🚀 Send a name for the new project:")
+                return {"ok": True}
+
             if choice == "__none__":
                 clear_session(chat_id)
                 await telegram.answer_callback_query(callback_query_id, "No project")

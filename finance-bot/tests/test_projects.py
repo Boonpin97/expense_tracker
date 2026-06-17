@@ -277,6 +277,44 @@ class NewProjectFlowTests(unittest.TestCase):
         mock_clear.assert_called_once_with(123)
         self.assertIn("House", mock_send.call_args.args[1])
 
+    def test_new_project_from_income_tags_inflow(self):
+        session = {
+            "flow_type": "new_project",
+            "step": "awaiting_deadline",
+            "payload": {
+                "name": "House",
+                "emoji": "P",
+                "target_amount": 50000.0,
+                "initial_amount": 1000.0,
+                "inflow_id": "inflow-doc-1",
+                "item": "Salary",
+                "amount": 2000.0,
+                "transaction_date": None,
+                "goal_label": "Goal <b>Vacation</b>",
+                "goal_created": False,
+            },
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.save_project", return_value="p1") as mock_save,
+            patch("routers.webhook.update_inflow_project") as mock_tag,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_text("010127")))
+
+        mock_save.assert_called_once()
+        mock_tag.assert_called_once_with("inflow-doc-1", "p1")
+        mock_clear.assert_called_once_with(123)
+        message = mock_send.call_args.args[1]
+        self.assertIn("Salary", message)
+        self.assertIn("Vacation", message)
+        self.assertIn("Project", message)
+        self.assertIn("House", message)
+
     def test_invalid_initial_amount_keeps_session(self):
         session = {
             "flow_type": "new_project",

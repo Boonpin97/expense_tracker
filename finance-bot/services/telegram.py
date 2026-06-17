@@ -178,6 +178,7 @@ async def send_income_project_keyboard(
         [{"text": f"{project.get('emoji', '🚀')} {project['name']}", "callback_data": f"inflowproject:{project['id']}"}]
         for project in projects
     ]
+    keyboard.append([{"text": "➕ Add new project", "callback_data": "inflowproject:__new__"}])
     keyboard.append([{"text": "🚫 No project", "callback_data": "inflowproject:__none__"}])
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
