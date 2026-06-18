@@ -167,6 +167,20 @@ class DashboardRouterNegativePathTests(unittest.TestCase):
                 asyncio.run(dashboard.create_dashboard_transaction(payload, request))
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_create_dashboard_recurring_requires_start_date(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        payload = dashboard.TransactionCreateRequest(
+            item="Netflix",
+            amount=19.99,
+            category="Subscriptions",
+            timestamp="2026-05-20T09:30:00+08:00",
+            payment_type="recurring",
+        )
+        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(dashboard.create_dashboard_transaction(payload, request))
+        self.assertEqual(ctx.exception.status_code, 400)
+
     def test_update_dashboard_transaction_rejects_cross_user_access(self):
         request = SimpleNamespace(cookies={}, headers={})
         payload = dashboard.TransactionUpdateRequest(

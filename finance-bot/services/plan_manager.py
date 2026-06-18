@@ -82,19 +82,22 @@ async def create_plan_and_post_first_charge(chat_id: int, pending: dict) -> None
         )
         first_charge_time = start
     else:
+        raw_start = pending.get("start_date")
+        start = datetime.fromisoformat(raw_start).replace(tzinfo=SGT) if raw_start else now
         plan = PaymentPlan(
             chat_id=chat_id,
             plan_type="recurring",
             item=pending["item"],
             category=pending["category"],
-            day_of_month=int(pending["day_of_month"]),
-            start_year=now.year,
-            start_month=now.month,
-            next_due_date=now.isoformat(),
+            day_of_month=int(pending.get("day_of_month") or start.day),
+            start_year=start.year,
+            start_month=start.month,
+            next_due_date=start.isoformat(),
             created_at=now.isoformat(),
             amount=float(pending["amount"]),
             current_installment_number=0,
         )
+        first_charge_time = start
 
     plan_id = firestore.save_payment_plan(plan)
     plan_data = firestore.get_payment_plan(plan_id)

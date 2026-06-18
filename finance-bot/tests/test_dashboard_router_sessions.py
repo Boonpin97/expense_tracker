@@ -207,6 +207,62 @@ class DashboardRouterSessionTests(unittest.TestCase):
         )
         mock_rewrite.assert_awaited_once_with("plan-1")
 
+    def test_create_dashboard_recurring_plan_uses_start_date(self):
+        request = SimpleNamespace(cookies={}, headers={})
+        session = {"chat_id": 123}
+        payload = dashboard.TransactionCreateRequest(
+            item="Netflix",
+            amount=19.99,
+            category="Subscriptions",
+            timestamp="2026-05-20T09:30:00+08:00",
+            payment_type="recurring",
+            start_date="2026-07-15",
+            create_first_transaction_now=False,
+        )
+        saved_plan = {}
+
+        def capture_plan(plan):
+            saved_plan.update(plan.__dict__)
+            return "plan-1"
+
+        with (
+            patch.object(dashboard, "_require_session", return_value=session),
+            patch.object(dashboard, "save_payment_plan", side_effect=capture_plan),
+            patch.object(
+                dashboard,
+                "get_payment_plan",
+                return_value={
+                    "id": "plan-1",
+                    "chat_id": 123,
+                    "plan_type": "recurring",
+                    "item": "Netflix",
+                    "category": "Subscriptions",
+                    "day_of_month": 15,
+                    "start_year": 2026,
+                    "start_month": 7,
+                    "next_due_date": "2026-07-15T00:00:00+08:00",
+                    "created_at": "2026-05-12T00:00:00+08:00",
+                    "amount": 19.99,
+                    "current_installment_number": 0,
+                },
+            ),
+            patch.object(dashboard, "update_payment_plan") as mock_update,
+            patch.object(dashboard, "save_transaction") as mock_save_tx,
+        ):
+            result = asyncio.run(dashboard.create_dashboard_transaction(payload, request))
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(saved_plan["day_of_month"], 15)
+        self.assertEqual((saved_plan["start_year"], saved_plan["start_month"]), (2026, 7))
+        self.assertEqual(saved_plan["next_due_date"], "2026-07-15T00:00:00+08:00")
+        mock_save_tx.assert_not_called()
+        mock_update.assert_called_once_with(
+            "plan-1",
+            current_installment_number=0,
+            next_due_date="2026-07-15T00:00:00+08:00",
+            status="active",
+        )
+
     def test_delete_dashboard_plan_removes_plan_document(self):
         request = SimpleNamespace(cookies={}, headers={})
         session = {"chat_id": 123}

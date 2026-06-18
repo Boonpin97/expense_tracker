@@ -103,7 +103,7 @@ class PendingPlan(BaseModel):
     total_amount: Optional[float] = None
     day_of_month: Optional[int] = None
     installment_count: Optional[int] = None
-    start_date: Optional[str] = None  # ISO date — split flow start date
+    start_date: Optional[str] = None  # ISO date — plan start date
     number_of_months: Optional[int] = None  # split flow: months to spread across
     selected_plan_id: Optional[str] = None
     edit_field: Optional[str] = None

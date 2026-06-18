@@ -103,7 +103,7 @@ class TransactionCreateRequest(BaseModel):
     payment_type: str
     day_of_month: Optional[int] = None  # recurring
     installment_count: Optional[int] = None  # legacy split input
-    start_date: Optional[str] = None  # split: ISO date the plan starts
+    start_date: Optional[str] = None  # ISO date the plan starts
     number_of_months: Optional[int] = None  # split: months to spread across
     create_first_transaction_now: bool = True
 
@@ -480,25 +480,21 @@ async def create_dashboard_transaction(payload: TransactionCreateRequest, reques
         )
         return {"ok": True}
 
-    # Recurring: keep day-of-month input and the defer-to-next-month start logic.
-    if payload.day_of_month is None or not 1 <= payload.day_of_month <= 31:
-        raise HTTPException(status_code=400, detail="Day must be between 1 and 31.")
-
-    if payload.create_first_transaction_now:
-        start_year = timestamp.year
-        start_month = timestamp.month
-    else:
-        start_year, start_month = _scheduled_plan_start(timestamp, payload.day_of_month)
+    # Recurring plans are defined by an explicit start date. The start date
+    # drives the first charge date and the monthly charge day.
+    if not payload.start_date:
+        raise HTTPException(status_code=400, detail="Start date is required.")
+    start_dt = _parse_dashboard_datetime(payload.start_date)
 
     plan = PaymentPlan(
         chat_id=session["chat_id"],
         plan_type="recurring",
         item=item,
         category=category,
-        day_of_month=payload.day_of_month,
-        start_year=start_year,
-        start_month=start_month,
-        next_due_date=timestamp.isoformat(),
+        day_of_month=start_dt.day,
+        start_year=start_dt.year,
+        start_month=start_dt.month,
+        next_due_date=start_dt.isoformat(),
         created_at=datetime.now(SGT).isoformat(),
         amount=payload.amount,
         current_installment_number=0,
@@ -506,7 +502,7 @@ async def create_dashboard_transaction(payload: TransactionCreateRequest, reques
 
     plan_id = save_payment_plan(plan)
     stored_plan = get_payment_plan(plan_id)
-    update_payment_plan(plan_id, **_build_plan_creation_result(stored_plan, payload.create_first_transaction_now, timestamp))
+    update_payment_plan(plan_id, **_build_plan_creation_result(stored_plan, payload.create_first_transaction_now, start_dt))
     return {"ok": True}
 
 
@@ -907,7 +903,7 @@ class PlanUpdateRequest(BaseModel):
     item: Optional[str] = None
     category: Optional[str] = None
     day_of_month: Optional[int] = None
-    start_date: Optional[str] = None  # split: ISO date — sets start month + recurring day
+    start_date: Optional[str] = None  # ISO date — sets start month + recurring day
     amount: Optional[float] = None
     total_amount: Optional[float] = None
     installment_count: Optional[int] = None
@@ -943,8 +939,6 @@ async def update_dashboard_plan(plan_id: str, payload: PlanUpdateRequest, reques
             raise HTTPException(status_code=400, detail="Day must be between 1 and 31.")
         updates["day_of_month"] = payload.day_of_month
     if payload.start_date is not None:
-        if plan.get("plan_type") != "split_payment":
-            raise HTTPException(status_code=400, detail="start_date is only supported for split payment plans.")
         start_dt = _parse_dashboard_datetime(payload.start_date)
         # The start date sets both when the plan begins and the recurring day.
         updates["start_year"] = start_dt.year

@@ -840,7 +840,6 @@ function DashboardLayout({
   const [newAmount, setNewAmount] = useState("");
   const [newTimestamp, setNewTimestamp] = useState(formatDateTimeInputValue(new Date()));
   const [newPaymentType, setNewPaymentType] = useState<DashboardPaymentType>("one_time");
-  const [newDayOfMonth, setNewDayOfMonth] = useState("");
   const [newStartDate, setNewStartDate] = useState("");
   const [newInstallmentCount, setNewInstallmentCount] = useState("");
   const [createFirstTransactionNow, setCreateFirstTransactionNow] = useState(true);
@@ -960,7 +959,6 @@ function DashboardLayout({
     setNewAmount("");
     setNewTimestamp(formatDateTimeInputValue(new Date()));
     setNewPaymentType("one_time");
-    setNewDayOfMonth("");
     setNewStartDate("");
     setNewInstallmentCount("");
     setCreateFirstTransactionNow(true);
@@ -1152,10 +1150,8 @@ function DashboardLayout({
     const timestamp = new Date(newTimestamp);
     const needsPlanFields = newPaymentType !== "one_time";
     const isSplit = newPaymentType === "split_payment";
-    const isRecurring = newPaymentType === "recurring";
-    const dayOfMonth = isRecurring ? parseInt(newDayOfMonth, 10) : undefined;
     const numberOfMonths = isSplit ? parseInt(newInstallmentCount, 10) : undefined;
-    const startDate = isSplit ? newStartDate : undefined;
+    const startDate = needsPlanFields ? newStartDate : undefined;
 
     if (!item) {
       setCreateTransactionError("Item is required.");
@@ -1175,11 +1171,7 @@ function DashboardLayout({
       setCreateTransactionError("Date is invalid.");
       return;
     }
-    if (isRecurring && (dayOfMonth === undefined || Number.isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31)) {
-      setCreateTransactionError("Day of month must be between 1 and 31.");
-      return;
-    }
-    if (isSplit && (!startDate || Number.isNaN(new Date(startDate).getTime()))) {
+    if (needsPlanFields && (!startDate || Number.isNaN(new Date(startDate).getTime()))) {
       setCreateTransactionError("Start date is required.");
       return;
     }
@@ -1197,7 +1189,6 @@ function DashboardLayout({
         category,
         timestamp,
         paymentType: newPaymentType,
-        ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
         ...(startDate ? { startDate } : {}),
         ...(numberOfMonths !== undefined ? { numberOfMonths } : {}),
         ...(needsPlanFields ? { createFirstTransactionNow } : {}),
@@ -1671,33 +1662,18 @@ function DashboardLayout({
               </div>
               {newPaymentType !== "one_time" ? (
                 <>
-                  {newPaymentType === "recurring" ? (
-                    <div className="space-y-2">
-                      <Label htmlFor="new-day-of-month">Monthly Charge Day</Label>
-                      <Input
-                        id="new-day-of-month"
-                        type="number"
-                        inputMode="numeric"
-                        min="1"
-                        max="31"
-                        value={newDayOfMonth}
-                        onChange={(e) => setNewDayOfMonth(e.target.value)}
-                        disabled={creatingTransaction}
-                      />
-                    </div>
-                  ) : null}
+                  <div className="space-y-2">
+                    <Label htmlFor="new-start-date">Start Date</Label>
+                    <Input
+                      id="new-start-date"
+                      type="date"
+                      value={newStartDate}
+                      onChange={(e) => setNewStartDate(e.target.value)}
+                      disabled={creatingTransaction}
+                    />
+                  </div>
                   {newPaymentType === "split_payment" ? (
                     <>
-                      <div className="space-y-2">
-                        <Label htmlFor="new-start-date">Start Date</Label>
-                        <Input
-                          id="new-start-date"
-                          type="date"
-                          value={newStartDate}
-                          onChange={(e) => setNewStartDate(e.target.value)}
-                          disabled={creatingTransaction}
-                        />
-                      </div>
                       <div className="space-y-2">
                         <Label htmlFor="new-installment-count">Number of Months</Label>
                         <Input

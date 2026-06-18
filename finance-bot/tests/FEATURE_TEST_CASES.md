@@ -230,10 +230,10 @@ Use three layers:
 | PLN-007 | plan new category existing name | entered name already exists | skips emoji and continues flow |
 | PLN-008 | plan new category brand-new name | entered unique name | asks for emoji |
 | PLN-009 | plan new category emoji | emoji supplied | category added and continues flow |
-| PLN-010 | recurring amount valid | positive amount | asks for charge day |
+| PLN-010 | recurring amount valid | positive amount | asks for start date |
 | PLN-011 | recurring amount invalid | zero/negative/non-numeric | validation message |
-| PLN-012 | recurring day valid | day 1-31 | plan created and first charge posted |
-| PLN-013 | recurring day invalid | day outside 1-31 | validation message |
+| PLN-012 | recurring start date valid | valid DDMMYY date | plan created and first charge posted |
+| PLN-013 | recurring start date invalid | invalid DDMMYY date | validation message |
 | PLN-014 | split total valid | positive amount | asks for charge day |
 | PLN-015 | split total invalid | zero/negative/non-numeric | validation message |
 | PLN-016 | split day valid | day 1-31 | asks for month count |
@@ -411,8 +411,8 @@ Use three layers:
 | DTX-010 | create recurring valid scheduled | `create_first_transaction_now=false` | plan saved with future start month if past day-of-month |
 | DTX-011 | create split valid immediate | valid split payload | plan saved, base/final amounts computed, first occurrence posted |
 | DTX-012 | create split valid scheduled | scheduled split | no immediate tx and next due set correctly |
-| DTX-013 | create recurring missing day | no `day_of_month` | 400 |
-| DTX-014 | create recurring invalid day | day outside 1..31 | 400 |
+| DTX-013 | create recurring missing start date | no `start_date` | 400 |
+| DTX-014 | create recurring invalid start date | invalid `start_date` | 400 |
 | DTX-015 | create split missing installment count | no months provided | 400 |
 | DTX-016 | create split invalid installment count | months < 1 | 400 |
 | DTX-017 | update transaction valid | owned transaction and valid payload | tx doc updated |
