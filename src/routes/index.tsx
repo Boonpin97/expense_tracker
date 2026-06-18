@@ -848,7 +848,6 @@ function DashboardLayout({
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [planEditItem, setPlanEditItem] = useState("");
   const [planEditCategory, setPlanEditCategory] = useState("");
-  const [planEditDay, setPlanEditDay] = useState("");
   const [planEditStartDate, setPlanEditStartDate] = useState("");
   const [planEditAmount, setPlanEditAmount] = useState("");
   const [planEditMonths, setPlanEditMonths] = useState("");
@@ -1020,13 +1019,10 @@ function DashboardLayout({
     setEditingPlanId(plan.id);
     setPlanEditItem(plan.item);
     setPlanEditCategory(plan.category);
-    setPlanEditDay(String(plan.dayOfMonth));
     setPlanEditStartDate(
-      plan.planType === "split_payment"
-        ? `${plan.startYear.toString().padStart(4, "0")}-${plan.startMonth
-            .toString()
-            .padStart(2, "0")}-${plan.dayOfMonth.toString().padStart(2, "0")}`
-        : "",
+      `${plan.startYear.toString().padStart(4, "0")}-${plan.startMonth
+        .toString()
+        .padStart(2, "0")}-${plan.dayOfMonth.toString().padStart(2, "0")}`,
     );
     setPlanEditAmount(plan.planType === "recurring" ? String(plan.amount) : String(plan.totalAmount));
     setPlanEditMonths(plan.planType === "split_payment" ? String(plan.installmentCount) : "");
@@ -1058,27 +1054,21 @@ function DashboardLayout({
     let amount: number | undefined;
     let totalAmount: number | undefined;
     let installmentCount: number | undefined;
-    let dayOfMonth: number | undefined;
     let startDate: string | undefined;
 
+    if (!planEditStartDate || Number.isNaN(new Date(planEditStartDate).getTime())) {
+      setPlanEditError("Start date is required.");
+      return;
+    }
+    startDate = planEditStartDate;
+
     if (!isSplit) {
-      const day = parseInt(planEditDay, 10);
-      if (Number.isNaN(day) || day < 1 || day > 31) {
-        setPlanEditError("Day must be between 1 and 31.");
-        return;
-      }
-      dayOfMonth = day;
       amount = parseFloat(planEditAmount);
       if (Number.isNaN(amount) || amount <= 0) {
         setPlanEditError("Amount must be a positive number.");
         return;
       }
     } else {
-      if (!planEditStartDate || Number.isNaN(new Date(planEditStartDate).getTime())) {
-        setPlanEditError("Start date is required.");
-        return;
-      }
-      startDate = planEditStartDate;
       totalAmount = parseFloat(planEditAmount);
       installmentCount = parseInt(planEditMonths, 10);
       if (Number.isNaN(totalAmount) || totalAmount <= 0) {
@@ -1103,7 +1093,6 @@ function DashboardLayout({
       await onUpdatePlan(editingPlan.id, {
         item: planEditItem.trim(),
         category: planEditCategory,
-        ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
         ...(startDate !== undefined ? { startDate } : {}),
         ...(amount !== undefined ? { amount } : {}),
         ...(totalAmount !== undefined ? { totalAmount } : {}),
@@ -1835,7 +1824,7 @@ function DashboardLayout({
               <DialogDescription>
                 {editingPlan?.planType === "split_payment"
                   ? "Update name, category, day, total amount, or number of months."
-                  : "Update name, category, day, or amount."}
+                  : "Update name, category, start date, or amount."}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-2">
@@ -1866,7 +1855,7 @@ function DashboardLayout({
                   </SelectContent>
                 </Select>
               </div>
-              {editingPlan?.planType === "split_payment" ? (
+              {editingPlan ? (
                 <div className="space-y-2">
                   <Label>Start Date</Label>
                   <Input
@@ -1876,23 +1865,10 @@ function DashboardLayout({
                     disabled={savingPlanEdit}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Sets when the plan starts and the day each installment posts.
+                    Sets when the plan starts and the monthly posting day.
                   </p>
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  <Label>Day of Month</Label>
-                  <Input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max="31"
-                    value={planEditDay}
-                    onChange={(e) => setPlanEditDay(e.target.value)}
-                    disabled={savingPlanEdit}
-                  />
-                </div>
-              )}
+              ) : null}
               {editingPlan?.planType === "recurring" ? (
                 <div className="space-y-2">
                   <Label>Monthly Amount</Label>

@@ -613,7 +613,7 @@ export async function createDashboardTransaction(payload: {
   timestamp: Date;
   paymentType: DashboardPaymentType;
   dayOfMonth?: number;
-  startDate?: string; // split: ISO date the plan starts
+  startDate?: string; // ISO date the plan starts
   numberOfMonths?: number; // split: months to spread across
   createFirstTransactionNow?: boolean;
 }) {
