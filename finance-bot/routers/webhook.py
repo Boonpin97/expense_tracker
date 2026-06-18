@@ -2561,8 +2561,22 @@ async def webhook(request: Request):
             await telegram.send_message(chat_id, "⚠️ Amount must be a positive number.")
             return {"ok": True}
         update_pending_plan(chat_id, amount=amount)
-        set_user_state(chat_id, "awaiting_recurring_day")
-        await telegram.send_message(chat_id, "Great, I will add it to the expense this month. Additionally, which day of the month should it charge from the next month onwards? Send a number from 1 to 31.")
+        set_user_state(chat_id, "awaiting_recurring_start_date")
+        await telegram.send_message(chat_id, "When should this recurring payment start? Send a date as DDMMYY, for example <code>150726</code>.")
+        return {"ok": True}
+
+    if user_state == "awaiting_recurring_start_date":
+        pending = await _get_pending_plan_or_expire(chat_id, "⏰ This plan flow has expired. Start the command again.")
+        if not pending:
+            return {"ok": True}
+        start_date = _valid_transaction_date(text)
+        if start_date is None:
+            await telegram.send_message(chat_id, "⚠️ Send a date as DDMMYY, for example <code>150726</code>.")
+            return {"ok": True}
+        start_dt = datetime.fromisoformat(start_date).replace(tzinfo=SGT)
+        update_pending_plan(chat_id, start_date=start_date, day_of_month=start_dt.day)
+        pending = get_pending_plan(chat_id)
+        await create_plan_and_post_first_charge(chat_id, pending)
         return {"ok": True}
 
     if user_state == "awaiting_recurring_day":

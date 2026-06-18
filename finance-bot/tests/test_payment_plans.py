@@ -577,5 +577,35 @@ class CreateSplitPlanFromStartDateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((first_charge_time.year, first_charge_time.month, first_charge_time.day), (2026, 7, 15))
 
 
+class CreateRecurringPlanFromStartDateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recurring_plan_derives_schedule_from_start_date(self):
+        pending = {
+            "plan_type": "recurring",
+            "item": "Netflix",
+            "category": "Subscriptions",
+            "amount": 19.99,
+            "start_date": "2026-07-15",
+        }
+        saved = {}
+
+        def capture_plan(plan):
+            saved.update(plan.__dict__)
+            return "plan-1"
+
+        with patch("services.plan_manager.firestore.save_payment_plan", side_effect=capture_plan), \
+             patch("services.plan_manager.firestore.get_payment_plan", return_value={"id": "plan-1", **{}}), \
+             patch("services.plan_manager.post_next_occurrence", new=AsyncMock()) as mock_post, \
+             patch("services.plan_manager.firestore.delete_pending_plan"), \
+             patch("services.plan_manager.firestore.clear_user_state"):
+            await create_plan_and_post_first_charge(123, pending)
+
+        self.assertEqual(saved["plan_type"], "recurring")
+        self.assertEqual(saved["day_of_month"], 15)
+        self.assertEqual((saved["start_year"], saved["start_month"]), (2026, 7))
+        self.assertEqual(saved["next_due_date"], "2026-07-15T00:00:00+08:00")
+        first_charge_time = mock_post.call_args.kwargs["timestamp"]
+        self.assertEqual((first_charge_time.year, first_charge_time.month, first_charge_time.day), (2026, 7, 15))
+
+
 if __name__ == "__main__":
     unittest.main()
