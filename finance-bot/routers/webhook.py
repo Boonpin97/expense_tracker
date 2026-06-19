@@ -1215,14 +1215,14 @@ async def _handle_new_project_session(chat_id: int, text: str) -> bool:
         update_session(chat_id, step="awaiting_initial", payload_updates={"target_amount": amount})
         await telegram.send_message(
             chat_id,
-            "Send the initial amount already saved for this project, for example <code>1000</code>. Send <code>0</code> if none.",
+            "Send the current amount already saved for this project, for example <code>1000</code>. Send <code>0</code> if none.",
         )
         return True
 
     if step == "awaiting_initial":
         initial = _valid_non_negative_amount(text)
         if initial is None:
-            await telegram.send_message(chat_id, "⚠️ Initial amount must be zero or more.")
+            await telegram.send_message(chat_id, "⚠️ Current amount must be zero or more.")
             return True
         update_session(chat_id, step="awaiting_deadline", payload_updates={"initial_amount": initial})
         await telegram.send_message(chat_id, "Send the deadline as <code>DDMMYY</code>, for example <code>311226</code>.")
@@ -1316,11 +1316,11 @@ async def _handle_edit_project_session(chat_id: int, text: str) -> bool:
     if step == "awaiting_new_initial":
         amount = _valid_non_negative_amount(text)
         if amount is None:
-            await telegram.send_message(chat_id, "⚠️ Initial amount must be zero or more.")
+            await telegram.send_message(chat_id, "⚠️ Current amount must be zero or more.")
             return True
         clear_session(chat_id)
         if update_project(chat_id, project_id, initial_amount=amount):
-            await telegram.send_message(chat_id, f"✅ Initial amount for <b>{project_name}</b> set to <b>${amount:,.2f}</b>.")
+            await telegram.send_message(chat_id, f"✅ Current amount for <b>{project_name}</b> set to <b>${amount:,.2f}</b>.")
         else:
             await telegram.send_message(chat_id, f"⚠️ Project <b>{project_name}</b> no longer exists.")
         return True
@@ -1703,7 +1703,7 @@ async def webhook(request: Request):
                 prompt = f"Send the new target amount for <b>{project_name}</b>, for example <code>50000</code>."
             elif field == "initial":
                 update_session(chat_id, step="awaiting_new_initial")
-                prompt = f"Send the initial amount for <b>{project_name}</b>. Use <code>0</code> if none."
+                prompt = f"Send the current amount for <b>{project_name}</b>. Use <code>0</code> if none."
             elif field == "deadline":
                 update_session(chat_id, step="awaiting_new_deadline")
                 prompt = f"Send the new deadline for <b>{project_name}</b> as <code>DDMMYY</code>, for example <code>311226</code>."

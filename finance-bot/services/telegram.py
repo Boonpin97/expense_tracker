@@ -311,7 +311,7 @@ async def send_project_field_keyboard(chat_id: int, project_name: str) -> dict:
         ],
         [
             {"text": "🎯 Target", "callback_data": "projectfield:target"},
-            {"text": "💰 Initial", "callback_data": "projectfield:initial"},
+            {"text": "💰 Current", "callback_data": "projectfield:initial"},
         ],
         [
             {"text": "📅 Deadline", "callback_data": "projectfield:deadline"},
