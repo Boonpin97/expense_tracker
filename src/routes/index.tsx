@@ -3860,7 +3860,7 @@ function ProjectsTab({
       return;
     }
     if (!Number.isFinite(initialAmount) || initialAmount < 0) {
-      setFormError("Initial amount must be zero or more.");
+      setFormError("Current amount must be zero or more.");
       return;
     }
     if (!formDeadline || Number.isNaN(new Date(formDeadline).getTime())) {
@@ -4047,7 +4047,7 @@ function ProjectsTab({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="project-initial">Initial Amount</Label>
+              <Label htmlFor="project-initial">Current Amount</Label>
               <Input
                 id="project-initial"
                 type="number"

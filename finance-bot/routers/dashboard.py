@@ -283,7 +283,7 @@ def _project_update_fields(payload: "ProjectUpdateRequest") -> dict:
         fields["target_amount"] = payload.target_amount
     if payload.initial_amount is not None:
         if payload.initial_amount < 0:
-            raise HTTPException(status_code=400, detail="Initial amount cannot be negative.")
+            raise HTTPException(status_code=400, detail="Current amount cannot be negative.")
         fields["initial_amount"] = payload.initial_amount
     if payload.deadline is not None:
         deadline = payload.deadline.strip()
@@ -832,7 +832,7 @@ async def create_dashboard_project(payload: ProjectCreateRequest, request: Reque
     if payload.target_amount <= 0:
         raise HTTPException(status_code=400, detail="Target amount must be positive.")
     if payload.initial_amount < 0:
-        raise HTTPException(status_code=400, detail="Initial amount cannot be negative.")
+        raise HTTPException(status_code=400, detail="Current amount cannot be negative.")
     deadline = payload.deadline.strip()
     if not deadline:
         raise HTTPException(status_code=400, detail="Deadline is required.")
