@@ -4034,19 +4034,6 @@ function ProjectsTab({
               <Input id="project-emoji" value={formEmoji} onChange={(e) => setFormEmoji(e.target.value)} disabled={saving} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="project-target">Target Amount</Label>
-              <Input
-                id="project-target"
-                type="number"
-                inputMode="decimal"
-                min="0.01"
-                step="0.01"
-                value={formTarget}
-                onChange={(e) => setFormTarget(e.target.value)}
-                disabled={saving}
-              />
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="project-initial">Current Amount</Label>
               <Input
                 id="project-initial"
@@ -4056,6 +4043,19 @@ function ProjectsTab({
                 step="0.01"
                 value={formInitialAmount}
                 onChange={(e) => setFormInitialAmount(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-target">Target Amount</Label>
+              <Input
+                id="project-target"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                step="0.01"
+                value={formTarget}
+                onChange={(e) => setFormTarget(e.target.value)}
                 disabled={saving}
               />
             </div>
