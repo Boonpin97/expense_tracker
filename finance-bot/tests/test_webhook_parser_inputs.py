@@ -127,10 +127,17 @@ if "fastapi" not in sys.modules:
     fastapi_stub.Response = Response
     sys.modules["fastapi"] = fastapi_stub
 
-from routers.webhook import webhook
+from routers.webhook import _get_allowed_chat_ids, webhook
 
 
 class WebhookParserInputTests(unittest.TestCase):
+    def test_allowed_chat_ids_come_from_firestore_listener(self):
+        with patch(
+            "routers.webhook.get_firestore_allowed_chat_ids",
+            return_value={688764042},
+        ):
+            self.assertEqual(_get_allowed_chat_ids(), {688764042})
+
     def _request_for_text(self, text: str, chat_id: int = 123):
         payload = {"message": {"chat": {"id": chat_id}, "text": text}}
 

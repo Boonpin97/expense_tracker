@@ -103,7 +103,7 @@ Use three layers:
 
 | ID | Feature | Scenario | Expected result |
 |---|---|---|---|
-| WEB-001 | chat authorization | inbound message chat id not in `TELEGRAM_CHAT_IDS` | update ignored with `{"ok": True}` |
+| WEB-001 | chat authorization | inbound message chat id not in Firestore `authorized_chats` | update ignored with `{"ok": True}` |
 | WEB-002 | message update routing | inbound `message.text` event | command/text flow executed |
 | WEB-003 | callback update routing | inbound `callback_query.data` event | callback flow executed |
 | WEB-004 | unsupported update shape | payload lacks supported message/callback fields | returns `{"ok": True}` without crashing |

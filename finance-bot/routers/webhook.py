@@ -40,6 +40,7 @@ from services.firestore import (
     get_budgets,
     get_inflows,
     get_last_transaction,
+    get_allowed_chat_ids as get_firestore_allowed_chat_ids,
     get_payment_plan,
     get_pending,
     get_pending_change,
@@ -105,17 +106,10 @@ from services.plan_manager import (
 router = APIRouter()
 
 SGT = timezone(timedelta(hours=8))
-ALLOWED_CHAT_IDS: set[int] | None = None
 
 
 def _get_allowed_chat_ids() -> set[int]:
-    global ALLOWED_CHAT_IDS
-    if ALLOWED_CHAT_IDS is None:
-        raw = os.getenv("TELEGRAM_CHAT_IDS", "")
-        ALLOWED_CHAT_IDS = {
-            int(cid.strip()) for cid in raw.split(",") if cid.strip().lstrip("-").isdigit()
-        }
-    return ALLOWED_CHAT_IDS
+    return get_firestore_allowed_chat_ids()
 
 
 def _is_expired(timestamp_iso: str, expiry_seconds: int = PENDING_EXPIRY_SECONDS) -> bool:
