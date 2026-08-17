@@ -112,6 +112,29 @@ class ReportsRouterTests(unittest.TestCase):
         self.assertEqual(end, datetime(2026, 6, 1, tzinfo=SGT))
         self.assertEqual(label, "Monthly Report (May 2026)")
 
+    def _patch_now(self, now: datetime):
+        class FakeDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now.astimezone(tz or SGT)
+
+        return patch.object(reports, "datetime", FakeDateTime)
+
+    def test_resolve_auto_periods_on_weekday_returns_daily_only(self):
+        # Wed 20 May 2026
+        with self._patch_now(datetime(2026, 5, 20, 22, 0, tzinfo=SGT)):
+            self.assertEqual(reports._resolve_auto_periods(), ["daily"])
+
+    def test_resolve_auto_periods_on_sunday_adds_weekly(self):
+        # Sun 24 May 2026
+        with self._patch_now(datetime(2026, 5, 24, 22, 0, tzinfo=SGT)):
+            self.assertEqual(reports._resolve_auto_periods(), ["daily", "weekly"])
+
+    def test_resolve_auto_periods_never_includes_monthly(self):
+        # 1 Jun 2026 still has its own scheduler job
+        with self._patch_now(datetime(2026, 6, 1, 22, 0, tzinfo=SGT)):
+            self.assertNotIn("monthly", reports._resolve_auto_periods())
+
     def test_get_period_window_invalid_period_raises(self):
         with self.assertRaises(HTTPException) as ctx:
             reports._get_period_window("yearly")
@@ -181,11 +204,87 @@ class ReportsRouterTests(unittest.TestCase):
         ):
             result = asyncio.run(reports.trigger_report("daily", x_scheduler_token="expected-secret"))
 
-        self.assertEqual(result, {"ok": True, "period": "daily", "transactions_count": 2})
+        self.assertEqual(
+            result,
+            {"ok": True, "period": "daily", "periods": ["daily"], "transactions_count": 2},
+        )
         self.assertEqual(mock_get_transactions.call_count, 2)
         self.assertEqual(mock_send.await_count, 2)
         mock_send.assert_any_await(123, "<pre>daily-body</pre>")
         mock_send.assert_any_await(456, "<pre>daily-body</pre>")
+
+    def test_trigger_report_auto_sends_daily_only_on_weekday(self):
+        def fake_getenv(key, default=""):
+            if key == "SCHEDULER_SECRET":
+                return "expected-secret"
+            return default
+
+        with (
+            patch("os.getenv", side_effect=fake_getenv),
+            patch("services.firestore.get_allowed_chat_ids", return_value={123}),
+            patch.object(reports, "_resolve_auto_periods", return_value=["daily"]),
+            patch.object(reports, "get_transactions", return_value=[]),
+            patch.object(reports, "get_inflows", return_value=[]),
+            patch.object(reports, "_format_daily_report", return_value="daily-body"),
+            patch.object(reports, "_format_report", return_value="weekly-body"),
+            patch.object(reports, "send_message", new=AsyncMock()) as mock_send,
+        ):
+            result = asyncio.run(reports.trigger_report("auto", x_scheduler_token="expected-secret"))
+
+        self.assertEqual(result["periods"], ["daily"])
+        self.assertEqual(mock_send.await_count, 1)
+        mock_send.assert_any_await(123, "<pre>daily-body</pre>")
+
+    def test_trigger_report_auto_sends_daily_and_weekly_on_sunday(self):
+        def fake_getenv(key, default=""):
+            if key == "SCHEDULER_SECRET":
+                return "expected-secret"
+            return default
+
+        with (
+            patch("os.getenv", side_effect=fake_getenv),
+            patch("services.firestore.get_allowed_chat_ids", return_value={123, 456}),
+            patch.object(reports, "_resolve_auto_periods", return_value=["daily", "weekly"]),
+            patch.object(reports, "get_transactions", return_value=[]),
+            patch.object(reports, "get_inflows", return_value=[]),
+            patch.object(reports, "_format_daily_report", return_value="daily-body"),
+            patch.object(reports, "_format_report", return_value="weekly-body"),
+            patch.object(reports, "send_message", new=AsyncMock()) as mock_send,
+        ):
+            result = asyncio.run(reports.trigger_report("auto", x_scheduler_token="expected-secret"))
+
+        self.assertEqual(result["periods"], ["daily", "weekly"])
+        # Both chats receive both reports as separate messages
+        self.assertEqual(mock_send.await_count, 4)
+        for chat_id in (123, 456):
+            mock_send.assert_any_await(chat_id, "<pre>daily-body</pre>")
+            mock_send.assert_any_await(chat_id, "<pre>weekly-body</pre>")
+        # Daily goes out before weekly
+        bodies = [call.args[1] for call in mock_send.await_args_list]
+        self.assertLess(bodies.index("<pre>daily-body</pre>"), bodies.index("<pre>weekly-body</pre>"))
+
+    def test_trigger_report_auto_rejects_invalid_scheduler_secret(self):
+        with patch("os.getenv", return_value="expected-secret"):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(reports.trigger_report("auto", x_scheduler_token="wrong-secret"))
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_trigger_report_still_rejects_unknown_period(self):
+        def fake_getenv(key, default=""):
+            if key == "SCHEDULER_SECRET":
+                return "expected-secret"
+            return default
+
+        with (
+            patch("os.getenv", side_effect=fake_getenv),
+            patch("services.firestore.get_allowed_chat_ids", return_value={123}),
+            patch.object(reports, "send_message", new=AsyncMock()) as mock_send,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(reports.trigger_report("yearly", x_scheduler_token="expected-secret"))
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        mock_send.assert_not_awaited()
 
     def test_trigger_budget_report_sends_setup_guidance_when_no_budgets(self):
         def fake_getenv(key, default=""):

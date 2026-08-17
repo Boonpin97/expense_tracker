@@ -49,6 +49,19 @@ def _get_period_window(period: str) -> tuple[datetime, datetime, str]:
     return start, end, label
 
 
+def _resolve_auto_periods() -> list[str]:
+    """Expand the scheduler's ``auto`` period into every report due at this run.
+
+    Daily and weekly both fire at 22:00 SGT, so one scheduler job covers both.
+    Monthly keeps its own job (1st at 00:00) and is never included here.
+    """
+    now = datetime.now(SGT)
+    periods = ["daily"]
+    if now.weekday() == 6:  # Sunday
+        periods.append("weekly")
+    return periods
+
+
 _DIVIDER = "─────────────────────────"
 _LABEL_WIDTH = 14
 
@@ -166,17 +179,20 @@ async def trigger_report(
     if not chat_ids:
         raise HTTPException(status_code=500, detail="No authorized chat IDs configured")
 
-    start, end, label = _get_period_window(period)
-    total_tx = 0
-    for chat_id in chat_ids:
-        transactions = get_transactions(chat_id, start, end)
-        inflows = get_inflows(chat_id, start, end)
-        formatter = _format_daily_report if period == "daily" else _format_report
-        report = formatter(chat_id, label, transactions, inflows)
-        await send_message(chat_id, f"<pre>{report}</pre>")
-        total_tx += len(transactions)
+    periods = _resolve_auto_periods() if period == "auto" else [period]
 
-    return {"ok": True, "period": period, "transactions_count": total_tx}
+    total_tx = 0
+    for current_period in periods:
+        start, end, label = _get_period_window(current_period)
+        for chat_id in chat_ids:
+            transactions = get_transactions(chat_id, start, end)
+            inflows = get_inflows(chat_id, start, end)
+            formatter = _format_daily_report if current_period == "daily" else _format_report
+            report = formatter(chat_id, label, transactions, inflows)
+            await send_message(chat_id, f"<pre>{report}</pre>")
+            total_tx += len(transactions)
+
+    return {"ok": True, "period": period, "periods": periods, "transactions_count": total_tx}
 
 
 def _format_budget_report(chat_id: int) -> str:
