@@ -28,9 +28,7 @@ import {
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -832,7 +830,9 @@ function DashboardLayout({
   const [newInflowItem, setNewInflowItem] = useState("");
   const [newInflowAmount, setNewInflowAmount] = useState("");
   const [newInflowTimestamp, setNewInflowTimestamp] = useState(formatDateTimeInputValue(new Date()));
-  const [newInflowTarget, setNewInflowTarget] = useState("none");
+  // Goal and project are independent: income can count toward both at once, matching the bot.
+  const [newInflowGoal, setNewInflowGoal] = useState("none");
+  const [newInflowProject, setNewInflowProject] = useState("none");
   const [creatingInflow, setCreatingInflow] = useState(false);
   const [createInflowError, setCreateInflowError] = useState<string | null>(null);
   const [newItem, setNewItem] = useState("");
@@ -979,7 +979,8 @@ function DashboardLayout({
     setNewInflowItem("");
     setNewInflowAmount("");
     setNewInflowTimestamp(formatDateTimeInputValue(new Date()));
-    setNewInflowTarget("none");
+    setNewInflowGoal("none");
+    setNewInflowProject("none");
     setCreateInflowError(null);
     setAddInflowOpen(true);
   }
@@ -992,8 +993,8 @@ function DashboardLayout({
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) { setCreateInflowError("Amount must be a positive number."); return; }
     const when = new Date(newInflowTimestamp);
     if (Number.isNaN(when.getTime())) { setCreateInflowError("Date is invalid."); return; }
-    const goalId = newInflowTarget.startsWith("goal:") ? newInflowTarget.slice("goal:".length) : null;
-    const projectId = newInflowTarget.startsWith("project:") ? newInflowTarget.slice("project:".length) : null;
+    const goalId = newInflowGoal === "none" ? null : newInflowGoal;
+    const projectId = newInflowProject === "none" ? null : newInflowProject;
     setCreatingInflow(true);
     try {
       await onCreateInflow({ item: trimmed, amount: parsedAmount, timestamp: when, goalId, projectId });
@@ -1544,6 +1545,7 @@ function DashboardLayout({
           <TabsContent value="projects" className="space-y-6">
             <ProjectsTab
               projects={projects}
+              inflows={inflows}
               loading={loading}
               onCreateProject={onCreateProject}
               onUpdateProject={onUpdateProject}
@@ -1762,35 +1764,47 @@ function DashboardLayout({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="new-inflow-target">Assign to</Label>
-                <Select value={newInflowTarget} onValueChange={setNewInflowTarget} disabled={creatingInflow}>
-                  <SelectTrigger id="new-inflow-target">
+                <Label htmlFor="new-inflow-goal">Assign to goal (monthly)</Label>
+                <Select
+                  value={newInflowGoal}
+                  onValueChange={setNewInflowGoal}
+                  disabled={creatingInflow || goals.length === 0}
+                >
+                  <SelectTrigger id="new-inflow-goal">
                     <SelectValue placeholder="None" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">None</SelectItem>
-                    {goals.length > 0 ? (
-                      <SelectGroup>
-                        <SelectLabel>Goals (monthly)</SelectLabel>
-                        {goals.map((goal) => (
-                          <SelectItem key={`goal:${goal.id}`} value={`goal:${goal.id}`}>
-                            {goal.emoji} {goal.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ) : null}
-                    {projects.length > 0 ? (
-                      <SelectGroup>
-                        <SelectLabel>Long-term projects</SelectLabel>
-                        {projects.map((project) => (
-                          <SelectItem key={`project:${project.id}`} value={`project:${project.id}`}>
-                            {project.emoji} {project.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ) : null}
+                    {goals.map((goal) => (
+                      <SelectItem key={goal.id} value={goal.id}>
+                        {goal.emoji} {goal.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-inflow-project">Assign to project (long-term)</Label>
+                <Select
+                  value={newInflowProject}
+                  onValueChange={setNewInflowProject}
+                  disabled={creatingInflow || projects.length === 0}
+                >
+                  <SelectTrigger id="new-inflow-project">
+                    <SelectValue placeholder="None" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {projects.map((project) => (
+                      <SelectItem key={project.id} value={project.id}>
+                        {project.emoji} {project.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Income can count toward a goal and a project at the same time.
+                </p>
               </div>
               {createInflowError && <p className="text-sm text-destructive">{createInflowError}</p>}
             </div>
@@ -3465,10 +3479,18 @@ function IncomeTab({
     }
   }
 
-  function assignmentLabel(inflow: DashboardInflow) {
-    if (inflow.goalId) return targetLabels[`goal:${inflow.goalId}`] ?? null;
-    if (inflow.projectId) return targetLabels[`project:${inflow.projectId}`] ?? null;
-    return null;
+  function assignmentLabels(inflow: DashboardInflow) {
+    // An inflow can be tagged to a goal and a project at once, so show both badges.
+    const labels: string[] = [];
+    if (inflow.goalId) {
+      const label = targetLabels[`goal:${inflow.goalId}`];
+      if (label) labels.push(label);
+    }
+    if (inflow.projectId) {
+      const label = targetLabels[`project:${inflow.projectId}`];
+      if (label) labels.push(label);
+    }
+    return labels;
   }
 
   return (
@@ -3495,16 +3517,19 @@ function IncomeTab({
               </TableHeader>
               <TableBody>
                 {sorted.map((inflow) => {
-                  const assigned = assignmentLabel(inflow);
+                  const assigned = assignmentLabels(inflow);
                   return (
                     <TableRow key={inflow.id}>
                       <TableCell className="font-medium">
                         {inflow.item}
-                        {assigned ? (
-                          <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
-                            {assigned}
+                        {assigned.map((label) => (
+                          <span
+                            key={label}
+                            className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground"
+                          >
+                            {label}
                           </span>
-                        ) : null}
+                        ))}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {format(inflow.timestamp, "MMM d, yyyy")}
@@ -3786,6 +3811,7 @@ function deadlineLabel(deadline: string): { text: string; overdue: boolean } {
 
 function ProjectsTab({
   projects,
+  inflows,
   loading,
   onCreateProject,
   onUpdateProject,
@@ -3793,6 +3819,7 @@ function ProjectsTab({
   onMoveProject,
 }: {
   projects: DashboardProject[];
+  inflows: DashboardInflow[];
   loading: boolean;
   onCreateProject: (payload: {
     name: string;
@@ -3816,6 +3843,9 @@ function ProjectsTab({
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Track the id, not the object: the dialog then reflects live edits and closes
+  // itself if the project disappears from a background refresh.
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
   const [formEmoji, setFormEmoji] = useState("🚀");
   const [formTarget, setFormTarget] = useState("");
@@ -3824,6 +3854,24 @@ function ProjectsTab({
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  const detailProject = useMemo(
+    () => projects.find((project) => project.id === detailId) ?? null,
+    [projects, detailId],
+  );
+  const detailInflows = useMemo(
+    () =>
+      detailId
+        ? inflows
+            .filter((inflow) => inflow.projectId === detailId)
+            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+        : [],
+    [inflows, detailId],
+  );
+  const detailContributed = useMemo(
+    () => detailInflows.reduce((sum, inflow) => sum + inflow.amount, 0),
+    [detailInflows],
+  );
 
   function openAdd() {
     setEditingId(null);
@@ -3942,7 +3990,22 @@ function ProjectsTab({
               const reached = project.targetAmount > 0 && project.accumulated >= project.targetAmount;
               const due = deadlineLabel(project.deadline);
               return (
-                <div key={project.id} className="space-y-2">
+                <div
+                  key={project.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View ${project.name} contributions`}
+                  className="space-y-2 -mx-2 rounded-md px-2 py-1 cursor-pointer transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => setDetailId(project.id)}
+                  onKeyDown={(event) => {
+                    // Ignore keys bubbling up from the icon buttons inside this row.
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setDetailId(project.id);
+                    }
+                  }}
+                >
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
@@ -3962,49 +4025,52 @@ function ProjectsTab({
                           / {currency.format(project.targetAmount)} ({Math.round(pct)}%)
                         </span>
                       </p>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7"
-                        disabled={busyId === project.id || index === 0}
-                        aria-label={`Move ${project.name} up`}
-                        onClick={() => void handleMove(project, -1)}
-                      >
-                        <ChevronUp className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7"
-                        disabled={busyId === project.id || index === projects.length - 1}
-                        aria-label={`Move ${project.name} down`}
-                        onClick={() => void handleMove(project, 1)}
-                      >
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7"
-                        aria-label={`Edit ${project.name}`}
-                        onClick={() => openEdit(project)}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 text-destructive hover:text-destructive"
-                        disabled={busyId === project.id}
-                        aria-label={`Delete ${project.name}`}
-                        onClick={() => void handleDelete(project)}
-                      >
-                        {busyId === project.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-3.5 w-3.5" />
-                        )}
-                      </Button>
+                      {/* Row-level click opens the detail dialog; these controls must not. */}
+                      <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          disabled={busyId === project.id || index === 0}
+                          aria-label={`Move ${project.name} up`}
+                          onClick={() => void handleMove(project, -1)}
+                        >
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          disabled={busyId === project.id || index === projects.length - 1}
+                          aria-label={`Move ${project.name} down`}
+                          onClick={() => void handleMove(project, 1)}
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          aria-label={`Edit ${project.name}`}
+                          onClick={() => openEdit(project)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          disabled={busyId === project.id}
+                          aria-label={`Delete ${project.name}`}
+                          onClick={() => void handleDelete(project)}
+                        >
+                          {busyId === project.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </div>
                   <Progress
@@ -4017,6 +4083,108 @@ function ProjectsTab({
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={detailProject !== null} onOpenChange={(open) => { if (!open) setDetailId(null); }}>
+        <DialogContent className="sm:max-w-2xl">
+          {detailProject ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {detailProject.emoji} {detailProject.name}
+                </DialogTitle>
+                <DialogDescription>
+                  {currency.format(detailProject.accumulated)} of {currency.format(detailProject.targetAmount)} saved
+                  {deadlineLabel(detailProject.deadline).text
+                    ? ` — ${deadlineLabel(detailProject.deadline).text}`
+                    : ""}
+                </DialogDescription>
+              </DialogHeader>
+
+              <Progress
+                value={Math.min(
+                  detailProject.targetAmount > 0
+                    ? (detailProject.accumulated / detailProject.targetAmount) * 100
+                    : 0,
+                  100,
+                )}
+                className={
+                  detailProject.targetAmount > 0 && detailProject.accumulated >= detailProject.targetAmount
+                    ? "[&>div]:bg-emerald-500"
+                    : "[&>div]:bg-accent"
+                }
+              />
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Starting amount</p>
+                  <p className="text-sm font-semibold">{currency.format(detailProject.initialAmount)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Income assigned</p>
+                  <p className="text-sm font-semibold text-emerald-500">
+                    +{currency.format(detailContributed)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Total saved</p>
+                  <p className="text-sm font-semibold">{currency.format(detailProject.accumulated)}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Contribution history</p>
+                {detailInflows.length === 0 ? (
+                  <CenteredListMessage label="No income assigned to this project yet." />
+                ) : (
+                  <div className="max-h-[45vh] overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {detailInflows.map((inflow) => (
+                          <TableRow key={inflow.id}>
+                            <TableCell className="font-medium">{inflow.item}</TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {format(inflow.timestamp, "MMM d, yyyy")}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold text-emerald-500">
+                              +{currency.format(inflow.amount)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  The starting amount is seed capital entered on the project itself, so it has no income entry and is
+                  not listed above.
+                </p>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDetailId(null)}>
+                  Close
+                </Button>
+                <Button
+                  onClick={() => {
+                    const project = detailProject;
+                    setDetailId(null);
+                    openEdit(project);
+                  }}
+                >
+                  Edit Project
+                </Button>
+              </DialogFooter>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open && !saving) setDialogOpen(false); }}>
         <DialogContent>
