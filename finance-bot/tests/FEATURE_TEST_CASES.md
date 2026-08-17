@@ -6,19 +6,26 @@ This document maps the current backend feature set to concrete test cases. It is
 
 The current suite already covers parts of these areas:
 
-- Parsing dates and freeform expenses: `test_transaction_dates.py`
+Run the suite with `python -m unittest discover -s tests` from `finance-bot/` (221 tests).
+Bare `python -m unittest` discovers nothing — there is no `tests/__init__.py`.
+
+- Parsing dates and freeform expenses: `test_transaction_dates.py`, `test_webhook_parser_inputs.py`
 - Budget command helpers and the interactive set-budget flow: `test_budget_commands.py`
+- Categoriser behavior for known/unknown items and budget warnings: `test_categoriser.py`
 - Dashboard auth/session basics and selected dashboard mutations: `test_dashboard_auth.py`, `test_dashboard_router_sessions.py`
-- Monthly-report helpers and Telegram callback payload sizing: `test_monthly_reports.py`, `test_payment_plans.py`
+- Dashboard CRUD error paths and authorization boundaries: `test_dashboard_router_negative_paths.py`
+- Web account and username-index storage: `test_firestore_web_accounts.py`
+- Report windows, `period=auto` resolution, and scheduler endpoint auth: `test_reports_router.py`, `test_monthly_reports.py`
+- Payment plan calculations and manager orchestration: `test_payment_plans.py`
 - Interaction session storage behavior: `test_interaction_sessions.py`
 - Category storage partitioning, migration, rename, reassignment, and budget cleanup: `test_category_partitioning.py`
+- Income/inflow recording and goal tagging: `test_inflow.py`
+- Savings goals: `test_goals.py`
+- Long-term projects: `test_projects.py`
 
 The gaps are mostly:
 
-- Full Telegram webhook command coverage
-- Scheduler endpoint authorization and reporting behavior
-- Categoriser behavior around known/unknown items and budget warnings
-- Dashboard CRUD error paths and authorization boundaries
+- Full Telegram webhook command coverage (33 commands; only some are exercised)
 - Plan edit/delete flows in the webhook
 - App startup and middleware behavior
 
@@ -481,15 +488,47 @@ Use three layers:
 | FDB-010 | clone user categories | empty target user | category list and map cloned |
 | FDB-011 | clone user categories target exists | target already has data | raises error |
 
+### 19. Income (inflows)
+
+| ID | Case | Setup | Expected |
+|---|---|---|---|
+| INF-001 | `/income` starts the inflow session | authorised chat | `inflow` interaction session created, prompt sent |
+| INF-002 | inflow recorded | valid amount and item supplied | doc written to `inflows` with `+08:00` timestamp |
+| INF-003 | inflow tagged to a goal | goal selected during flow | `goal_id` persisted on the inflow |
+| INF-004 | inflow tagged to a project | project selected during flow | `project_id` persisted on the inflow |
+| INF-005 | inflow session expiry | session older than 180s | expired, cleaned up, no inflow written |
+| INF-006 | inflows appear in reports | inflows exist in window | report renders Inflow section and correct Net |
+
+### 20. Savings goals
+
+| ID | Case | Setup | Expected |
+|---|---|---|---|
+| GOL-001 | `/goals` overview | goals exist | listing shows name, emoji, progress vs `target_amount` |
+| GOL-002 | `/new_goal` happy path | name → target amount | goal doc written under `users/<chat_id>/goals` |
+| GOL-003 | `/edit_goal` | existing goal selected | target amount / name / emoji updated |
+| GOL-004 | `/delete_goal` | existing goal selected | goal removed; tagged inflows keep working |
+| GOL-005 | goal ordering | multiple goals, move applied | `order` field reflects new position |
+| GOL-006 | goal flow expiry | session older than 180s | expired and cleaned up |
+
+### 21. Long-term projects
+
+| ID | Case | Setup | Expected |
+|---|---|---|---|
+| PRJ-001 | `/projects` overview | projects exist | listing shows progress against `target_amount` and `deadline` |
+| PRJ-002 | `/new_projects` happy path | name → target → deadline | project doc written with `initial_amount` default 0.0 |
+| PRJ-003 | cumulative behavior | inflows across months | project total never resets, unlike a goal |
+| PRJ-004 | `/edit_projects` | existing project selected | fields updated |
+| PRJ-005 | `/delete_projects` | existing project selected | project removed |
+| PRJ-006 | project flow expiry | session older than 180s | expired and cleaned up |
+
 ## Highest-value missing tests to implement first
 
 If you want to turn this into code incrementally, start here:
 
-1. Webhook command matrix: `/start`, `/daily`, `/weekly`, `/monthly`, `/delete_*`, `/new_category`, `/remove_category`, `/edit_category`, `/create_account`, `/change_password`, `/set_recurring`, `/split_payment`
-2. Categoriser tests: known-item save, unknown-item pending, category selection, custom category creation, budget warning
-3. Scheduler endpoint authorization tests: `/trigger-report`, `/trigger-budget-report`, `/trigger-recurring-payments`
-4. Dashboard negative-path tests: unauthorized access, invalid payloads, cross-user access rejection
-5. Payment-plan edit/delete webhook flows, especially split-plan rewrite behavior
+1. Webhook command matrix — all 33 commands, especially the ones with no direct coverage: `/start`, `/daily`, `/weekly`, `/monthly`, `/budget_report`, `/delete_*`, `/list_*`
+2. Payment-plan edit/delete webhook flows, especially split-plan rewrite behavior
+3. App startup and middleware behavior (CORS, webhook registration on lifespan)
+4. Cross-user isolation: confirm one chat_id can never read or mutate another's goals, projects, or inflows
 
 ## Suggested test-file expansion
 
@@ -497,8 +536,9 @@ If you want to turn this into code incrementally, start here:
 - `test_webhook_categories.py`
 - `test_webhook_dashboard_account.py`
 - `test_webhook_payment_plans.py`
-- `test_categoriser.py`
-- `test_reports_router.py`
-- `test_dashboard_router_negative_paths.py`
 - `test_payment_plan_webhook_edits.py`
+- `test_app_startup.py`
+
+Already implemented since this list was written: `test_categoriser.py`, `test_reports_router.py`,
+`test_dashboard_router_negative_paths.py`, `test_goals.py`, `test_projects.py`, `test_inflow.py`.
 

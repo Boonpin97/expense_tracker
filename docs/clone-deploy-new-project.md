@@ -84,10 +84,19 @@ gcloud.cmd run deploy finance-bot `
   --allow-unauthenticated `
   --project <NEW_PROJECT_ID> `
   --set-env-vars FIRESTORE_PROJECT_ID=<NEW_PROJECT_ID>,FIRESTORE_DATABASE="(default)",CLOUD_RUN_URL=https://<CLOUD_RUN_SERVICE_URL>,DASHBOARD_WEB_URL=https://<NEW_PROJECT_ID>.web.app `
-  --set-secrets TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,SCHEDULER_SECRET=SCHEDULER_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=TELEGRAM_WEBHOOK_SECRET:latest,TELEGRAM_CHAT_IDS=TELEGRAM_CHAT_IDS:latest
+  --set-secrets TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,SCHEDULER_SECRET=SCHEDULER_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=TELEGRAM_WEBHOOK_SECRET:latest
 ```
 
 Cloud Run returns the service URL after deploy. Re-run the command once with `CLOUD_RUN_URL` set to that exact URL so the app can register the Telegram webhook.
+
+This bootstrap deploy is the one time `gcloud run deploy` is acceptable — the service must exist
+before Cloud Build triggers can update it. After this, all deploys go through Cloud Build.
+
+Pick the Cloud Run region deliberately and record it: whatever you choose here must also be the
+Cloud Build trigger's `_DEPLOY_REGION`, and it is the `--region` for every later `gcloud run`
+command. It does **not** have to match the Firestore or Scheduler region, and in the original
+`budget-bot-123` project it does not — Cloud Run is in `asia-southeast3` while Firestore and
+Scheduler are in `asia-southeast1`.
 
 For dev, deploy `finance-bot-dev` with `FIRESTORE_DATABASE=developer` and `DASHBOARD_WEB_URL=https://<NEW_PROJECT_ID>-dev.web.app`.
 
@@ -97,23 +106,35 @@ Create these in Secret Manager before deploying Cloud Run:
 
 ```powershell
 "<telegram bot token>" | gcloud.cmd secrets create TELEGRAM_BOT_TOKEN --data-file=- --project <NEW_PROJECT_ID>
-"<comma-separated chat ids>" | gcloud.cmd secrets create TELEGRAM_CHAT_IDS --data-file=- --project <NEW_PROJECT_ID>
 "<scheduler shared secret>" | gcloud.cmd secrets create SCHEDULER_SECRET --data-file=- --project <NEW_PROJECT_ID>
 "<telegram webhook secret>" | gcloud.cmd secrets create TELEGRAM_WEBHOOK_SECRET --data-file=- --project <NEW_PROJECT_ID>
 ```
 
 Grant the Cloud Run service account access to these secrets if the deploy command does not do it automatically.
 
+## Authorising Telegram Users
+
+There is no `TELEGRAM_CHAT_IDS` secret — the allowlist lives in Firestore. After the backend is
+up, add one document per authorised chat to the `authorized_chats` collection, using the chat ID
+as the document ID (contents are ignored). The backend watches the collection with an
+`on_snapshot` listener, so changes apply immediately with no redeploy.
+
 ## Cloud Scheduler
 
 Create the scheduler jobs after Cloud Run is deployed. Replace `<SCHEDULER_SECRET>` with the same value stored in Secret Manager.
 
+**Create exactly three jobs.** Cloud Scheduler's free tier covers 3 jobs per billing account;
+a fourth starts incurring charges. The daily and weekly reports are deliberately merged into a
+single `period=auto` job — do not split them back out.
+
 ```powershell
-gcloud.cmd scheduler jobs create http finance-bot-daily --location asia-southeast1 --schedule "0 13 * * *" --uri "https://<CLOUD_RUN_SERVICE_URL>/trigger-report?period=daily" --http-method POST --headers "X-Scheduler-Token=<SCHEDULER_SECRET>" --project <NEW_PROJECT_ID>
-gcloud.cmd scheduler jobs create http finance-bot-weekly --location asia-southeast1 --schedule "0 1 * * 1" --uri "https://<CLOUD_RUN_SERVICE_URL>/trigger-report?period=weekly" --http-method POST --headers "X-Scheduler-Token=<SCHEDULER_SECRET>" --project <NEW_PROJECT_ID>
-gcloud.cmd scheduler jobs create http finance-bot-monthly --location asia-southeast1 --schedule "0 1 1 * *" --uri "https://<CLOUD_RUN_SERVICE_URL>/trigger-report?period=monthly" --http-method POST --headers "X-Scheduler-Token=<SCHEDULER_SECRET>" --project <NEW_PROJECT_ID>
-gcloud.cmd scheduler jobs create http finance-bot-recurring-payments --location asia-southeast1 --schedule "0 0 * * *" --uri "https://<CLOUD_RUN_SERVICE_URL>/trigger-recurring-payments" --http-method POST --headers "X-Scheduler-Token=<SCHEDULER_SECRET>" --project <NEW_PROJECT_ID>
+gcloud.cmd scheduler jobs create http finance-bot-reports --location asia-southeast1 --time-zone "Asia/Singapore" --schedule "0 22 * * *" --uri "https://<CLOUD_RUN_SERVICE_URL>/trigger-report?period=auto" --http-method POST --headers "X-Scheduler-Token=<SCHEDULER_SECRET>" --project <NEW_PROJECT_ID>
+gcloud.cmd scheduler jobs create http finance-bot-monthly --location asia-southeast1 --time-zone "Asia/Singapore" --schedule "0 0 1 * *" --uri "https://<CLOUD_RUN_SERVICE_URL>/trigger-report?period=monthly" --http-method POST --headers "X-Scheduler-Token=<SCHEDULER_SECRET>" --project <NEW_PROJECT_ID>
+gcloud.cmd scheduler jobs create http finance-bot-recurring --location asia-southeast1 --time-zone "Asia/Singapore" --schedule "0 8 * * *" --uri "https://<CLOUD_RUN_SERVICE_URL>/trigger-recurring-payments" --http-method POST --headers "X-Scheduler-Token=<SCHEDULER_SECRET>" --project <NEW_PROJECT_ID>
 ```
+
+`period=auto` sends the daily report every night and appends the weekly report on Sundays.
+Without `--time-zone`, Cloud Scheduler defaults to UTC and the reports fire 8 hours early.
 
 ## Cloud Build Triggers
 

@@ -20,9 +20,10 @@ Frontend stack (web dashboard):
 When working on backend bot behavior, prefer these paths first:
 - `finance-bot/routers/webhook.py` — Telegram message and callback_query handler
 - `finance-bot/routers/reports.py` — scheduled report endpoint (daily/weekly/monthly)
-- `finance-bot/routers/dashboard.py` — web dashboard REST API (auth, transactions, categories, budgets)
+- `finance-bot/routers/dashboard.py` — web dashboard REST API (auth, transactions, inflows, categories, budgets, goals, projects, plans, preferences)
 - `finance-bot/services/firestore.py` — all Firestore reads and writes
-- `finance-bot/services/categoriser.py` — expense categorisation and pending flow
+- `finance-bot/services/parser.py` — parses freeform expense text into item + amount
+- `finance-bot/services/categoriser.py` — expense categorisation, budget check, pending flow
 - `finance-bot/services/telegram.py` — Telegram API wrappers and keyboard builders
 - `finance-bot/services/interaction_sessions.py` — shared multi-step flow state
 - `finance-bot/services/payment_plans.py` — recurring/split payment calculations
@@ -32,9 +33,16 @@ When working on backend bot behavior, prefer these paths first:
 - `finance-bot/models/`
 - `finance-bot/tests/`
 
+Feature areas that span the bot, the dashboard API, and Firestore — touch all three when
+changing them:
+- **Income / inflows** — `inflows` collection, `/income` command, `/dashboard/inflows` endpoints
+- **Goals** — `users/{chat_id}/goals`, `/goals` command family, `/dashboard/goals` endpoints
+- **Projects** — `users/{chat_id}/projects`, `/projects` command family, `/dashboard/projects` endpoints
+
 When working on one-off data scripts, work inside `scripts/`:
 - `scripts/migrate_category_collections.py` — migrates legacy category docs into user subcollections
 - `scripts/clone_category_collections.py` — copies categories from one user to another
+- `scripts/deploy_dashboard_web.ps1` — builds and deploys the dashboard to a hosting target
 
 When working on the web dashboard, work inside `src/`:
 - `src/routes/index.tsx` — main dashboard page and sign-in screen
@@ -100,11 +108,17 @@ Minimum expectation for new multi-step flows:
 - happy path test
 - expiry test
 
-Before finishing backend work, run relevant tests from `finance-bot/`:
+Before finishing backend work, run the suite from `finance-bot/`:
 
 ```powershell
-python -m unittest
+python -m unittest discover -s tests
 ```
+
+**Use `discover -s tests` — not bare `python -m unittest`.** There is no `tests/__init__.py`,
+so the bare command discovers nothing and prints `Ran 0 tests ... NO TESTS RAN` while still
+exiting successfully. That reads like a pass. The correct command runs 221 tests.
+
+To run a single module: `python -m unittest tests.test_reports_router`.
 
 If the full suite is too broad, run the affected test modules and state exactly what was run.
 
@@ -131,6 +145,8 @@ Do not perform unrelated refactors while fixing a bot command or flow unless the
 
 If you add a helper, make sure it reduces duplication that already exists in the repo.
 
+After a feature is requested or edited, if user doesn't specific if its for the telegram bot or web app only, do it for both.
+
 ## Environments
 
 GCP project: `budget-bot-123`
@@ -140,11 +156,23 @@ Every resource is paired: one for production, one for development. They are full
 | Resource | Production (`main` branch) | Development (`development` branch) |
 |---|---|---|
 | Cloud Run service | `finance-bot` | `finance-bot-dev` |
-| Cloud Run URL | `https://finance-bot-jrpmzkxwoa-as.a.run.app` | `https://finance-bot-dev-jrpmzkxwoa-as.a.run.app` |
+| Cloud Run URL | `https://finance-bot-jrpmzkxwoa-eu.a.run.app` | `https://finance-bot-dev-jrpmzkxwoa-eu.a.run.app` |
 | Firestore database | `(default)` | `developer` |
 | Firebase Hosting | `https://budget-bot-123.web.app` | `https://budget-bot-123-dev.web.app` |
 
-All resources are in region `asia-southeast1`.
+**Resources are not all in one region.** Passing the wrong one makes `gcloud` report
+the resource as missing, which looks like a permissions error:
+
+| Service | Region / location | Flag |
+|---|---|---|
+| Cloud Run | `asia-southeast3` | `--region=asia-southeast3` |
+| Cloud Scheduler | `asia-southeast1` | `--location=asia-southeast1` |
+| Firestore (both databases) | `asia-southeast1` | — |
+| Cloud Build triggers | `global` | — |
+
+Cloud Run also answers on its newer per-region hostname,
+`https://finance-bot-318969558548.asia-southeast3.run.app` — this is the form the
+Cloud Scheduler jobs actually call.
 
 ### Branch Check Before Starting Work
 
@@ -173,6 +201,9 @@ This applies to:
 If a request is ambiguous (e.g. "deploy this" or "push the changes"), confirm: _"Deploy to dev or prod?"_ before proceeding.
 
 ### Deployment Rules
+
+**Accounts**
+- Check Firebase and Google Cloud CLI account should be techie.projects3@gmail.com
 
 **Cloud Run — never deploy manually.** Cloud Run is deployed exclusively by Cloud Build on git push. Do not run `gcloud run deploy`. To deploy backend changes:
 - Dev: commit and push to `development`
