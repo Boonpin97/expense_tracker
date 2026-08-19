@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -121,6 +122,12 @@ import {
   type DashboardSession,
   type DashboardTransaction,
 } from "@/lib/dashboard-api";
+import {
+  colorForCategory,
+  currency,
+  deadlineLabel,
+  formatDateTimeInputValue,
+} from "@/lib/dashboard-format";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -136,11 +143,6 @@ export const Route = createFileRoute("/")({
   component: DashboardRoute,
 });
 
-const currency = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 2,
-});
 const HISTORY_START = new Date("1970-01-01T00:00:00+08:00");
 const TRANSACTIONS_PAGE_SIZE = 25;
 
@@ -168,21 +170,7 @@ type TransactionSortKey =
   | "amount-desc"
   | "amount-asc";
 
-function colorForCategory(index: number) {
-  const hue = (index * 137.508) % 360;
-  const lightness = [0.6, 0.68, 0.74][index % 3];
-  const chroma = [0.2, 0.16, 0.13][index % 3];
-  return `oklch(${lightness} ${chroma} ${hue})`;
-}
 
-function formatDateTimeInputValue(value: Date) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  const hours = String(value.getHours()).padStart(2, "0");
-  const minutes = String(value.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-}
 
 function getRange(key: RangeKey, custom?: DateRange): { from: Date; to: Date } {
   const today = new Date();
@@ -392,6 +380,7 @@ function DashboardShell({
   session: DashboardSession;
   onSignedOut: () => void;
 }) {
+  const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [categories, setCategories] = useState<DashboardCategory[]>([]);
@@ -654,6 +643,48 @@ function DashboardShell({
     await updateDashboardPreferences({
       overviewVisibleCards: next.overviewVisibleCards,
     });
+  }
+
+  const layoutProps = {
+    session,
+    loading,
+    error,
+    categories,
+    budgets,
+    transactions,
+    inflows,
+    goals,
+    projects,
+    plans,
+    preferences,
+    onDeleteTransaction: handleDeleteTransaction,
+    onLogout: () => void handleLogout(),
+    onUpdateTransaction: handleUpdateTransaction,
+    onCreateTransaction: handleCreateTransaction,
+    onCreateInflow: handleCreateInflow,
+    onDeleteInflow: handleDeleteInflow,
+    onRefreshBudgets: refreshBudgets,
+    onUpdatePlan: handleUpdatePlan,
+    onDeletePlan: handleDeletePlan,
+    onUpdatePreferences: handleUpdatePreferences,
+    onCreateGoal: handleCreateGoal,
+    onUpdateGoal: handleUpdateGoal,
+    onDeleteGoal: handleDeleteGoal,
+    onMoveGoal: handleMoveGoal,
+    onCreateProject: handleCreateProject,
+    onUpdateProject: handleUpdateProject,
+    onDeleteProject: handleDeleteProject,
+    onMoveProject: handleMoveProject,
+    onCreateCategory: handleCreateCategory,
+    onUpdateCategory: handleUpdateCategory,
+    onDeleteCategory: handleDeleteCategory,
+    onMoveCategory: handleMoveCategory,
+  };
+
+  // Separate presentation trees; DashboardShell above stays the single
+  // owner of data fetching and every mutation handler.
+  if (isMobile) {
+    return <MobileLayout {...layoutProps} />;
   }
 
   return (
@@ -3797,17 +3828,6 @@ function GoalsTab({
   );
 }
 
-function deadlineLabel(deadline: string): { text: string; overdue: boolean } {
-  const due = new Date(deadline);
-  if (Number.isNaN(due.getTime())) return { text: "", overdue: false };
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const startOfDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
-  const days = Math.round((startOfDue.getTime() - startOfToday.getTime()) / 86400000);
-  if (days < 0) return { text: `Overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"}`, overdue: true };
-  if (days === 0) return { text: "Due today", overdue: false };
-  return { text: `${days} day${days === 1 ? "" : "s"} left`, overdue: false };
-}
 
 function ProjectsTab({
   projects,
