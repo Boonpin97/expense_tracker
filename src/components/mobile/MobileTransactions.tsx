@@ -5,13 +5,14 @@ import { Input } from "@/components/ui/input";
 import { currency } from "@/lib/dashboard-format";
 import type { DashboardTransaction } from "@/lib/dashboard-api";
 import { MobileEmpty, MobileListCard, MobileRow } from "./MobileList";
+import { MobilePagination } from "./MobilePagination";
 
 const PAGE_SIZE = 20;
 
 /**
- * Card list with incremental "load more" instead of the desktop table plus
- * Prev/Next pager. The desktop pager needs about 322px in ~295px of card width,
- * which is one of the things that pushes the whole page sideways.
+ * Card list with a numbered pager. The desktop table needs ~420px in ~295px of
+ * card width, and its Prev/"Page X of Y"/Next row needs ~322px, both of which
+ * push the whole page sideways.
  */
 export function MobileTransactions({
   transactions,
@@ -23,7 +24,7 @@ export function MobileTransactions({
   onDeleteTransaction: (transactionId: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
-  const [visible, setVisible] = useState(PAGE_SIZE);
+  const [page, setPage] = useState(1);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
@@ -38,8 +39,11 @@ export function MobileTransactions({
     );
   }, [transactions, query]);
 
-  const shown = filtered.slice(0, visible);
   const total = filtered.reduce((sum, tx) => sum + tx.amount, 0);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // Clamp so deleting the last row on the final page cannot strand the view.
+  const safePage = Math.min(page, totalPages);
+  const shown = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   async function handleDelete(tx: DashboardTransaction) {
     if (!window.confirm(`Delete "${tx.item}"?`)) return;
@@ -61,7 +65,7 @@ export function MobileTransactions({
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
-            setVisible(PAGE_SIZE);
+            setPage(1);
           }}
           placeholder="Search expenses"
           className="h-11 pl-9"
@@ -115,15 +119,7 @@ export function MobileTransactions({
         )}
       </MobileListCard>
 
-      {shown.length < filtered.length ? (
-        <Button
-          variant="outline"
-          className="h-11 w-full"
-          onClick={() => setVisible((n) => n + PAGE_SIZE)}
-        >
-          Load {Math.min(PAGE_SIZE, filtered.length - shown.length)} more
-        </Button>
-      ) : null}
+      <MobilePagination page={safePage} totalPages={totalPages} onChange={setPage} />
     </div>
   );
 }

@@ -25,7 +25,9 @@ import { MobileTransactions } from "./MobileTransactions";
 import { MobileIncome } from "./MobileIncome";
 import { MobileGoals } from "./MobileGoals";
 import { MobileProjects } from "./MobileProjects";
-import { MobileBudget, MobileCharts, MobilePlans } from "./MobileSecondary";
+import { MobileCharts } from "./MobileCharts";
+import { MobileBudget } from "./MobileBudget";
+import { MobilePlans } from "./MobileSecondary";
 
 export function MobileLayout(props: DashboardViewProps) {
   const {
@@ -114,9 +116,20 @@ export function MobileLayout(props: DashboardViewProps) {
           <MobileProjects projects={projects} inflows={inflows} loading={loading} />
         ) : null}
 
-        {tab === "charts" ? <MobileCharts transactions={transactions} /> : null}
+        {tab === "charts" ? (
+          <MobileCharts
+            transactions={transactions}
+            categories={categories}
+            loading={loading}
+          />
+        ) : null}
         {tab === "budget" ? (
-          <MobileBudget budgets={budgets} transactions={transactions} />
+          <MobileBudget
+            budgets={budgets}
+            categories={categories}
+            transactions={transactions}
+            loading={loading}
+          />
         ) : null}
         {tab === "plans" ? <MobilePlans plans={plans} loading={loading} /> : null}
       </main>

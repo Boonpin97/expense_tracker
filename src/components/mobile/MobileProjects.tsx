@@ -11,6 +11,9 @@ import {
 import { currency, deadlineLabel } from "@/lib/dashboard-format";
 import type { DashboardInflow, DashboardProject } from "@/lib/dashboard-api";
 import { MobileEmpty, MobileListCard, MobileRow } from "./MobileList";
+import { MobilePagination } from "./MobilePagination";
+
+const HISTORY_PAGE_SIZE = 8;
 
 /**
  * Stacked project cards. Tapping one opens its contribution history, mirroring
@@ -29,6 +32,7 @@ export function MobileProjects({
   // Track the id rather than the object so the dialog reflects live edits and
   // closes itself if the project disappears from a refresh.
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [historyPage, setHistoryPage] = useState(1);
 
   const detailProject = useMemo(
     () => projects.find((p) => p.id === detailId) ?? null,
@@ -44,6 +48,13 @@ export function MobileProjects({
     [inflows, detailId],
   );
   const detailContributed = detailInflows.reduce((sum, i) => sum + i.amount, 0);
+
+  const historyPages = Math.max(1, Math.ceil(detailInflows.length / HISTORY_PAGE_SIZE));
+  const safeHistoryPage = Math.min(historyPage, historyPages);
+  const historyShown = detailInflows.slice(
+    (safeHistoryPage - 1) * HISTORY_PAGE_SIZE,
+    safeHistoryPage * HISTORY_PAGE_SIZE,
+  );
 
   if (loading) {
     return (
@@ -82,12 +93,16 @@ export function MobileProjects({
             tabIndex={0}
             aria-label={`View ${project.name} contributions`}
             className="cursor-pointer active:bg-secondary/40"
-            onClick={() => setDetailId(project.id)}
+            onClick={() => {
+              setDetailId(project.id);
+              setHistoryPage(1);
+            }}
             onKeyDown={(event) => {
               if (event.target !== event.currentTarget) return;
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 setDetailId(project.id);
+                setHistoryPage(1);
               }
             }}
           >
@@ -179,7 +194,7 @@ export function MobileProjects({
                   </MobileListCard>
                 ) : (
                   <MobileListCard>
-                    {detailInflows.map((inflow) => (
+                    {historyShown.map((inflow) => (
                       <MobileRow
                         key={inflow.id}
                         title={inflow.item}
@@ -194,6 +209,11 @@ export function MobileProjects({
                     ))}
                   </MobileListCard>
                 )}
+                <MobilePagination
+                  page={safeHistoryPage}
+                  totalPages={historyPages}
+                  onChange={setHistoryPage}
+                />
                 <p className="text-xs text-muted-foreground">
                   The starting amount is seed capital entered on the project itself, so it has no
                   income entry and is not listed above.
