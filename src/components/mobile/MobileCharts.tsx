@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { endOfDay, format, startOfDay, subDays } from "date-fns";
 import {
   Bar,
@@ -15,21 +15,14 @@ import {
   YAxis,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { colorForCategory, currency } from "@/lib/dashboard-format";
 import type { DashboardCategory, DashboardTransaction } from "@/lib/dashboard-api";
-
-const RANGES = [
-  { key: "7", label: "Last 7 days" },
-  { key: "30", label: "Last 30 days" },
-  { key: "90", label: "Last 90 days" },
-] as const;
+import {
+  MobileCategoryFilter,
+  MobileRangeSelect,
+  mobileRange,
+  type MobileRangeKey,
+} from "./MobileFilters";
 
 /** Compact currency for axis ticks — "$1,234.00" eats ~62px of a ~295px plot. */
 function shortCurrency(value: number) {
@@ -40,12 +33,40 @@ function shortCurrency(value: number) {
 
 const AXIS = "oklch(0.55 0.04 257)";
 const GRID = "oklch(0.92 0.01 256)";
-
 const TOOLTIP_STYLE = {
   borderRadius: 8,
   border: `1px solid ${GRID}`,
   fontSize: 12,
 } as const;
+
+/**
+ * Shared category-selection state, matching the desktop CategoryFilterPopover:
+ * "all mode" tracks every category (including ones added later), and unchecking
+ * one drops out of all-mode into an explicit list.
+ */
+function useCategorySelection(categories: DashboardCategory[]) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [isAllMode, setIsAllMode] = useState(true);
+
+  useEffect(() => {
+    if (isAllMode) setSelected(categories.map((c) => c.name));
+  }, [categories, isAllMode]);
+
+  function toggleAll(all: boolean) {
+    setIsAllMode(all);
+    setSelected(all ? categories.map((c) => c.name) : []);
+  }
+
+  function toggleOne(name: string, checked: boolean) {
+    setIsAllMode(false);
+    setSelected((current) => {
+      const base = isAllMode ? categories.map((c) => c.name) : current;
+      return checked ? [...new Set([...base, name])] : base.filter((n) => n !== name);
+    });
+  }
+
+  return { selected, isAllMode, toggleAll, toggleOne };
+}
 
 export function MobileCharts({
   transactions,
@@ -56,17 +77,19 @@ export function MobileCharts({
   categories: DashboardCategory[];
   loading: boolean;
 }) {
-  const [rangeKey, setRangeKey] = useState<(typeof RANGES)[number]["key"]>("30");
-  const days = Number(rangeKey);
+  // Each card owns its own range, exactly as the desktop TrendCard and
+  // CategoryPieCard each carry a separate RangeSelector.
+  const [trendRange, setTrendRange] = useState<MobileRangeKey>("current-month");
+  const [pieRange, setPieRange] = useState<MobileRangeKey>("current-month");
+  const trendCats = useCategorySelection(categories);
 
-  // Spending per day across the selected window, gaps filled with zero so the
-  // line does not imply data where there is none.
   const trend = useMemo(() => {
-    const to = endOfDay(new Date());
-    const from = startOfDay(subDays(to, days - 1));
+    const { from, to } = mobileRange(trendRange);
+    const allowed = new Set(trendCats.selected);
     const perDay = new Map<string, number>();
     transactions.forEach((t) => {
       if (t.timestamp < from || t.timestamp > to) return;
+      if (!allowed.has(t.category)) return;
       const key = startOfDay(t.timestamp).toISOString();
       perDay.set(key, (perDay.get(key) ?? 0) + t.amount);
     });
@@ -82,7 +105,7 @@ export function MobileCharts({
       });
     }
     return series;
-  }, [transactions, days]);
+  }, [transactions, trendRange, trendCats.selected]);
 
   const weekly = useMemo(() => {
     const now = new Date();
@@ -98,8 +121,7 @@ export function MobileCharts({
   }, [transactions]);
 
   const byCategory = useMemo(() => {
-    const to = endOfDay(new Date());
-    const from = startOfDay(subDays(to, days - 1));
+    const { from, to } = mobileRange(pieRange);
     const totals = new Map<string, number>();
     transactions.forEach((t) => {
       if (t.timestamp < from || t.timestamp > to) return;
@@ -114,9 +136,10 @@ export function MobileCharts({
         color: colorForCategory(index),
       }))
       .sort((a, b) => b.amount - a.amount);
-  }, [transactions, categories, days]);
+  }, [transactions, categories, pieRange]);
 
   const pieTotal = byCategory.reduce((sum, row) => sum + row.amount, 0);
+  const trendTotal = trend.reduce((sum, row) => sum + row.amount, 0);
 
   if (loading) {
     return (
@@ -130,22 +153,24 @@ export function MobileCharts({
 
   return (
     <div className="space-y-4">
-      <Select value={rangeKey} onValueChange={(v) => setRangeKey(v as typeof rangeKey)}>
-        <SelectTrigger className="h-11 w-full">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {RANGES.map((r) => (
-            <SelectItem key={r.key} value={r.key}>
-              {r.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Spending Trend</CardTitle>
+        <CardHeader className="gap-3 pb-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <CardTitle className="text-base">Spending Trend</CardTitle>
+            <span className="shrink-0 text-sm font-semibold tabular-nums">
+              {currency.format(trendTotal)}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <MobileRangeSelect value={trendRange} onChange={setTrendRange} />
+            <MobileCategoryFilter
+              categories={categories}
+              selected={trendCats.selected}
+              isAllMode={trendCats.isAllMode}
+              onToggleAll={trendCats.toggleAll}
+              onToggleOne={trendCats.toggleOne}
+            />
+          </div>
         </CardHeader>
         <CardContent className="pl-0 pr-3">
           <div className="h-56 w-full">
@@ -194,8 +219,14 @@ export function MobileCharts({
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">By Category</CardTitle>
+        <CardHeader className="gap-3 pb-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <CardTitle className="text-base">By Category</CardTitle>
+            <span className="shrink-0 text-sm font-semibold tabular-nums">
+              {currency.format(pieTotal)}
+            </span>
+          </div>
+          <MobileRangeSelect value={pieRange} onChange={setPieRange} />
         </CardHeader>
         <CardContent>
           {byCategory.length === 0 ? (
@@ -245,7 +276,7 @@ export function MobileCharts({
                       <span className="shrink-0 tabular-nums text-muted-foreground">
                         {Math.round(pct)}%
                       </span>
-                      <span className="shrink-0 tabular-nums font-medium">
+                      <span className="shrink-0 font-medium tabular-nums">
                         {currency.format(row.amount)}
                       </span>
                     </div>

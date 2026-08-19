@@ -51,7 +51,7 @@ export function MobileLayout(props: DashboardViewProps) {
   const [tab, setTab] = useState<MobileTabKey>("overview");
   const [addOpen, setAddOpen] = useState<"expense" | "income" | null>(null);
 
-  const activeLabel = MOBILE_TABS.find((t) => t.key === tab)?.label ?? "";
+  const activeTitle = MOBILE_TABS.find((t) => t.key === tab)?.title ?? "";
 
   return (
     <div className="min-h-screen bg-secondary/40">
@@ -81,7 +81,8 @@ export function MobileLayout(props: DashboardViewProps) {
           <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
         ) : null}
 
-        <h2 className="sr-only">{activeLabel}</h2>
+        {/* Section title, mirroring the desktop CardTitle for each tab. */}
+        <h2 className="px-1 text-xl font-semibold tracking-tight">{activeTitle}</h2>
 
         {tab === "overview" ? (
           <MobileOverview

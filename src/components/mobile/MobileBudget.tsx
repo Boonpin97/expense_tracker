@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { Target, TrendingDown, Wallet } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { currency } from "@/lib/dashboard-format";
@@ -10,46 +9,10 @@ function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
-function StatTile({
-  label,
-  value,
-  sub,
-  icon: Icon,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  sub: string;
-  icon: typeof Target;
-  tone?: "default" | "over";
-}) {
-  return (
-    <Card>
-      <CardContent className="flex items-center gap-3 p-4">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-secondary">
-          <Icon className="h-5 w-5 text-muted-foreground" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-xs text-muted-foreground">{label}</p>
-          <p
-            className={`truncate text-lg font-semibold tabular-nums ${
-              tone === "over" ? "text-destructive" : "text-foreground"
-            }`}
-          >
-            {value}
-          </p>
-        </div>
-        <span className="shrink-0 text-xs text-muted-foreground">{sub}</span>
-      </CardContent>
-    </Card>
-  );
-}
-
 /**
- * Mirrors the desktop Budget tab: Total / Spent / Remaining summary, then one
- * row per category with its emoji. Desktop lays the summary out as three
- * StatCards side by side; here they stack so the currency values are not
- * squeezed into ~75px.
+ * Mirrors the desktop Budget tab's data, but folds its three StatCards into one
+ * combined line — "spent / total" with remaining underneath — since three
+ * currency values side by side leave ~75px each at 375px.
  */
 export function MobileBudget({
   budgets,
@@ -94,6 +57,7 @@ export function MobileBudget({
   const remaining = Math.max(budgetTotal - spentTotal, 0);
   const usedPct = budgetTotal > 0 ? Math.round((spentTotal / budgetTotal) * 100) : 0;
   const leftPct = Math.round((remaining / Math.max(budgetTotal, 1)) * 100);
+  const overall = spentTotal > budgetTotal;
 
   if (loading) {
     return (
@@ -117,25 +81,41 @@ export function MobileBudget({
 
   return (
     <div className="space-y-3">
-      <StatTile
-        label="Total Budget"
-        value={currency.format(budgetTotal)}
-        sub="Monthly limit"
-        icon={Target}
-      />
-      <StatTile
-        label="Spent"
-        value={currency.format(spentTotal)}
-        sub={`${usedPct}% used`}
-        icon={Wallet}
-        tone={spentTotal > budgetTotal ? "over" : "default"}
-      />
-      <StatTile
-        label="Remaining"
-        value={currency.format(remaining)}
-        sub={`${leftPct}% left`}
-        icon={TrendingDown}
-      />
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-sm text-muted-foreground">Spent this month</span>
+            <span className="text-xs text-muted-foreground tabular-nums">{usedPct}% used</span>
+          </div>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">
+            <span className={overall ? "text-destructive" : "text-foreground"}>
+              {currency.format(spentTotal)}
+            </span>
+            <span className="text-base font-normal text-muted-foreground">
+              {" / "}
+              {currency.format(budgetTotal)}
+            </span>
+          </p>
+          <Progress
+            value={budgetTotal > 0 ? Math.min((spentTotal / budgetTotal) * 100, 100) : 0}
+            className={overall ? "mt-3 [&>div]:bg-destructive" : "mt-3 [&>div]:bg-accent"}
+          />
+          <p className="mt-2 text-sm">
+            {overall ? (
+              <span className="font-medium text-destructive">
+                {currency.format(spentTotal - budgetTotal)} over budget
+              </span>
+            ) : (
+              <>
+                <span className="font-medium text-emerald-600">
+                  {currency.format(remaining)}
+                </span>
+                <span className="text-muted-foreground"> remaining · {leftPct}% left</span>
+              </>
+            )}
+          </p>
+        </CardContent>
+      </Card>
 
       <p className="px-1 pt-2 text-sm font-medium">Budget by Category</p>
 

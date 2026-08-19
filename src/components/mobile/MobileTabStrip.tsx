@@ -14,15 +14,15 @@ export type MobileTabKey =
  * Tabs in strip order. Priority screens first so the ones used most on a phone
  * are visible without scrolling; the rest trail off to the right.
  */
-export const MOBILE_TABS: { key: MobileTabKey; label: string }[] = [
-  { key: "overview", label: "Overview" },
-  { key: "transactions", label: "Expenses" },
-  { key: "income", label: "Income" },
-  { key: "goals", label: "Goals" },
-  { key: "projects", label: "Projects" },
-  { key: "charts", label: "Charts" },
-  { key: "budget", label: "Budget" },
-  { key: "plans", label: "Subscriptions" },
+export const MOBILE_TABS: { key: MobileTabKey; label: string; title: string }[] = [
+  { key: "overview", label: "Overview", title: "Overview" },
+  { key: "transactions", label: "Expenses", title: "All Expenses" },
+  { key: "income", label: "Income", title: "Income" },
+  { key: "goals", label: "Goals", title: "Goals" },
+  { key: "projects", label: "Projects", title: "Long-Term Projects" },
+  { key: "charts", label: "Charts", title: "Charts" },
+  { key: "budget", label: "Budget", title: "Budget" },
+  { key: "plans", label: "Subscriptions", title: "Subscriptions" },
 ];
 
 /**
