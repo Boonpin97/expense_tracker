@@ -19,11 +19,13 @@ export function MobileBudget({
   categories,
   transactions,
   loading,
+  onViewCategory,
 }: {
   budgets: Record<string, number>;
   categories: DashboardCategory[];
   transactions: DashboardTransaction[];
   loading: boolean;
+  onViewCategory: (categoryName: string) => void;
 }) {
   const rows = useMemo(() => {
     const from = startOfMonth(new Date());
@@ -126,9 +128,16 @@ export function MobileBudget({
           <Card key={category.name}>
             <CardContent className="space-y-2 p-4">
               <div className="flex items-center gap-2">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-secondary text-base leading-none">
+                {/* Same affordance as the desktop budget row: the emoji opens
+                    the Expenses tab filtered to this category. */}
+                <button
+                  type="button"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-secondary text-base leading-none transition-colors active:bg-secondary/70"
+                  aria-label={`View ${category.name} expenses`}
+                  onClick={() => onViewCategory(category.name)}
+                >
                   {category.emoji}
-                </span>
+                </button>
                 <p className="min-w-0 flex-1 truncate text-sm font-medium">{category.name}</p>
               </div>
               <div className="flex items-baseline justify-between gap-2">

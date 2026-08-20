@@ -1,5 +1,6 @@
+import { useCallback, useEffect, useState } from "react";
 import { endOfDay, startOfDay, startOfMonth, startOfYear, subDays } from "date-fns";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, ListFilter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -10,6 +11,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  TRANSACTION_SORT_OPTIONS,
+  type TransactionSortKey,
+} from "@/lib/dashboard-analytics";
 import type { DashboardCategory } from "@/lib/dashboard-api";
 
 /** Same preset keys and labels as the desktop RangeSelector. */
@@ -132,3 +137,79 @@ export function MobileCategoryFilter({
     </Popover>
   );
 }
+
+/**
+ * Shared category-selection state, matching the desktop CategoryFilterPopover:
+ * "all mode" tracks every category (including ones added later), and unchecking
+ * one drops out of all-mode into an explicit list.
+ */
+export function useCategorySelection(categories: DashboardCategory[]) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [isAllMode, setIsAllMode] = useState(true);
+
+  useEffect(() => {
+    if (isAllMode) setSelected(categories.map((c) => c.name));
+  }, [categories, isAllMode]);
+
+  // All three callbacks are stable so a caller can depend on them in an effect
+  // without re-running it every render (the Expenses tab jump does exactly
+  // that). They lean on the effect above rather than reading `categories`:
+  // while in all-mode `selected` already holds every category name.
+  const toggleAll = useCallback((all: boolean) => {
+    setIsAllMode(all);
+    if (!all) setSelected([]);
+  }, []);
+
+  const toggleOne = useCallback((name: string, checked: boolean) => {
+    setIsAllMode(false);
+    setSelected((current) =>
+      checked ? [...new Set([...current, name])] : current.filter((n) => n !== name),
+    );
+  }, []);
+
+  /** Used by the budget-tab jump to preselect exactly one category. */
+  const selectOnly = useCallback((name: string) => {
+    setIsAllMode(false);
+    setSelected([name]);
+  }, []);
+
+  return { selected, isAllMode, toggleAll, toggleOne, selectOnly };
+}
+
+/** Sort trigger mirroring the desktop one: icon plus a static "Sort" label. */
+export function MobileSortSelect({
+  value,
+  onChange,
+}: {
+  value: TransactionSortKey;
+  onChange: (key: TransactionSortKey) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as TransactionSortKey)}>
+      <SelectTrigger className="h-10 flex-1" aria-label="Sort expenses">
+        <div className="flex items-center gap-2">
+          <ListFilter className="h-4 w-4 shrink-0 opacity-70" />
+          <span className="truncate text-sm">Sort</span>
+        </div>
+      </SelectTrigger>
+      <SelectContent>
+        {TRANSACTION_SORT_OPTIONS.map((option) => (
+          <SelectItem key={option.key} value={option.key}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * Request from another tab to open Expenses with a filter already applied,
+ * mirroring the desktop TxnJump. `version` re-triggers a repeat jump to the
+ * same category.
+ */
+export type MobileTxnJump = {
+  category: string | null;
+  rangeKey: MobileRangeKey;
+  version: number;
+};

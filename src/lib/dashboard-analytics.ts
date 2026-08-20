@@ -138,3 +138,49 @@ export function buildTrendSeries(transactions: DashboardTransaction[]) {
     .map(([key, total]) => ({ date: new Date(key), total }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
+
+export type TransactionSortKey =
+  | "date-desc"
+  | "date-asc"
+  | "category-asc"
+  | "category-desc"
+  | "amount-desc"
+  | "amount-asc";
+
+/** Sort options in menu order, shared by the desktop and mobile expense tabs. */
+export const TRANSACTION_SORT_OPTIONS: { key: TransactionSortKey; label: string }[] = [
+  { key: "date-desc", label: "Date (Newest)" },
+  { key: "date-asc", label: "Date (Oldest)" },
+  { key: "category-asc", label: "Category (A-Z)" },
+  { key: "category-desc", label: "Category (Z-A)" },
+  { key: "amount-desc", label: "Amount (High-Low)" },
+  { key: "amount-asc", label: "Amount (Low-High)" },
+];
+
+export function sortTransactions(
+  transactions: DashboardTransaction[],
+  sortKey: TransactionSortKey,
+) {
+  return [...transactions].sort((left, right) => {
+    switch (sortKey) {
+      case "date-desc":
+        return right.timestamp.getTime() - left.timestamp.getTime();
+      case "date-asc":
+        return left.timestamp.getTime() - right.timestamp.getTime();
+      case "category-asc":
+        return (
+          left.category.localeCompare(right.category) ||
+          right.timestamp.getTime() - left.timestamp.getTime()
+        );
+      case "category-desc":
+        return (
+          right.category.localeCompare(left.category) ||
+          right.timestamp.getTime() - left.timestamp.getTime()
+        );
+      case "amount-desc":
+        return right.amount - left.amount || right.timestamp.getTime() - left.timestamp.getTime();
+      case "amount-asc":
+        return left.amount - right.amount || right.timestamp.getTime() - left.timestamp.getTime();
+    }
+  });
+}

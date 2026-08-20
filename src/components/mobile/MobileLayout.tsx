@@ -28,6 +28,7 @@ import { MobileProjects } from "./MobileProjects";
 import { MobileCharts } from "./MobileCharts";
 import { MobileBudget } from "./MobileBudget";
 import { MobilePlans } from "./MobileSecondary";
+import type { MobileTxnJump } from "./MobileFilters";
 
 export function MobileLayout(props: DashboardViewProps) {
   const {
@@ -46,10 +47,19 @@ export function MobileLayout(props: DashboardViewProps) {
     onDeleteTransaction,
     onCreateInflow,
     onDeleteInflow,
+    onUpdatePlan,
+    onDeletePlan,
   } = props;
 
   const [tab, setTab] = useState<MobileTabKey>("overview");
   const [addOpen, setAddOpen] = useState<"expense" | "income" | null>(null);
+  const [txnJump, setTxnJump] = useState<MobileTxnJump | null>(null);
+
+  // Budget -> Expenses hand-off, mirroring the desktop TxnJump.
+  function viewCategoryExpenses(categoryName: string) {
+    setTxnJump({ category: categoryName, rangeKey: "current-month", version: Date.now() });
+    setTab("transactions");
+  }
 
   const activeTitle = MOBILE_TABS.find((t) => t.key === tab)?.title ?? "";
 
@@ -96,8 +106,10 @@ export function MobileLayout(props: DashboardViewProps) {
         {tab === "transactions" ? (
           <MobileTransactions
             transactions={transactions}
+            categories={categories}
             loading={loading}
             onDeleteTransaction={onDeleteTransaction}
+            jump={txnJump}
           />
         ) : null}
 
@@ -130,9 +142,18 @@ export function MobileLayout(props: DashboardViewProps) {
             categories={categories}
             transactions={transactions}
             loading={loading}
+            onViewCategory={viewCategoryExpenses}
           />
         ) : null}
-        {tab === "plans" ? <MobilePlans plans={plans} loading={loading} /> : null}
+        {tab === "plans" ? (
+          <MobilePlans
+            plans={plans}
+            categories={categories}
+            loading={loading}
+            onUpdatePlan={onUpdatePlan}
+            onDeletePlan={onDeletePlan}
+          />
+        ) : null}
       </main>
 
       {/* Thumb-reachable actions. Kept above the iOS home indicator via env(). */}
@@ -140,7 +161,10 @@ export function MobileLayout(props: DashboardViewProps) {
         className="fixed inset-x-0 bottom-0 z-30 flex gap-2 border-t bg-background/95 px-4 py-3 backdrop-blur"
         style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
       >
-        <Button className="h-12 flex-1" onClick={() => setAddOpen("expense")}>
+        <Button
+          className="h-12 flex-1 bg-orange-700 text-white hover:bg-orange-800"
+          onClick={() => setAddOpen("expense")}
+        >
           <Plus className="mr-1 h-4 w-4" />
           Expense
         </Button>
