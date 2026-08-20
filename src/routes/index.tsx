@@ -45,6 +45,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { endOfDay, format, startOfDay, startOfMonth, startOfYear, subDays } from "date-fns";
+import {
+  TRANSACTION_SORT_OPTIONS,
+  sortTransactions,
+  type TransactionSortKey,
+} from "@/lib/dashboard-analytics";
 import { cn } from "@/lib/utils";
 import type { DateRange } from "react-day-picker";
 import {
@@ -162,13 +167,6 @@ type TxnJump = {
   custom?: DateRange;
   version: number;
 };
-type TransactionSortKey =
-  | "date-desc"
-  | "date-asc"
-  | "category-asc"
-  | "category-desc"
-  | "amount-desc"
-  | "amount-asc";
 
 
 
@@ -233,31 +231,6 @@ function buildFilledDailySeries(
     });
   }
   return series;
-}
-
-function sortTransactions(transactions: DashboardTransaction[], sortKey: TransactionSortKey) {
-  return [...transactions].sort((left, right) => {
-    switch (sortKey) {
-      case "date-desc":
-        return right.timestamp.getTime() - left.timestamp.getTime();
-      case "date-asc":
-        return left.timestamp.getTime() - right.timestamp.getTime();
-      case "category-asc":
-        return (
-          left.category.localeCompare(right.category) ||
-          right.timestamp.getTime() - left.timestamp.getTime()
-        );
-      case "category-desc":
-        return (
-          right.category.localeCompare(left.category) ||
-          right.timestamp.getTime() - left.timestamp.getTime()
-        );
-      case "amount-desc":
-        return right.amount - left.amount || right.timestamp.getTime() - left.timestamp.getTime();
-      case "amount-asc":
-        return left.amount - right.amount || right.timestamp.getTime() - left.timestamp.getTime();
-    }
-  });
 }
 
 type SessionState =
@@ -2931,12 +2904,11 @@ function TransactionsTab({
                   </div>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="date-desc">Date (Newest)</SelectItem>
-                  <SelectItem value="date-asc">Date (Oldest)</SelectItem>
-                  <SelectItem value="category-asc">Category (A-Z)</SelectItem>
-                  <SelectItem value="category-desc">Category (Z-A)</SelectItem>
-                  <SelectItem value="amount-desc">Amount (High-Low)</SelectItem>
-                  <SelectItem value="amount-asc">Amount (Low-High)</SelectItem>
+                  {TRANSACTION_SORT_OPTIONS.map((option) => (
+                    <SelectItem key={option.key} value={option.key}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

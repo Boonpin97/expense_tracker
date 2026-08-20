@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { endOfDay, format, startOfDay, subDays } from "date-fns";
 import {
   Bar,
@@ -21,6 +21,7 @@ import {
   MobileCategoryFilter,
   MobileRangeSelect,
   mobileRange,
+  useCategorySelection,
   type MobileRangeKey,
 } from "./MobileFilters";
 
@@ -38,35 +39,6 @@ const TOOLTIP_STYLE = {
   border: `1px solid ${GRID}`,
   fontSize: 12,
 } as const;
-
-/**
- * Shared category-selection state, matching the desktop CategoryFilterPopover:
- * "all mode" tracks every category (including ones added later), and unchecking
- * one drops out of all-mode into an explicit list.
- */
-function useCategorySelection(categories: DashboardCategory[]) {
-  const [selected, setSelected] = useState<string[]>([]);
-  const [isAllMode, setIsAllMode] = useState(true);
-
-  useEffect(() => {
-    if (isAllMode) setSelected(categories.map((c) => c.name));
-  }, [categories, isAllMode]);
-
-  function toggleAll(all: boolean) {
-    setIsAllMode(all);
-    setSelected(all ? categories.map((c) => c.name) : []);
-  }
-
-  function toggleOne(name: string, checked: boolean) {
-    setIsAllMode(false);
-    setSelected((current) => {
-      const base = isAllMode ? categories.map((c) => c.name) : current;
-      return checked ? [...new Set([...base, name])] : base.filter((n) => n !== name);
-    });
-  }
-
-  return { selected, isAllMode, toggleAll, toggleOne };
-}
 
 export function MobileCharts({
   transactions,
