@@ -3,6 +3,7 @@ import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useState }
 import type { FormEvent } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileLayout } from "@/components/mobile/MobileLayout";
+import { ProjectCard } from "@/components/ProjectCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -3865,6 +3866,18 @@ function ProjectsTab({
     [detailInflows],
   );
 
+  // Group once: every card needs its own contributions to judge pace.
+  const contributionsByProject = useMemo(() => {
+    const map = new Map<string, DashboardInflow[]>();
+    inflows.forEach((inflow) => {
+      if (!inflow.projectId) return;
+      const existing = map.get(inflow.projectId);
+      if (existing) existing.push(inflow);
+      else map.set(inflow.projectId, [inflow]);
+    });
+    return map;
+  }, [inflows]);
+
   function openAdd() {
     setEditingId(null);
     setFormName("");
@@ -3960,121 +3973,96 @@ function ProjectsTab({
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-lg">Long-Term Projects</CardTitle>
-            <p className="text-xs text-muted-foreground">Cumulative savings toward a deadline — progress never resets.</p>
-          </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold">Long-Term Projects</h3>
+          <p className="text-xs text-muted-foreground">
+            Cumulative savings toward a deadline — progress never resets. Click a card for its
+            contribution history.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            {projects.length} project{projects.length === 1 ? "" : "s"}
+          </span>
           <Button size="sm" className="gap-1" onClick={openAdd}>
             <Plus className="h-4 w-4" />
             Add Project
           </Button>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          {loading ? (
+        </div>
+      </div>
+
+      {loading ? (
+        <Card>
+          <CardContent className="p-0">
             <CenteredListMessage label="Loading projects..." />
-          ) : projects.length === 0 ? (
+          </CardContent>
+        </Card>
+      ) : projects.length === 0 ? (
+        <Card>
+          <CardContent className="p-0">
             <CenteredListMessage label="No long-term projects yet — add one with a target and deadline." />
-          ) : (
-            projects.map((project, index) => {
-              const pct = project.targetAmount > 0 ? (project.accumulated / project.targetAmount) * 100 : 0;
-              const reached = project.targetAmount > 0 && project.accumulated >= project.targetAmount;
-              const due = deadlineLabel(project.deadline);
-              return (
-                <div
-                  key={project.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`View ${project.name} contributions`}
-                  className="space-y-2 -mx-2 rounded-md px-2 py-1 cursor-pointer transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => setDetailId(project.id)}
-                  onKeyDown={(event) => {
-                    // Ignore keys bubbling up from the icon buttons inside this row.
-                    if (event.target !== event.currentTarget) return;
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setDetailId(project.id);
-                    }
-                  }}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
-                        {project.emoji}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="font-medium text-sm">{project.name}</p>
-                        {due.text ? (
-                          <p className={`text-xs ${due.overdue ? "text-destructive" : "text-muted-foreground"}`}>{due.text}</p>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <p className={`text-sm font-semibold ${reached ? "text-emerald-500" : "text-foreground"}`}>
-                        {currency.format(project.accumulated)}{" "}
-                        <span className="text-muted-foreground font-normal">
-                          / {currency.format(project.targetAmount)} ({Math.round(pct)}%)
-                        </span>
-                      </p>
-                      {/* Row-level click opens the detail dialog; these controls must not. */}
-                      <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          disabled={busyId === project.id || index === 0}
-                          aria-label={`Move ${project.name} up`}
-                          onClick={() => void handleMove(project, -1)}
-                        >
-                          <ChevronUp className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          disabled={busyId === project.id || index === projects.length - 1}
-                          aria-label={`Move ${project.name} down`}
-                          onClick={() => void handleMove(project, 1)}
-                        >
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          aria-label={`Edit ${project.name}`}
-                          onClick={() => openEdit(project)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                          disabled={busyId === project.id}
-                          aria-label={`Delete ${project.name}`}
-                          onClick={() => void handleDelete(project)}
-                        >
-                          {busyId === project.id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                  <Progress
-                    value={Math.min(pct, 100)}
-                    className={reached ? "[&>div]:bg-emerald-500" : "[&>div]:bg-accent"}
-                  />
-                </div>
-              );
-            })
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {projects.map((project, index) => (
+            <ProjectCard
+              key={project.id}
+              project={project}
+              contributions={contributionsByProject.get(project.id) ?? []}
+              onOpen={() => setDetailId(project.id)}
+              actions={
+                <>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-6 w-6"
+                    disabled={busyId === project.id || index === 0}
+                    aria-label={`Move ${project.name} up`}
+                    onClick={() => void handleMove(project, -1)}
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-6 w-6"
+                    disabled={busyId === project.id || index === projects.length - 1}
+                    aria-label={`Move ${project.name} down`}
+                    onClick={() => void handleMove(project, 1)}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-6 w-6"
+                    aria-label={`Edit ${project.name}`}
+                    onClick={() => openEdit(project)}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-6 w-6 text-destructive hover:text-destructive"
+                    disabled={busyId === project.id}
+                    aria-label={`Delete ${project.name}`}
+                    onClick={() => void handleDelete(project)}
+                  >
+                    {busyId === project.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </>
+              }
+            />
+          ))}
+        </div>
+      )}
 
       <Dialog open={detailProject !== null} onOpenChange={(open) => { if (!open) setDetailId(null); }}>
         <DialogContent className="sm:max-w-2xl">
