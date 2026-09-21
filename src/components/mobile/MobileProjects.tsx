@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
+import { ProjectCard } from "@/components/ProjectCard";
 import {
   Dialog,
   DialogContent,
@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { currency, deadlineLabel } from "@/lib/dashboard-format";
+import { currency } from "@/lib/dashboard-format";
 import type { DashboardInflow, DashboardProject } from "@/lib/dashboard-api";
 import { MobileEmpty, MobileListCard, MobileRow } from "./MobileList";
 import { MobilePagination } from "./MobilePagination";
@@ -49,6 +49,18 @@ export function MobileProjects({
   );
   const detailContributed = detailInflows.reduce((sum, i) => sum + i.amount, 0);
 
+  // Group once: every card needs its own contributions to judge pace.
+  const contributionsByProject = useMemo(() => {
+    const map = new Map<string, DashboardInflow[]>();
+    inflows.forEach((inflow) => {
+      if (!inflow.projectId) return;
+      const existing = map.get(inflow.projectId);
+      if (existing) existing.push(inflow);
+      else map.set(inflow.projectId, [inflow]);
+    });
+    return map;
+  }, [inflows]);
+
   const historyPages = Math.max(1, Math.ceil(detailInflows.length / HISTORY_PAGE_SIZE));
   const safeHistoryPage = Math.min(historyPage, historyPages);
   const historyShown = detailInflows.slice(
@@ -82,69 +94,18 @@ export function MobileProjects({
         Cumulative savings toward a deadline — progress never resets. Tap for history.
       </p>
 
-      {projects.map((project) => {
-        const pct = project.targetAmount > 0 ? (project.accumulated / project.targetAmount) * 100 : 0;
-        const reached = project.targetAmount > 0 && project.accumulated >= project.targetAmount;
-        const due = deadlineLabel(project.deadline);
-        return (
-          <Card
-            key={project.id}
-            role="button"
-            tabIndex={0}
-            aria-label={`View ${project.name} contributions`}
-            className="cursor-pointer active:bg-secondary/40"
-            onClick={() => {
-              setDetailId(project.id);
-              setHistoryPage(1);
-            }}
-            onKeyDown={(event) => {
-              if (event.target !== event.currentTarget) return;
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                setDetailId(project.id);
-                setHistoryPage(1);
-              }
-            }}
-          >
-            <CardContent className="space-y-2 p-4">
-              <div className="flex items-center gap-2">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-secondary text-base leading-none">
-                  {project.emoji}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{project.name}</p>
-                  {due.text ? (
-                    <p
-                      className={`text-xs ${due.overdue ? "text-destructive" : "text-muted-foreground"}`}
-                    >
-                      {due.text}
-                    </p>
-                  ) : null}
-                </div>
-                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  {Math.round(pct)}%
-                </span>
-              </div>
-              <div className="flex items-baseline justify-between gap-2">
-                <span
-                  className={`text-lg font-semibold tabular-nums ${
-                    reached ? "text-emerald-500" : "text-foreground"
-                  }`}
-                >
-                  {currency.format(project.accumulated)}
-                </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  of {currency.format(project.targetAmount)}
-                </span>
-              </div>
-              <Progress
-                value={Math.min(pct, 100)}
-                className={reached ? "[&>div]:bg-emerald-500" : "[&>div]:bg-accent"}
-              />
-            </CardContent>
-          </Card>
-        );
-      })}
+      {projects.map((project) => (
+        <ProjectCard
+          key={project.id}
+          project={project}
+          contributions={contributionsByProject.get(project.id) ?? []}
+          className="active:bg-secondary/40"
+          onOpen={() => {
+            setDetailId(project.id);
+            setHistoryPage(1);
+          }}
+        />
+      ))}
 
       <Dialog
         open={detailProject !== null}
