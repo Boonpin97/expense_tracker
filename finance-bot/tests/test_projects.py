@@ -209,6 +209,19 @@ class ProjectFirestoreTests(unittest.TestCase):
         # All-time across months; other users and goal-tagged inflows excluded.
         self.assertEqual(sums, {"p1": 150.0})
 
+    def test_sum_inflows_rounds_float_residue(self):
+        from services import firestore
+
+        docs = [
+            _FakeDoc("a", {"chat_id": 123, "amount": 0.1, "project_id": "p1"}),
+            _FakeDoc("b", {"chat_id": 123, "amount": 0.2, "project_id": "p1"}),
+            _FakeDoc("c", {"chat_id": 123, "amount": -0.3, "project_id": "p1"}),
+        ]
+        with patch.object(firestore, "get_db", return_value=_FakeDB(docs)):
+            sums = firestore.sum_inflows_by_project(123)
+
+        self.assertEqual(sums, {"p1": 0.0})
+
     def _adjust(self, new_balance, project=None, sums=None):
         from services import firestore
 
@@ -758,7 +771,7 @@ class DashboardInflowTargetTests(unittest.TestCase):
                 asyncio.run(dashboard.create_dashboard_inflow(payload, self._req()))
 
 
-    def _update_inflow(self, amount, project_id):
+    def _update_inflow(self, amount, project_id, goal_id=None):
         from unittest.mock import MagicMock
 
         db = MagicMock()
@@ -766,10 +779,15 @@ class DashboardInflowTargetTests(unittest.TestCase):
             patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
             patch.object(dashboard, "get_inflow_by_id", return_value={"chat_id": 123}),
             patch.object(dashboard, "get_project_by_id", return_value={"id": "p1"}),
+            patch.object(dashboard, "get_goal_by_id", return_value={"id": "g1"}),
             patch("services.firestore.get_db", return_value=db),
         ):
             payload = dashboard.InflowUpdateRequest(
-                item="🏠 House withdrawal", amount=amount, timestamp="2026-06-01T00:00:00+08:00", project_id=project_id
+                item="🏠 House withdrawal",
+                amount=amount,
+                timestamp="2026-06-01T00:00:00+08:00",
+                project_id=project_id,
+                goal_id=goal_id,
             )
             asyncio.run(dashboard.update_dashboard_inflow("i1", payload, self._req()))
         return db
@@ -782,6 +800,12 @@ class DashboardInflowTargetTests(unittest.TestCase):
     def test_update_inflow_rejects_negative_without_project(self):
         with self.assertRaises(Exception) as ctx:
             self._update_inflow(-500.0, None)
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 400)
+
+    def test_update_inflow_rejects_negative_on_goal_tagged_entry(self):
+        # A negative on a goal would push the goal's monthly progress below zero.
+        with self.assertRaises(Exception) as ctx:
+            self._update_inflow(-500.0, "p1", goal_id="g1")
         self.assertEqual(getattr(ctx.exception, "status_code", None), 400)
 
     def test_update_inflow_rejects_zero(self):

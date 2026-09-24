@@ -134,6 +134,7 @@ import {
   deadlineLabel,
   formatDateTimeInputValue,
   formatSignedAmount,
+  linkedProjectAfterGoalChange,
 } from "@/lib/dashboard-format";
 
 export const Route = createFileRoute("/")({
@@ -1779,10 +1780,10 @@ function DashboardLayout({
                 <Select
                   value={newInflowGoal}
                   onValueChange={(value) => {
+                    setNewInflowProject(
+                      linkedProjectAfterGoalChange(goals, projects, newInflowGoal, value, newInflowProject),
+                    );
                     setNewInflowGoal(value);
-                    // Pre-fill the goal's linked project; the user can still change it.
-                    const linked = goals.find((goal) => goal.id === value)?.projectId;
-                    if (linked && projects.some((project) => project.id === linked)) setNewInflowProject(linked);
                   }}
                   disabled={creatingInflow || goals.length === 0}
                 >
@@ -2098,8 +2099,8 @@ function OverviewHero({
               </div>
               <div className="min-w-0">
                 <p className="text-xs text-muted-foreground">Inflow</p>
-                <p className="text-lg font-bold text-emerald-500 leading-tight">
-                  +{currency.format(monthIncome)}
+                <p className={`text-lg font-bold leading-tight ${monthIncome < 0 ? "text-destructive" : "text-emerald-500"}`}>
+                  {formatSignedAmount(monthIncome)}
                 </p>
               </div>
             </div>
@@ -3952,6 +3953,11 @@ function ProjectsTab({
     const name = formName.trim();
     const target = Number(formTarget);
     const initialAmount = formInitialAmount.trim() ? Number(formInitialAmount) : 0;
+    if (editingId && !formInitialAmount.trim()) {
+      // Blank on edit would otherwise record a withdrawal of the whole balance.
+      setFormError("Enter the current amount (use 0 to empty the project).");
+      return;
+    }
     if (!name) {
       setFormError("Name is required.");
       return;

@@ -15,6 +15,28 @@ export function formatSignedAmount(amount: number) {
   return `${amount < 0 ? "−" : "+"}${currency.format(Math.abs(amount))}`;
 }
 
+/**
+ * Income-form project value after the goal changes ("none" = no project).
+ * A linked goal fills in its project. Switching away clears a project that was
+ * only there because the previous goal filled it in; a project the user picked
+ * themselves is kept.
+ */
+export function linkedProjectAfterGoalChange(
+  goals: { id: string; projectId: string | null }[],
+  projects: { id: string }[],
+  previousGoalId: string,
+  nextGoalId: string,
+  currentProjectId: string,
+) {
+  const linkOf = (goalId: string) => {
+    const linked = goals.find((goal) => goal.id === goalId)?.projectId;
+    return linked && projects.some((project) => project.id === linked) ? linked : null;
+  };
+  const next = linkOf(nextGoalId);
+  if (next) return next;
+  return currentProjectId === linkOf(previousGoalId) ? "none" : currentProjectId;
+}
+
 /** Golden-angle hue walk so adjacent categories stay visually distinct. */
 export function colorForCategory(index: number) {
   const hue = (index * 137.508) % 360;

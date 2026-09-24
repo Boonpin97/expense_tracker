@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatDateTimeInputValue } from "@/lib/dashboard-format";
+import { formatDateTimeInputValue, linkedProjectAfterGoalChange } from "@/lib/dashboard-format";
 import type { DashboardViewProps } from "./types";
 import { MOBILE_TABS, MobileTabStrip, type MobileTabKey } from "./MobileTabStrip";
 import { MobileOverview } from "./MobileOverview";
@@ -362,10 +362,8 @@ function MobileAddDialog({
                 <Select
                   value={goalId}
                   onValueChange={(value) => {
+                    setProjectId(linkedProjectAfterGoalChange(goals, projects, goalId, value, projectId));
                     setGoalId(value);
-                    // Pre-fill the goal's linked project; the user can still change it.
-                    const linked = goals.find((g) => g.id === value)?.projectId;
-                    if (linked && projects.some((p) => p.id === linked)) setProjectId(linked);
                   }}
                   disabled={saving || goals.length === 0}
                 >

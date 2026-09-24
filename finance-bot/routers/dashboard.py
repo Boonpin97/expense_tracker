@@ -621,8 +621,9 @@ async def update_dashboard_inflow(
         raise HTTPException(status_code=400, detail="Item cannot be empty.")
     goal_id, project_id = _resolve_inflow_target(session["chat_id"], payload.goal_id, payload.project_id)
     # Negative amounts are project withdrawals (from a lowered current amount),
-    # so they're only valid while the entry stays tagged to a project.
-    if payload.amount == 0 or (payload.amount < 0 and not project_id):
+    # so they're only valid on a project-only entry; on a goal they'd push the
+    # goal's monthly progress below zero.
+    if payload.amount == 0 or (payload.amount < 0 and (not project_id or goal_id)):
         raise HTTPException(status_code=400, detail="Amount must be positive.")
 
     from services.firestore import get_db
@@ -830,8 +831,9 @@ async def list_dashboard_projects(request: Request):
             {
                 **project,
                 "initial_amount": float(project.get("initial_amount", 0.0) or 0.0),
-                "accumulated": float(project.get("initial_amount", 0.0) or 0.0)
-                + sums.get(project["id"], 0.0),
+                "accumulated": round(
+                    float(project.get("initial_amount", 0.0) or 0.0) + sums.get(project["id"], 0.0), 2
+                ),
             }
             for project in projects
         ]

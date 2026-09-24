@@ -241,7 +241,8 @@ def _sum_inflows_grouped(
             if not (start_iso <= timestamp < end_iso):
                 continue
         sums[key] = sums.get(key, 0.0) + data.get("amount", 0.0)
-    return sums
+    # Round away float residue (e.g. 1.1e-13 after a top-up and withdrawal cancel out).
+    return {key: round(total, 2) for key, total in sums.items()}
 
 
 def sum_inflows_by_goal(
