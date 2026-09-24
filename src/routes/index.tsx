@@ -133,6 +133,8 @@ import {
   currency,
   deadlineLabel,
   formatDateTimeInputValue,
+  formatSignedAmount,
+  linkedProjectAfterGoalChange,
 } from "@/lib/dashboard-format";
 
 export const Route = createFileRoute("/")({
@@ -504,14 +506,14 @@ function DashboardShell({
     await Promise.all([refreshGoals(), refreshProjects()]);
   }
 
-  async function handleCreateGoal(payload: { name: string; targetAmount: number; emoji: string }) {
+  async function handleCreateGoal(payload: { name: string; targetAmount: number; emoji: string; projectId?: string | null }) {
     await createDashboardGoal(payload);
     await refreshGoals();
   }
 
   async function handleUpdateGoal(
     goalId: string,
-    payload: { name?: string; targetAmount?: number; emoji?: string },
+    payload: { name?: string; targetAmount?: number; emoji?: string; projectId?: string | null },
   ) {
     await updateDashboardGoal(goalId, payload);
     await refreshGoals();
@@ -543,12 +545,16 @@ function DashboardShell({
     payload: {
       name?: string;
       targetAmount?: number;
-      initialAmount?: number;
+      currentAmount?: number;
       deadline?: string;
       emoji?: string;
     },
   ) {
     await updateDashboardProject(projectId, payload);
+    if (payload.currentAmount !== undefined) {
+      // A changed current amount is recorded as a top-up/withdrawal income entry.
+      setInflows(await fetchDashboardInflows({ start: HISTORY_START, end: endOfDay(new Date()) }));
+    }
     await refreshProjects();
   }
 
@@ -791,10 +797,10 @@ function DashboardLayout({
   ) => Promise<void>;
   onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
   onUpdatePreferences: (next: DashboardPreferences) => Promise<void>;
-  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string }) => Promise<void>;
+  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string; projectId?: string | null }) => Promise<void>;
   onUpdateGoal: (
     goalId: string,
-    payload: { name?: string; targetAmount?: number; emoji?: string },
+    payload: { name?: string; targetAmount?: number; emoji?: string; projectId?: string | null },
   ) => Promise<void>;
   onDeleteGoal: (goalId: string) => Promise<void>;
   onMoveGoal: (goalId: string, direction: -1 | 1) => Promise<void>;
@@ -810,7 +816,7 @@ function DashboardLayout({
     payload: {
       name?: string;
       targetAmount?: number;
-      initialAmount?: number;
+      currentAmount?: number;
       deadline?: string;
       emoji?: string;
     },
@@ -1539,6 +1545,7 @@ function DashboardLayout({
           <TabsContent value="goals" className="space-y-6">
             <GoalsTab
               goals={goals}
+              projects={projects}
               loading={loading}
               onCreateGoal={onCreateGoal}
               onUpdateGoal={onUpdateGoal}
@@ -1772,7 +1779,12 @@ function DashboardLayout({
                 <Label htmlFor="new-inflow-goal">Assign to goal (monthly)</Label>
                 <Select
                   value={newInflowGoal}
-                  onValueChange={setNewInflowGoal}
+                  onValueChange={(value) => {
+                    setNewInflowProject(
+                      linkedProjectAfterGoalChange(goals, projects, newInflowGoal, value, newInflowProject),
+                    );
+                    setNewInflowGoal(value);
+                  }}
                   disabled={creatingInflow || goals.length === 0}
                 >
                   <SelectTrigger id="new-inflow-goal">
@@ -2087,8 +2099,8 @@ function OverviewHero({
               </div>
               <div className="min-w-0">
                 <p className="text-xs text-muted-foreground">Inflow</p>
-                <p className="text-lg font-bold text-emerald-500 leading-tight">
-                  +{currency.format(monthIncome)}
+                <p className={`text-lg font-bold leading-tight ${monthIncome < 0 ? "text-destructive" : "text-emerald-500"}`}>
+                  {formatSignedAmount(monthIncome)}
                 </p>
               </div>
             </div>
@@ -3538,8 +3550,10 @@ function IncomeTab({
                       <TableCell className="text-muted-foreground">
                         {format(inflow.timestamp, "MMM d, yyyy")}
                       </TableCell>
-                      <TableCell className="text-right font-semibold text-emerald-500">
-                        +{currency.format(inflow.amount)}
+                      <TableCell
+                        className={`text-right font-semibold ${inflow.amount < 0 ? "text-destructive" : "text-emerald-500"}`}
+                      >
+                        {formatSignedAmount(inflow.amount)}
                       </TableCell>
                       <TableCell>
                         <Button
@@ -3569,6 +3583,7 @@ function IncomeTab({
 
 function GoalsTab({
   goals,
+  projects,
   loading,
   onCreateGoal,
   onUpdateGoal,
@@ -3576,11 +3591,12 @@ function GoalsTab({
   onMoveGoal,
 }: {
   goals: DashboardGoal[];
+  projects: DashboardProject[];
   loading: boolean;
-  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string }) => Promise<void>;
+  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string; projectId?: string | null }) => Promise<void>;
   onUpdateGoal: (
     goalId: string,
-    payload: { name?: string; targetAmount?: number; emoji?: string },
+    payload: { name?: string; targetAmount?: number; emoji?: string; projectId?: string | null },
   ) => Promise<void>;
   onDeleteGoal: (goalId: string) => Promise<void>;
   onMoveGoal: (goalId: string, direction: -1 | 1) => Promise<void>;
@@ -3590,15 +3606,18 @@ function GoalsTab({
   const [formName, setFormName] = useState("");
   const [formEmoji, setFormEmoji] = useState("🎯");
   const [formTarget, setFormTarget] = useState("");
+  const [formProject, setFormProject] = useState("none");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
 
   function openAdd() {
     setEditingId(null);
     setFormName("");
     setFormEmoji("🎯");
     setFormTarget("");
+    setFormProject("none");
     setFormError(null);
     setDialogOpen(true);
   }
@@ -3608,6 +3627,7 @@ function GoalsTab({
     setFormName(goal.name);
     setFormEmoji(goal.emoji);
     setFormTarget(String(goal.targetAmount));
+    setFormProject(goal.projectId && projectsById.has(goal.projectId) ? goal.projectId : "none");
     setFormError(null);
     setDialogOpen(true);
   }
@@ -3626,10 +3646,11 @@ function GoalsTab({
     setSaving(true);
     setFormError(null);
     try {
+      const projectId = formProject === "none" ? null : formProject;
       if (editingId) {
-        await onUpdateGoal(editingId, { name, targetAmount: target, emoji: formEmoji.trim() || "🎯" });
+        await onUpdateGoal(editingId, { name, targetAmount: target, emoji: formEmoji.trim() || "🎯", projectId });
       } else {
-        await onCreateGoal({ name, targetAmount: target, emoji: formEmoji.trim() || "🎯" });
+        await onCreateGoal({ name, targetAmount: target, emoji: formEmoji.trim() || "🎯", projectId });
       }
       setDialogOpen(false);
     } catch (caught) {
@@ -3684,6 +3705,7 @@ function GoalsTab({
             goals.map((goal, index) => {
               const pct = goal.targetAmount > 0 ? (goal.accumulated / goal.targetAmount) * 100 : 0;
               const reached = goal.targetAmount > 0 && goal.accumulated >= goal.targetAmount;
+              const linkedProject = goal.projectId ? projectsById.get(goal.projectId) : undefined;
               return (
                 <div key={goal.id} className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
@@ -3691,7 +3713,14 @@ function GoalsTab({
                       <span className="h-8 w-8 rounded-md bg-secondary flex items-center justify-center shrink-0 text-sm leading-none">
                         {goal.emoji}
                       </span>
-                      <p className="font-medium text-sm">{goal.name}</p>
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm">{goal.name}</p>
+                        {linkedProject ? (
+                          <p className="text-xs text-muted-foreground truncate">
+                            → {linkedProject.emoji} {linkedProject.name}
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <p className={`text-sm font-semibold ${reached ? "text-emerald-500" : "text-foreground"}`}>
@@ -3784,6 +3813,25 @@ function GoalsTab({
                 disabled={saving}
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="goal-project">Linked project (long-term)</Label>
+              <Select value={formProject} onValueChange={setFormProject} disabled={saving || projects.length === 0}>
+                <SelectTrigger id="goal-project">
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.emoji} {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Income assigned to this goal will also count toward the linked project.
+              </p>
+            </div>
             {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
           </div>
           <DialogFooter>
@@ -3826,7 +3874,7 @@ function ProjectsTab({
     payload: {
       name?: string;
       targetAmount?: number;
-      initialAmount?: number;
+      currentAmount?: number;
       deadline?: string;
       emoji?: string;
     },
@@ -3894,7 +3942,9 @@ function ProjectsTab({
     setFormName(project.name);
     setFormEmoji(project.emoji);
     setFormTarget(String(project.targetAmount));
-    setFormInitialAmount(project.initialAmount > 0 ? String(project.initialAmount) : "");
+    // Edit shows the live balance; saving a different value records the gap as income.
+    // Always filled (even "0") so an untouched field never reads as blank.
+    setFormInitialAmount(String(Math.round(project.accumulated * 100) / 100));
     setFormDeadline(project.deadline ? project.deadline.slice(0, 10) : "");
     setFormError(null);
     setDialogOpen(true);
@@ -3904,6 +3954,14 @@ function ProjectsTab({
     const name = formName.trim();
     const target = Number(formTarget);
     const initialAmount = formInitialAmount.trim() ? Number(formInitialAmount) : 0;
+    if (editingId && !formInitialAmount.trim()) {
+      // Blank on edit would otherwise record a withdrawal of the whole balance.
+      setFormError("Enter the current amount (use 0 to empty the project).");
+      return;
+    }
+    const previous = editingId ? projects.find((project) => project.id === editingId) : undefined;
+    const balanceChanged =
+      !previous || Math.abs(initialAmount - Math.round(previous.accumulated * 100) / 100) >= 0.005;
     if (!name) {
       setFormError("Name is required.");
       return;
@@ -3912,7 +3970,9 @@ function ProjectsTab({
       setFormError("Target must be a positive number.");
       return;
     }
-    if (!Number.isFinite(initialAmount) || initialAmount < 0) {
+    // An untouched balance is never re-sent, so only validate a changed one
+    // (a project can dip below zero if a withdrawal entry is edited).
+    if (balanceChanged && (!Number.isFinite(initialAmount) || initialAmount < 0)) {
       setFormError("Current amount must be zero or more.");
       return;
     }
@@ -3927,7 +3987,7 @@ function ProjectsTab({
         await onUpdateProject(editingId, {
           name,
           targetAmount: target,
-          initialAmount,
+          ...(balanceChanged ? { currentAmount: initialAmount } : {}),
           deadline: formDeadline,
           emoji: formEmoji.trim() || "🚀",
         });
@@ -4100,9 +4160,9 @@ function ProjectsTab({
                   <p className="text-sm font-semibold">{currency.format(detailProject.initialAmount)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Income assigned</p>
-                  <p className="text-sm font-semibold text-emerald-500">
-                    +{currency.format(detailContributed)}
+                  <p className="text-xs text-muted-foreground">Contributions</p>
+                  <p className={`text-sm font-semibold ${detailContributed < 0 ? "text-destructive" : "text-emerald-500"}`}>
+                    {formatSignedAmount(detailContributed)}
                   </p>
                 </div>
                 <div>
@@ -4132,8 +4192,10 @@ function ProjectsTab({
                             <TableCell className="text-muted-foreground">
                               {format(inflow.timestamp, "MMM d, yyyy")}
                             </TableCell>
-                            <TableCell className="text-right font-semibold text-emerald-500">
-                              +{currency.format(inflow.amount)}
+                            <TableCell
+                              className={`text-right font-semibold ${inflow.amount < 0 ? "text-destructive" : "text-emerald-500"}`}
+                            >
+                              {formatSignedAmount(inflow.amount)}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -4193,6 +4255,11 @@ function ProjectsTab({
                 onChange={(e) => setFormInitialAmount(e.target.value)}
                 disabled={saving}
               />
+              {editingId ? (
+                <p className="text-xs text-muted-foreground">
+                  Changing this records the difference as income today (a top-up or withdrawal).
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="project-target">Target Amount</Label>

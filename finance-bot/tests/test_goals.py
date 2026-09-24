@@ -168,13 +168,14 @@ def _request_for_callback(data: str, chat_id: int = 123):
 class GoalsCommandTests(unittest.TestCase):
     def test_goals_lists_progress(self):
         goals = [
-            {"id": "g1", "name": "Vacation", "target_amount": 3000.0},
+            {"id": "g1", "name": "Vacation", "target_amount": 3000.0, "project_id": "p1"},
             {"id": "g2", "name": "Emergency", "target_amount": 1000.0},
         ]
         with (
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.get_goals", return_value=goals),
             patch("routers.webhook.sum_inflows_by_goal", return_value={"g1": 1500.0}),
+            patch("routers.webhook.get_projects", return_value=[{"id": "p1", "name": "House", "emoji": "🏠"}]),
             patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
         ):
             result = asyncio.run(webhook(_request_for_text("/goals")))
@@ -182,8 +183,8 @@ class GoalsCommandTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         body = mock_send.call_args.args[1]
         self.assertIn("Vacation", body)
-        self.assertIn("$1,500.00 / $3,000.00 (50%)", body)
-        self.assertIn("$0.00 / $1,000.00 (0%)", body)
+        self.assertIn("$1,500.00 / $3,000.00 (50%) → 🏠 House", body)
+        self.assertTrue(body.endswith("$0.00 / $1,000.00 (0%)"))
 
     def test_goals_empty_state(self):
         with (
@@ -271,6 +272,7 @@ class NewGoalFlowTests(unittest.TestCase):
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.get_session", return_value=session),
             patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_projects", return_value=[]),
             patch("routers.webhook.save_goal", return_value="goal-1") as mock_save,
             patch("routers.webhook.update_inflow_goal") as mock_tag,
             patch("routers.webhook.clear_session") as mock_clear,
@@ -280,6 +282,7 @@ class NewGoalFlowTests(unittest.TestCase):
 
         self.assertEqual(result, {"ok": True})
         mock_save.assert_called_once()
+        self.assertIsNone(mock_save.call_args.args[0].project_id)
         goal = mock_save.call_args.args[0]
         self.assertEqual(goal.name, "Vacation")
         self.assertEqual(goal.emoji, "🏖")
@@ -1021,6 +1024,301 @@ class EditGoalReorderTests(unittest.TestCase):
 
         mock_move.assert_not_called()
         self.assertIn("Expired", mock_answer.call_args.args[1])
+
+
+class GoalProjectLinkTests(unittest.TestCase):
+    PROJECT = {"id": "p1", "name": "House", "emoji": "🏠"}
+
+    def _new_goal_session(self, step="choosing_project", **payload):
+        return {
+            "flow_type": "new_goal",
+            "step": step,
+            "payload": {"name": "Vacation", "emoji": "🏖", "target_amount": 3000.0, **payload},
+            "expires_at": _future_iso(),
+        }
+
+    def _income_goal_session(self):
+        return {
+            "flow_type": "income_goal",
+            "step": "choosing_goal",
+            "payload": {"inflow_id": "inflow-doc-1", "item": "Salary", "amount": 2000.0, "transaction_date": None},
+            "expires_at": _future_iso(),
+        }
+
+    def _edit_session(self, step="choosing_project"):
+        return {
+            "flow_type": "edit_goal",
+            "step": step,
+            "payload": {"goal_id": "g1", "goal_name": "Vacation"},
+            "expires_at": _future_iso(),
+        }
+
+    def test_target_step_with_projects_asks_for_project(self):
+        session = self._new_goal_session(step="awaiting_target")
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_projects", return_value=[self.PROJECT]),
+            patch("routers.webhook.save_goal") as mock_save,
+            patch("routers.webhook.update_session") as mock_update,
+            patch("routers.webhook.telegram.send_goal_project_keyboard", new=AsyncMock()) as mock_keyboard,
+        ):
+            asyncio.run(webhook(_request_for_text("2500")))
+
+        mock_save.assert_not_called()
+        mock_update.assert_called_once_with(123, step="choosing_project", payload_updates={"target_amount": 2500.0})
+        mock_keyboard.assert_awaited_once()
+        self.assertEqual(mock_keyboard.call_args.args[1], [self.PROJECT])
+
+    def test_pick_project_saves_linked_goal(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._new_goal_session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_project_by_id", return_value=self.PROJECT),
+            patch("routers.webhook.save_goal", return_value="goal-1") as mock_save,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalproject:p1")))
+
+        goal = mock_save.call_args.args[0]
+        self.assertEqual((goal.name, goal.target_amount, goal.project_id), ("Vacation", 3000.0, "p1"))
+        mock_clear.assert_called_once_with(123)
+        self.assertIn("House", mock_send.call_args.args[1])
+
+    def test_no_project_saves_unlinked_goal(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._new_goal_session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.save_goal", return_value="goal-1") as mock_save,
+            patch("routers.webhook.clear_session"),
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+        ):
+            asyncio.run(webhook(_request_for_callback("goalproject:__none__")))
+
+        self.assertIsNone(mock_save.call_args.args[0].project_id)
+
+    def test_pick_project_expired_does_not_save(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._new_goal_session()),
+            patch("routers.webhook.session_expired", return_value=True),
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.clear_user_state"),
+            patch("routers.webhook.save_goal") as mock_save,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()) as mock_answer,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalproject:p1")))
+
+        mock_save.assert_not_called()
+        mock_clear.assert_called_once_with(123)
+        self.assertIn("Expired", mock_answer.call_args.args[1])
+        self.assertIn("expired", mock_send.call_args.args[1].lower())
+
+    def test_text_while_choosing_project_keeps_session(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._new_goal_session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.save_goal") as mock_save,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_text("House")))
+
+        mock_save.assert_not_called()
+        mock_clear.assert_not_called()
+        self.assertIn("buttons", mock_send.call_args.args[1])
+
+    def test_new_linked_goal_from_income_auto_tags_project(self):
+        session = self._new_goal_session(inflow_id="inflow-doc-1", item="Salary", amount=2000.0, transaction_date=None)
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_project_by_id", return_value=self.PROJECT),
+            patch("routers.webhook.save_goal", return_value="goal-1"),
+            patch("routers.webhook.update_inflow_goal") as mock_tag_goal,
+            patch("routers.webhook.update_inflow_project") as mock_tag_project,
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.clear_session"),
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_income_project_keyboard", new=AsyncMock()) as mock_keyboard,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalproject:p1")))
+
+        mock_tag_goal.assert_called_once_with("inflow-doc-1", "goal-1")
+        mock_tag_project.assert_called_once_with("inflow-doc-1", "p1")
+        mock_start.assert_not_called()
+        mock_keyboard.assert_not_awaited()
+        body = mock_send.call_args.args[1]
+        self.assertIn("Vacation", body)
+        self.assertIn("(created)", body)
+        self.assertIn("House", body)
+
+    def test_income_pick_linked_goal_auto_tags_project(self):
+        goal = {"id": "g1", "name": "Vacation", "emoji": "🏖", "project_id": "p1"}
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._income_goal_session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_goal_by_id", return_value=goal),
+            patch("routers.webhook.get_project_by_id", return_value=self.PROJECT),
+            patch("routers.webhook.update_inflow_goal") as mock_tag_goal,
+            patch("routers.webhook.update_inflow_project") as mock_tag_project,
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_income_project_keyboard", new=AsyncMock()) as mock_keyboard,
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("inflowgoal:g1")))
+
+        mock_tag_goal.assert_called_once_with("inflow-doc-1", "g1")
+        mock_tag_project.assert_called_once_with("inflow-doc-1", "p1")
+        mock_start.assert_not_called()
+        mock_keyboard.assert_not_awaited()
+        mock_clear.assert_called_once_with(123)
+        self.assertIn("🚀 Project:", mock_send.call_args.args[1])
+
+    def test_income_pick_goal_linked_to_deleted_project_prompts(self):
+        goal = {"id": "g1", "name": "Vacation", "emoji": "🏖", "project_id": "gone"}
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._income_goal_session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_goal_by_id", return_value=goal),
+            patch("routers.webhook.get_project_by_id", return_value=None),
+            patch("routers.webhook.update_inflow_goal"),
+            patch("routers.webhook.update_inflow_project") as mock_tag_project,
+            patch("routers.webhook.get_projects", return_value=[]),
+            patch("routers.webhook.start_session") as mock_start,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_income_project_keyboard", new=AsyncMock()) as mock_keyboard,
+        ):
+            asyncio.run(webhook(_request_for_callback("inflowgoal:g1")))
+
+        mock_tag_project.assert_not_called()
+        self.assertEqual(mock_start.call_args.args[:3], (123, "income_project", "choosing_project"))
+        mock_keyboard.assert_awaited_once()
+
+    def test_edit_project_field_shows_keyboard(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._edit_session("choosing_field")),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_projects", return_value=[self.PROJECT]),
+            patch("routers.webhook.update_session") as mock_update,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_goal_project_keyboard", new=AsyncMock()) as mock_keyboard,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalfield:project")))
+
+        mock_update.assert_called_once_with(123, step="choosing_project")
+        mock_keyboard.assert_awaited_once()
+
+    def test_edit_links_goal_to_project(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._edit_session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.get_project_by_id", return_value=self.PROJECT),
+            patch("routers.webhook.update_goal", return_value=True) as mock_update,
+            patch("routers.webhook.clear_session") as mock_clear,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalproject:p1")))
+
+        mock_update.assert_called_once_with(123, "g1", project_id="p1")
+        mock_clear.assert_called_once_with(123)
+        self.assertIn("Linked", mock_send.call_args.args[1])
+
+    def test_edit_unlinks_goal(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=self._edit_session()),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.update_goal", return_value=True) as mock_update,
+            patch("routers.webhook.clear_session"),
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalproject:__none__")))
+
+        mock_update.assert_called_once_with(123, "g1", project_id=None)
+        self.assertIn("no longer linked", mock_send.call_args.args[1])
+
+    def test_goalproject_without_session_is_expired(self):
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=None),
+            patch("routers.webhook.update_goal") as mock_update,
+            patch("routers.webhook.save_goal") as mock_save,
+            patch("routers.webhook.telegram.answer_callback_query", new=AsyncMock()) as mock_answer,
+        ):
+            asyncio.run(webhook(_request_for_callback("goalproject:p1")))
+
+        mock_update.assert_not_called()
+        mock_save.assert_not_called()
+        self.assertIn("Expired", mock_answer.call_args.args[1])
+
+
+class DashboardGoalProjectLinkTests(unittest.TestCase):
+    def _req(self):
+        return SimpleNamespace(cookies={}, headers={})
+
+    def test_create_goal_with_project(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_project_by_id", return_value={"id": "p1"}),
+            patch.object(dashboard, "save_goal", return_value="g-new") as mock_save,
+        ):
+            payload = dashboard.GoalCreateRequest(name="Car", target_amount=500.0, project_id="p1")
+            asyncio.run(dashboard.create_dashboard_goal(payload, self._req()))
+
+        self.assertEqual(mock_save.call_args.args[0].project_id, "p1")
+
+    def test_create_goal_unknown_project_404(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_project_by_id", return_value=None),
+            patch.object(dashboard, "save_goal") as mock_save,
+        ):
+            payload = dashboard.GoalCreateRequest(name="Car", target_amount=500.0, project_id="ghost")
+            with self.assertRaises(Exception) as ctx:
+                asyncio.run(dashboard.create_dashboard_goal(payload, self._req()))
+
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
+        mock_save.assert_not_called()
+
+    def test_update_goal_empty_project_unlinks(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "update_goal", return_value=True) as mock_update,
+        ):
+            payload = dashboard.GoalUpdateRequest(project_id="")
+            asyncio.run(dashboard.update_dashboard_goal("g1", payload, self._req()))
+
+        mock_update.assert_called_once_with(123, "g1", project_id=None)
+
+    def test_update_goal_links_project(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_project_by_id", return_value={"id": "p1"}),
+            patch.object(dashboard, "update_goal", return_value=True) as mock_update,
+        ):
+            payload = dashboard.GoalUpdateRequest(project_id="p1")
+            asyncio.run(dashboard.update_dashboard_goal("g1", payload, self._req()))
+
+        mock_update.assert_called_once_with(123, "g1", project_id="p1")
 
 
 if __name__ == "__main__":

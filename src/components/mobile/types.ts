@@ -72,10 +72,10 @@ export type DashboardViewProps = {
   ) => Promise<void>;
   onDeletePlan: (planId: string, mode: "future" | "all") => Promise<void>;
   onUpdatePreferences: (next: DashboardPreferences) => Promise<void>;
-  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string }) => Promise<void>;
+  onCreateGoal: (payload: { name: string; targetAmount: number; emoji: string; projectId?: string | null }) => Promise<void>;
   onUpdateGoal: (
     goalId: string,
-    payload: { name?: string; targetAmount?: number; emoji?: string },
+    payload: { name?: string; targetAmount?: number; emoji?: string; projectId?: string | null },
   ) => Promise<void>;
   onDeleteGoal: (goalId: string) => Promise<void>;
   onMoveGoal: (goalId: string, direction: -1 | 1) => Promise<void>;
@@ -91,7 +91,7 @@ export type DashboardViewProps = {
     payload: {
       name?: string;
       targetAmount?: number;
-      initialAmount?: number;
+      currentAmount?: number;
       deadline?: string;
       emoji?: string;
     },

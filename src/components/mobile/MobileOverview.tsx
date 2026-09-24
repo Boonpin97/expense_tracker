@@ -65,7 +65,9 @@ export function MobileOverview({
             </div>
             <div className="rounded-lg bg-secondary/60 p-3">
               <p className="text-xs text-muted-foreground">Income</p>
-              <p className="mt-0.5 truncate text-base font-semibold tabular-nums text-emerald-500">
+              <p
+                className={`mt-0.5 truncate text-base font-semibold tabular-nums ${earned < 0 ? "text-destructive" : "text-emerald-500"}`}
+              >
                 {currency.format(earned)}
               </p>
             </div>

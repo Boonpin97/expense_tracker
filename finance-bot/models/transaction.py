@@ -34,6 +34,8 @@ class Goal(BaseModel):
     created_at: str
     emoji: str = "🎯"
     order: int = 0
+    # Optional long-term project; income tagged to this goal is auto-tagged to it.
+    project_id: Optional[str] = None
 
 
 class Project(BaseModel):

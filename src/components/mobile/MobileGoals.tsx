@@ -1,7 +1,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { currency } from "@/lib/dashboard-format";
-import type { DashboardGoal } from "@/lib/dashboard-api";
+import type { DashboardGoal, DashboardProject } from "@/lib/dashboard-api";
 import { MobileEmpty } from "./MobileList";
 
 /**
@@ -14,11 +14,15 @@ import { MobileEmpty } from "./MobileList";
  */
 export function MobileGoals({
   goals,
+  projects,
   loading,
 }: {
   goals: DashboardGoal[];
+  projects: DashboardProject[];
   loading: boolean;
 }) {
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+
   if (loading) {
     return (
       <Card>
@@ -47,6 +51,7 @@ export function MobileGoals({
       {goals.map((goal) => {
         const pct = goal.targetAmount > 0 ? (goal.accumulated / goal.targetAmount) * 100 : 0;
         const reached = goal.targetAmount > 0 && goal.accumulated >= goal.targetAmount;
+        const linkedProject = goal.projectId ? projectsById.get(goal.projectId) : undefined;
         return (
           <Card key={goal.id}>
             <CardContent className="space-y-2 p-4">
@@ -54,7 +59,14 @@ export function MobileGoals({
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-secondary text-base leading-none">
                   {goal.emoji}
                 </span>
-                <p className="min-w-0 flex-1 truncate text-sm font-medium">{goal.name}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{goal.name}</p>
+                  {linkedProject ? (
+                    <p className="truncate text-xs text-muted-foreground">
+                      → {linkedProject.emoji} {linkedProject.name}
+                    </p>
+                  ) : null}
+                </div>
                 <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                   {Math.round(pct)}%
                 </span>

@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatDateTimeInputValue } from "@/lib/dashboard-format";
+import { formatDateTimeInputValue, linkedProjectAfterGoalChange } from "@/lib/dashboard-format";
 import type { DashboardViewProps } from "./types";
 import { MOBILE_TABS, MobileTabStrip, type MobileTabKey } from "./MobileTabStrip";
 import { MobileOverview } from "./MobileOverview";
@@ -123,7 +123,7 @@ export function MobileLayout(props: DashboardViewProps) {
           />
         ) : null}
 
-        {tab === "goals" ? <MobileGoals goals={goals} loading={loading} /> : null}
+        {tab === "goals" ? <MobileGoals goals={goals} projects={projects} loading={loading} /> : null}
 
         {tab === "projects" ? (
           <MobileProjects projects={projects} inflows={inflows} loading={loading} />
@@ -361,7 +361,10 @@ function MobileAddDialog({
                 <Label htmlFor="m-goal">Assign to goal</Label>
                 <Select
                   value={goalId}
-                  onValueChange={setGoalId}
+                  onValueChange={(value) => {
+                    setProjectId(linkedProjectAfterGoalChange(goals, projects, goalId, value, projectId));
+                    setGoalId(value);
+                  }}
                   disabled={saving || goals.length === 0}
                 >
                   <SelectTrigger id="m-goal" className="h-11">
