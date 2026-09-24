@@ -3943,7 +3943,8 @@ function ProjectsTab({
     setFormEmoji(project.emoji);
     setFormTarget(String(project.targetAmount));
     // Edit shows the live balance; saving a different value records the gap as income.
-    setFormInitialAmount(project.accumulated > 0 ? String(Math.round(project.accumulated * 100) / 100) : "");
+    // Always filled (even "0") so an untouched field never reads as blank.
+    setFormInitialAmount(String(Math.round(project.accumulated * 100) / 100));
     setFormDeadline(project.deadline ? project.deadline.slice(0, 10) : "");
     setFormError(null);
     setDialogOpen(true);
@@ -3958,6 +3959,9 @@ function ProjectsTab({
       setFormError("Enter the current amount (use 0 to empty the project).");
       return;
     }
+    const previous = editingId ? projects.find((project) => project.id === editingId) : undefined;
+    const balanceChanged =
+      !previous || Math.abs(initialAmount - Math.round(previous.accumulated * 100) / 100) >= 0.005;
     if (!name) {
       setFormError("Name is required.");
       return;
@@ -3966,7 +3970,9 @@ function ProjectsTab({
       setFormError("Target must be a positive number.");
       return;
     }
-    if (!Number.isFinite(initialAmount) || initialAmount < 0) {
+    // An untouched balance is never re-sent, so only validate a changed one
+    // (a project can dip below zero if a withdrawal entry is edited).
+    if (balanceChanged && (!Number.isFinite(initialAmount) || initialAmount < 0)) {
       setFormError("Current amount must be zero or more.");
       return;
     }
@@ -3978,9 +3984,6 @@ function ProjectsTab({
     setFormError(null);
     try {
       if (editingId) {
-        const previous = projects.find((project) => project.id === editingId);
-        const balanceChanged =
-          !previous || Math.abs(initialAmount - Math.round(previous.accumulated * 100) / 100) >= 0.005;
         await onUpdateProject(editingId, {
           name,
           targetAmount: target,
