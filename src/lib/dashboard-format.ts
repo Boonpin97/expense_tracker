@@ -10,6 +10,11 @@ export const currency = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+/** "+$500.00" / "−$500.00"; negatives are project withdrawals. */
+export function formatSignedAmount(amount: number) {
+  return `${amount < 0 ? "−" : "+"}${currency.format(Math.abs(amount))}`;
+}
+
 /** Golden-angle hue walk so adjacent categories stay visually distinct. */
 export function colorForCategory(index: number) {
   const hue = (index * 137.508) % 360;

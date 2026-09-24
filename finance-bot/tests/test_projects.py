@@ -209,6 +209,71 @@ class ProjectFirestoreTests(unittest.TestCase):
         # All-time across months; other users and goal-tagged inflows excluded.
         self.assertEqual(sums, {"p1": 150.0})
 
+    def _adjust(self, new_balance, project=None, sums=None):
+        from services import firestore
+
+        project = project if project is not None else {
+            "id": "p1", "name": "House", "emoji": "🏠", "initial_amount": 8000.0,
+        }
+        with (
+            patch.object(firestore, "get_project_by_id", return_value=project or None),
+            patch.object(firestore, "sum_inflows_by_project", return_value=sums if sums is not None else {"p1": 1000.0}),
+            patch.object(firestore, "save_inflow") as mock_save,
+        ):
+            diff = firestore.adjust_project_balance(123, "p1", new_balance)
+        return diff, mock_save
+
+    def test_adjust_project_balance_increase_records_top_up(self):
+        # Balance shown = 8000 initial + 1000 contributions = 9000.
+        diff, mock_save = self._adjust(9500.0)
+        self.assertEqual(diff, 500.0)
+        inflow = mock_save.call_args.args[0]
+        self.assertEqual(inflow.amount, 500.0)
+        self.assertEqual(inflow.project_id, "p1")
+        self.assertIsNone(inflow.goal_id)
+        self.assertEqual(inflow.chat_id, 123)
+        self.assertEqual(inflow.item, "🏠 House top-up")
+
+    def test_adjust_project_balance_decrease_records_withdrawal(self):
+        diff, mock_save = self._adjust(8500.0)
+        self.assertEqual(diff, -500.0)
+        inflow = mock_save.call_args.args[0]
+        self.assertEqual(inflow.amount, -500.0)
+        self.assertEqual(inflow.item, "🏠 House withdrawal")
+
+    def test_adjust_project_balance_unchanged_records_nothing(self):
+        diff, mock_save = self._adjust(9000.0)
+        self.assertEqual(diff, 0.0)
+        mock_save.assert_not_called()
+
+    def test_adjust_project_balance_missing_project(self):
+        diff, mock_save = self._adjust(9000.0, project={})
+        self.assertIsNone(diff)
+        mock_save.assert_not_called()
+
+    def test_delete_project_unlinks_goals(self):
+        from unittest.mock import MagicMock
+
+        from services import firestore
+
+        db = MagicMock()
+        db.collection.return_value.document.return_value.get.return_value.exists = True
+        goals = [
+            {"id": "g1", "project_id": "p1"},
+            {"id": "g2", "project_id": "other"},
+            {"id": "g3"},
+        ]
+        with (
+            patch.object(firestore, "get_db", return_value=db),
+            patch.object(firestore, "get_goals", return_value=goals),
+        ):
+            self.assertTrue(firestore.delete_project(123, "p1"))
+
+        batch = db.batch.return_value
+        self.assertEqual(batch.update.call_count, 1)
+        self.assertEqual(batch.update.call_args.args[1], {"project_id": None})
+        batch.commit.assert_called_once()
+
 
 class ProjectCommandTests(unittest.TestCase):
     def test_projects_lists_initial_plus_inflows(self):
@@ -379,14 +444,55 @@ class EditProjectFlowTests(unittest.TestCase):
             patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
             patch("routers.webhook.get_session", return_value=session),
             patch("routers.webhook.session_expired", return_value=False),
-            patch("routers.webhook.update_project", return_value=True) as mock_update,
+            patch("routers.webhook.adjust_project_balance", return_value=500.0) as mock_adjust,
+            patch("routers.webhook.update_project") as mock_update,
             patch("routers.webhook.clear_session") as mock_clear,
-            patch("routers.webhook.telegram.send_message", new=AsyncMock()),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
         ):
             asyncio.run(webhook(_request_for_text("1500")))
 
-        mock_update.assert_called_once_with(123, "p1", initial_amount=1500.0)
+        mock_adjust.assert_called_once_with(123, "p1", 1500.0)
+        mock_update.assert_not_called()
         mock_clear.assert_called_once_with(123)
+        self.assertIn("+$500.00 recorded as income", mock_send.call_args.args[1])
+
+    def test_new_initial_lower_reports_withdrawal(self):
+        session = {
+            "flow_type": "edit_project",
+            "step": "awaiting_new_initial",
+            "payload": {"project_id": "p1", "project_name": "House"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.adjust_project_balance", return_value=-250.0),
+            patch("routers.webhook.clear_session"),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_text("1500")))
+
+        self.assertIn("−$250.00 recorded as a withdrawal", mock_send.call_args.args[1])
+
+    def test_new_initial_missing_project(self):
+        session = {
+            "flow_type": "edit_project",
+            "step": "awaiting_new_initial",
+            "payload": {"project_id": "p1", "project_name": "House"},
+            "expires_at": _future_iso(),
+        }
+        with (
+            patch("routers.webhook._get_allowed_chat_ids", return_value={123}),
+            patch("routers.webhook.get_session", return_value=session),
+            patch("routers.webhook.session_expired", return_value=False),
+            patch("routers.webhook.adjust_project_balance", return_value=None),
+            patch("routers.webhook.clear_session"),
+            patch("routers.webhook.telegram.send_message", new=AsyncMock()) as mock_send,
+        ):
+            asyncio.run(webhook(_request_for_text("1500")))
+
+        self.assertIn("no longer exists", mock_send.call_args.args[1])
 
     def test_new_deadline_updates_project(self):
         session = {
@@ -523,18 +629,49 @@ class DashboardProjectCrudTests(unittest.TestCase):
         with (
             patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
             patch.object(dashboard, "update_project", return_value=True) as mock_update,
+            patch.object(dashboard, "adjust_project_balance") as mock_adjust,
         ):
-            payload = dashboard.ProjectUpdateRequest(target_amount=60000.0, initial_amount=500.0)
+            payload = dashboard.ProjectUpdateRequest(target_amount=60000.0)
             result = asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
 
-        self.assertEqual(result, {"ok": True})
-        mock_update.assert_called_once_with(123, "p1", target_amount=60000.0, initial_amount=500.0)
+        self.assertEqual(result, {"ok": True, "adjustment": 0.0})
+        mock_update.assert_called_once_with(123, "p1", target_amount=60000.0)
+        mock_adjust.assert_not_called()
 
-    def test_update_project_rejects_negative_initial_amount(self):
-        with patch.object(dashboard, "_require_session", return_value={"chat_id": 123}):
-            payload = dashboard.ProjectUpdateRequest(initial_amount=-1.0)
-            with self.assertRaises(Exception):
+    def test_update_project_current_amount_records_adjustment(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "update_project", return_value=True) as mock_update,
+            patch.object(dashboard, "adjust_project_balance", return_value=1000.0) as mock_adjust,
+        ):
+            payload = dashboard.ProjectUpdateRequest(current_amount=9000.0)
+            result = asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
+
+        self.assertEqual(result, {"ok": True, "adjustment": 1000.0})
+        # initial_amount is never rewritten; only the adjustment inflow is recorded.
+        mock_update.assert_not_called()
+        mock_adjust.assert_called_once_with(123, "p1", 9000.0)
+
+    def test_update_project_current_amount_missing_project(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "adjust_project_balance", return_value=None),
+        ):
+            payload = dashboard.ProjectUpdateRequest(current_amount=9000.0)
+            with self.assertRaises(Exception) as ctx:
                 asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
+
+    def test_update_project_rejects_negative_current_amount(self):
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "adjust_project_balance") as mock_adjust,
+        ):
+            payload = dashboard.ProjectUpdateRequest(current_amount=-1.0)
+            with self.assertRaises(Exception) as ctx:
+                asyncio.run(dashboard.update_dashboard_project("p1", payload, self._req()))
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 400)
+        mock_adjust.assert_not_called()
 
     def test_delete_project(self):
         with (
@@ -619,6 +756,38 @@ class DashboardInflowTargetTests(unittest.TestCase):
             )
             with self.assertRaises(Exception):
                 asyncio.run(dashboard.create_dashboard_inflow(payload, self._req()))
+
+
+    def _update_inflow(self, amount, project_id):
+        from unittest.mock import MagicMock
+
+        db = MagicMock()
+        with (
+            patch.object(dashboard, "_require_session", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_inflow_by_id", return_value={"chat_id": 123}),
+            patch.object(dashboard, "get_project_by_id", return_value={"id": "p1"}),
+            patch("services.firestore.get_db", return_value=db),
+        ):
+            payload = dashboard.InflowUpdateRequest(
+                item="🏠 House withdrawal", amount=amount, timestamp="2026-06-01T00:00:00+08:00", project_id=project_id
+            )
+            asyncio.run(dashboard.update_dashboard_inflow("i1", payload, self._req()))
+        return db
+
+    def test_update_inflow_allows_negative_project_withdrawal(self):
+        db = self._update_inflow(-500.0, "p1")
+        update = db.collection.return_value.document.return_value.update
+        self.assertEqual(update.call_args.args[0]["amount"], -500.0)
+
+    def test_update_inflow_rejects_negative_without_project(self):
+        with self.assertRaises(Exception) as ctx:
+            self._update_inflow(-500.0, None)
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 400)
+
+    def test_update_inflow_rejects_zero(self):
+        with self.assertRaises(Exception) as ctx:
+            self._update_inflow(0.0, "p1")
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 400)
 
 
 if __name__ == "__main__":

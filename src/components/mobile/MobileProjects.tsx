@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { currency } from "@/lib/dashboard-format";
+import { currency, formatSignedAmount } from "@/lib/dashboard-format";
 import type { DashboardInflow, DashboardProject } from "@/lib/dashboard-api";
 import { MobileEmpty, MobileListCard, MobileRow } from "./MobileList";
 import { MobilePagination } from "./MobilePagination";
@@ -134,9 +134,11 @@ export function MobileProjects({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Income assigned</span>
-                  <span className="font-semibold tabular-nums text-emerald-500">
-                    +{currency.format(detailContributed)}
+                  <span className="text-muted-foreground">Contributions</span>
+                  <span
+                    className={`font-semibold tabular-nums ${detailContributed < 0 ? "text-destructive" : "text-emerald-500"}`}
+                  >
+                    {formatSignedAmount(detailContributed)}
                   </span>
                 </div>
                 <div className="flex justify-between border-t pt-2 text-sm">
@@ -164,8 +166,8 @@ export function MobileProjects({
                           day: "numeric",
                           year: "numeric",
                         })}
-                        amount={`+${currency.format(inflow.amount)}`}
-                        amountTone="positive"
+                        amount={formatSignedAmount(inflow.amount)}
+                        amountTone={inflow.amount < 0 ? "negative" : "positive"}
                       />
                     ))}
                   </MobileListCard>

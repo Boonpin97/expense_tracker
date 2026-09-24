@@ -23,6 +23,7 @@ from services.categoriser import (
 from services.dashboard_auth import hash_password, is_valid_username, validate_password
 from services.firestore import (
     add_category_to_list,
+    adjust_project_balance,
     clear_user_state,
     current_month_window,
     delete_category,
@@ -931,6 +932,48 @@ async def _prompt_income_project(
     await telegram.send_income_project_keyboard(chat_id, projects, item, amount)
 
 
+def _linked_project(chat_id: int, goal: dict) -> dict | None:
+    """The goal's linked long-term project, or None if unlinked or deleted."""
+    project_id = goal.get("project_id")
+    return get_project_by_id(chat_id, project_id) if project_id else None
+
+
+async def _continue_income_after_goal(
+    chat_id: int,
+    payload: dict,
+    goal: dict,
+    goal_created: bool = False,
+) -> None:
+    """After an income is tagged to ``goal``: auto-tag the goal's linked project
+    and finish, or fall back to asking which project."""
+    inflow_id = payload.get("inflow_id")
+    project = _linked_project(chat_id, goal)
+    if not project:
+        await _prompt_income_project(
+            chat_id,
+            inflow_id,
+            payload.get("item", ""),
+            payload.get("amount", 0.0),
+            payload.get("transaction_date"),
+            goal_label=_goal_label(goal),
+            goal_created=goal_created,
+        )
+        return
+    update_inflow_project(inflow_id, project["id"])
+    clear_session(chat_id)
+    await telegram.send_message(
+        chat_id,
+        _income_summary(
+            payload.get("item", ""),
+            payload.get("amount", 0.0),
+            payload.get("transaction_date"),
+            goal_label=_goal_label(goal),
+            goal_created=goal_created,
+            project_label=_project_label(project),
+        ),
+    )
+
+
 async def _handle_inflow_command(chat_id: int, text: str) -> None:
     remainder = text[len("/income"):].strip()
     if not remainder:
@@ -982,13 +1025,16 @@ def _format_goals_overview(chat_id: int) -> str:
     # Goals are monthly savings targets — progress resets each calendar month.
     start, end = current_month_window()
     sums = sum_inflows_by_goal(chat_id, start, end)
+    projects = {project["id"]: project for project in get_projects(chat_id)}
     lines = ["🎯 <b>Goals this month</b>"]
     for goal in goals:
         target = goal.get("target_amount", 0.0)
         current = sums.get(goal["id"], 0.0)
         pct = round(current / target * 100) if target > 0 else 0
         emoji = goal.get("emoji", "🎯")
-        lines.append(f"{emoji} {goal['name']}: ${current:,.2f} / ${target:,.2f} ({pct}%)")
+        project = projects.get(goal.get("project_id") or "")
+        link = f" → {project.get('emoji', '🚀')} {project['name']}" if project else ""
+        lines.append(f"{emoji} {goal['name']}: ${current:,.2f} / ${target:,.2f} ({pct}%){link}")
     return "\n".join(lines)
 
 
@@ -1077,35 +1123,45 @@ async def _handle_new_goal_session(chat_id: int, text: str) -> bool:
             # Keep the session active so the user can retry within the expiry window.
             await telegram.send_message(chat_id, "⚠️ Send a positive number, for example <code>3000</code>.")
             return True
-        name = payload.get("name", "")
-        emoji = payload.get("emoji", "🎯")
-        goal_id = save_goal(
-            Goal(
-                chat_id=chat_id,
-                name=name,
-                target_amount=amount,
-                created_at=datetime.now(SGT).isoformat(),
-                emoji=emoji,
-            )
+        projects = get_projects(chat_id)
+        if not projects:
+            await _finish_new_goal(chat_id, {**payload, "target_amount": amount}, None)
+            return True
+        update_session(chat_id, step="choosing_project", payload_updates={"target_amount": amount})
+        await telegram.send_goal_project_keyboard(
+            chat_id, projects, f"{payload.get('emoji', '🎯')} {payload.get('name', '')}"
         )
-        clear_session(chat_id)
-        inflow_id = payload.get("inflow_id")
-        if inflow_id:
-            update_inflow_goal(inflow_id, goal_id)
-            await _prompt_income_project(
-                chat_id,
-                inflow_id,
-                payload.get("item", ""),
-                payload.get("amount", 0.0),
-                payload.get("transaction_date"),
-                goal_label=f"{emoji} <b>{name}</b>",
-                goal_created=True,
-            )
-        else:
-            await telegram.send_message(chat_id, f"✅ Goal {emoji} <b>{name}</b> created (${amount:,.2f}).")
         return True
 
+    await telegram.send_message(chat_id, "Use the buttons above to pick a project.")
     return True
+
+
+async def _finish_new_goal(chat_id: int, payload: dict, project: dict | None) -> None:
+    """Save the goal from a completed /new_goal session, then either confirm or,
+    when started from an income prompt, continue tagging that income."""
+    name = payload.get("name", "")
+    emoji = payload.get("emoji", "🎯")
+    amount = float(payload.get("target_amount", 0.0))
+    goal = Goal(
+        chat_id=chat_id,
+        name=name,
+        target_amount=amount,
+        created_at=datetime.now(SGT).isoformat(),
+        emoji=emoji,
+        project_id=project["id"] if project else None,
+    )
+    goal_id = save_goal(goal)
+    clear_session(chat_id)
+    inflow_id = payload.get("inflow_id")
+    if inflow_id:
+        update_inflow_goal(inflow_id, goal_id)
+        await _continue_income_after_goal(
+            chat_id, payload, {**goal.model_dump(), "id": goal_id}, goal_created=True
+        )
+        return
+    link = f"\n🔗 Linked to {_project_label(project)}" if project else ""
+    await telegram.send_message(chat_id, f"✅ Goal {emoji} <b>{name}</b> created (${amount:,.2f}).{link}")
 
 
 async def _handle_edit_goal_session(chat_id: int, text: str) -> bool:
@@ -1313,10 +1369,19 @@ async def _handle_edit_project_session(chat_id: int, text: str) -> bool:
             await telegram.send_message(chat_id, "⚠️ Current amount must be zero or more.")
             return True
         clear_session(chat_id)
-        if update_project(chat_id, project_id, initial_amount=amount):
-            await telegram.send_message(chat_id, f"✅ Current amount for <b>{project_name}</b> set to <b>${amount:,.2f}</b>.")
-        else:
+        diff = adjust_project_balance(chat_id, project_id, amount)
+        if diff is None:
             await telegram.send_message(chat_id, f"⚠️ Project <b>{project_name}</b> no longer exists.")
+            return True
+        if diff > 0:
+            note = f"+${diff:,.2f} recorded as income"
+        elif diff < 0:
+            note = f"−${-diff:,.2f} recorded as a withdrawal"
+        else:
+            note = "unchanged"
+        await telegram.send_message(
+            chat_id, f"✅ Current amount for <b>{project_name}</b> set to <b>${amount:,.2f}</b> ({note})."
+        )
         return True
 
     if step == "awaiting_new_deadline":
@@ -1449,14 +1514,7 @@ async def webhook(request: Request):
 
             update_inflow_goal(payload.get("inflow_id"), choice)
             await telegram.answer_callback_query(callback_query_id, "")
-            await _prompt_income_project(
-                chat_id,
-                payload.get("inflow_id"),
-                payload.get("item", ""),
-                payload.get("amount", 0.0),
-                payload.get("transaction_date"),
-                goal_label=_goal_label(goal),
-            )
+            await _continue_income_after_goal(chat_id, payload, goal)
             return {"ok": True}
 
         if callback_data.startswith("inflowproject:"):
@@ -1579,11 +1637,46 @@ async def webhook(request: Request):
                 await telegram.answer_callback_query(callback_query_id, "")
                 await telegram.send_goal_reorder_keyboard(chat_id, get_goals(chat_id), payload.get("goal_id", ""))
                 return {"ok": True}
+            elif field == "project":
+                update_session(chat_id, step="choosing_project")
+                await telegram.answer_callback_query(callback_query_id, "")
+                await telegram.send_goal_project_keyboard(chat_id, get_projects(chat_id), goal_name)
+                return {"ok": True}
             else:
                 await telegram.answer_callback_query(callback_query_id, "Invalid")
                 return {"ok": True}
             await telegram.answer_callback_query(callback_query_id, "")
             await telegram.send_message(chat_id, prompt)
+            return {"ok": True}
+
+        if callback_data.startswith("goalproject:"):
+            active = get_session(chat_id) or {}
+            flow_type = active.get("flow_type")
+            if flow_type not in {"new_goal", "edit_goal"}:
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+            session = await _get_active_session_or_expire(chat_id, flow_type)
+            if not session or session.get("step") != "choosing_project":
+                await telegram.answer_callback_query(callback_query_id, "⏰ Expired.")
+                return {"ok": True}
+
+            payload = session.get("payload", {})
+            choice = callback_data.split(":", 1)[1]
+            project = None if choice == "__none__" else get_project_by_id(chat_id, choice)
+            await telegram.answer_callback_query(callback_query_id, "")
+
+            if flow_type == "new_goal":
+                await _finish_new_goal(chat_id, payload, project)
+                return {"ok": True}
+
+            goal_name = payload.get("goal_name", "")
+            clear_session(chat_id)
+            if not update_goal(chat_id, payload.get("goal_id", ""), project_id=project["id"] if project else None):
+                await telegram.send_message(chat_id, f"⚠️ Goal <b>{goal_name}</b> no longer exists.")
+            elif project:
+                await telegram.send_message(chat_id, f"🔗 Linked <b>{goal_name}</b> to {_project_label(project)}.")
+            else:
+                await telegram.send_message(chat_id, f"✅ <b>{goal_name}</b> is no longer linked to a project.")
             return {"ok": True}
 
         if callback_data.startswith("goalmove:"):
@@ -1697,7 +1790,10 @@ async def webhook(request: Request):
                 prompt = f"Send the new target amount for <b>{project_name}</b>, for example <code>50000</code>."
             elif field == "initial":
                 update_session(chat_id, step="awaiting_new_initial")
-                prompt = f"Send the current amount for <b>{project_name}</b>. Use <code>0</code> if none."
+                prompt = (
+                    f"Send the current balance for <b>{project_name}</b>. "
+                    "The difference from the balance shown will be recorded as income today."
+                )
             elif field == "deadline":
                 update_session(chat_id, step="awaiting_new_deadline")
                 prompt = f"Send the new deadline for <b>{project_name}</b> as <code>DDMMYY</code>, for example <code>311226</code>."

@@ -221,7 +221,10 @@ async def send_goal_field_keyboard(chat_id: int, goal_name: str) -> dict:
             {"text": "😀 Emoji", "callback_data": "goalfield:emoji"},
             {"text": "🎯 Target", "callback_data": "goalfield:target"},
         ],
-        [{"text": "🔄 Reorder", "callback_data": "goalfield:reorder"}],
+        [
+            {"text": "🚀 Project", "callback_data": "goalfield:project"},
+            {"text": "🔄 Reorder", "callback_data": "goalfield:reorder"},
+        ],
     ]
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -230,6 +233,28 @@ async def send_goal_field_keyboard(chat_id: int, goal_name: str) -> dict:
             json={
                 "chat_id": chat_id,
                 "text": f"What do you want to change on <b>{goal_name}</b>?",
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        )
+        return resp.json()
+
+
+async def send_goal_project_keyboard(chat_id: int, projects: list[dict], goal_name: str) -> dict:
+    """Ask which long-term project a goal links to. Income tagged to the goal is
+    then auto-tagged to that project."""
+    keyboard = [
+        [{"text": f"{project.get('emoji', '🚀')} {project['name']}", "callback_data": f"goalproject:{project['id']}"}]
+        for project in projects
+    ]
+    keyboard.append([{"text": "🚫 No project", "callback_data": "goalproject:__none__"}])
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _api_url("sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": f"Link <b>{goal_name}</b> to a long-term project? Income tagged to this goal will also count toward it.",
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
             },

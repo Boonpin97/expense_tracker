@@ -31,6 +31,7 @@ export type DashboardGoal = {
   targetAmount: number;
   accumulated: number;
   order: number;
+  projectId: string | null;
 };
 
 export type DashboardProject = {
@@ -224,6 +225,7 @@ function parseGoal(data: Record<string, unknown>): DashboardGoal {
     targetAmount: typeof data.target_amount === "number" ? data.target_amount : 0,
     accumulated: typeof data.accumulated === "number" ? data.accumulated : 0,
     order: typeof data.order === "number" ? data.order : 0,
+    projectId: data.project_id ? String(data.project_id) : null,
   };
 }
 
@@ -421,21 +423,29 @@ export async function createDashboardGoal(payload: {
   name: string;
   targetAmount: number;
   emoji: string;
+  projectId?: string | null;
 }) {
   await requestJson("POST", "/dashboard/goals", {
-    body: { name: payload.name, target_amount: payload.targetAmount, emoji: payload.emoji },
+    body: {
+      name: payload.name,
+      target_amount: payload.targetAmount,
+      emoji: payload.emoji,
+      ...(payload.projectId ? { project_id: payload.projectId } : {}),
+    },
   });
 }
 
 export async function updateDashboardGoal(
   goalId: string,
-  payload: { name?: string; targetAmount?: number; emoji?: string },
+  payload: { name?: string; targetAmount?: number; emoji?: string; projectId?: string | null },
 ) {
   await requestJson("PATCH", `/dashboard/goals/${goalId}`, {
     body: {
       ...(payload.name !== undefined ? { name: payload.name } : {}),
       ...(payload.targetAmount !== undefined ? { target_amount: payload.targetAmount } : {}),
       ...(payload.emoji !== undefined ? { emoji: payload.emoji } : {}),
+      // "" tells the API to unlink; omitting the field leaves the link unchanged.
+      ...(payload.projectId !== undefined ? { project_id: payload.projectId ?? "" } : {}),
     },
   });
 }
@@ -482,7 +492,8 @@ export async function updateDashboardProject(
   payload: {
     name?: string;
     targetAmount?: number;
-    initialAmount?: number;
+    // The balance to show; the API records the difference as income today.
+    currentAmount?: number;
     deadline?: string;
     emoji?: string;
   },
@@ -491,7 +502,7 @@ export async function updateDashboardProject(
     body: {
       ...(payload.name !== undefined ? { name: payload.name } : {}),
       ...(payload.targetAmount !== undefined ? { target_amount: payload.targetAmount } : {}),
-      ...(payload.initialAmount !== undefined ? { initial_amount: payload.initialAmount } : {}),
+      ...(payload.currentAmount !== undefined ? { current_amount: payload.currentAmount } : {}),
       ...(payload.deadline !== undefined ? { deadline: payload.deadline } : {}),
       ...(payload.emoji !== undefined ? { emoji: payload.emoji } : {}),
     },

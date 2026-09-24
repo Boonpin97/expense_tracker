@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { currency } from "@/lib/dashboard-format";
+import { currency, formatSignedAmount } from "@/lib/dashboard-format";
 import type { DashboardGoal, DashboardInflow, DashboardProject } from "@/lib/dashboard-api";
 import { MobileBadge, MobileEmpty, MobileListCard, MobileRow } from "./MobileList";
 
@@ -92,8 +92,8 @@ export function MobileIncome({
               badges={labelsFor(inflow).map((label) => (
                 <MobileBadge key={label}>{label}</MobileBadge>
               ))}
-              amount={`+${currency.format(inflow.amount)}`}
-              amountTone="positive"
+              amount={formatSignedAmount(inflow.amount)}
+              amountTone={inflow.amount < 0 ? "negative" : "positive"}
               actions={
                 <Button
                   size="icon"

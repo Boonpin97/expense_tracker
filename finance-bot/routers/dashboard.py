@@ -26,6 +26,7 @@ from services.firestore import (
     delete_payment_plan,
     delete_web_session,
     delete_transaction,
+    adjust_project_balance,
     get_account_by_username,
     get_budgets,
     get_category_list,
@@ -142,12 +143,15 @@ class GoalCreateRequest(BaseModel):
     name: str
     target_amount: float
     emoji: str = "🎯"
+    project_id: Optional[str] = None
 
 
 class GoalUpdateRequest(BaseModel):
     name: Optional[str] = None
     target_amount: Optional[float] = None
     emoji: Optional[str] = None
+    # "" unlinks; None (omitted) leaves the link unchanged.
+    project_id: Optional[str] = None
 
 
 class MoveRequest(BaseModel):
@@ -165,7 +169,8 @@ class ProjectCreateRequest(BaseModel):
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
     target_amount: Optional[float] = None
-    initial_amount: Optional[float] = None
+    # The balance to show on the card; the difference is recorded as income.
+    current_amount: Optional[float] = None
     deadline: Optional[str] = None
     emoji: Optional[str] = None
 
@@ -252,7 +257,14 @@ def _resolve_inflow_target(
     return goal_id, project_id
 
 
-def _goal_update_fields(payload: "GoalUpdateRequest") -> dict:
+def _resolve_goal_project(chat_id: int, project_id: Optional[str]) -> Optional[str]:
+    project_id = (project_id or "").strip() or None
+    if project_id and not get_project_by_id(chat_id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return project_id
+
+
+def _goal_update_fields(payload: "GoalUpdateRequest", chat_id: int) -> dict:
     fields: dict = {}
     if payload.name is not None:
         name = payload.name.strip()
@@ -265,6 +277,8 @@ def _goal_update_fields(payload: "GoalUpdateRequest") -> dict:
         fields["target_amount"] = payload.target_amount
     if payload.emoji is not None and payload.emoji.strip():
         fields["emoji"] = payload.emoji.strip()
+    if payload.project_id is not None:
+        fields["project_id"] = _resolve_goal_project(chat_id, payload.project_id)
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update.")
     return fields
@@ -281,10 +295,8 @@ def _project_update_fields(payload: "ProjectUpdateRequest") -> dict:
         if payload.target_amount <= 0:
             raise HTTPException(status_code=400, detail="Target amount must be positive.")
         fields["target_amount"] = payload.target_amount
-    if payload.initial_amount is not None:
-        if payload.initial_amount < 0:
-            raise HTTPException(status_code=400, detail="Current amount cannot be negative.")
-        fields["initial_amount"] = payload.initial_amount
+    if payload.current_amount is not None and payload.current_amount < 0:
+        raise HTTPException(status_code=400, detail="Current amount cannot be negative.")
     if payload.deadline is not None:
         deadline = payload.deadline.strip()
         if not deadline:
@@ -293,7 +305,7 @@ def _project_update_fields(payload: "ProjectUpdateRequest") -> dict:
         fields["deadline"] = deadline
     if payload.emoji is not None and payload.emoji.strip():
         fields["emoji"] = payload.emoji.strip()
-    if not fields:
+    if not fields and payload.current_amount is None:
         raise HTTPException(status_code=400, detail="No fields to update.")
     return fields
 
@@ -607,9 +619,11 @@ async def update_dashboard_inflow(
     item = payload.item.strip()
     if not item:
         raise HTTPException(status_code=400, detail="Item cannot be empty.")
-    if payload.amount <= 0:
-        raise HTTPException(status_code=400, detail="Amount must be positive.")
     goal_id, project_id = _resolve_inflow_target(session["chat_id"], payload.goal_id, payload.project_id)
+    # Negative amounts are project withdrawals (from a lowered current amount),
+    # so they're only valid while the entry stays tagged to a project.
+    if payload.amount == 0 or (payload.amount < 0 and not project_id):
+        raise HTTPException(status_code=400, detail="Amount must be positive.")
 
     from services.firestore import get_db
 
@@ -771,6 +785,7 @@ async def create_dashboard_goal(payload: GoalCreateRequest, request: Request):
             target_amount=payload.target_amount,
             created_at=datetime.now(SGT).isoformat(),
             emoji=payload.emoji.strip() or "🎯",
+            project_id=_resolve_goal_project(session["chat_id"], payload.project_id),
         )
     )
     return {"ok": True, "id": goal_id}
@@ -779,7 +794,7 @@ async def create_dashboard_goal(payload: GoalCreateRequest, request: Request):
 @router.patch("/goals/{goal_id}")
 async def update_dashboard_goal(goal_id: str, payload: GoalUpdateRequest, request: Request):
     session = _require_session(request)
-    fields = _goal_update_fields(payload)
+    fields = _goal_update_fields(payload, session["chat_id"])
     if not update_goal(session["chat_id"], goal_id, **fields):
         raise HTTPException(status_code=404, detail="Goal not found.")
     return {"ok": True}
@@ -856,9 +871,15 @@ async def create_dashboard_project(payload: ProjectCreateRequest, request: Reque
 async def update_dashboard_project(project_id: str, payload: ProjectUpdateRequest, request: Request):
     session = _require_session(request)
     fields = _project_update_fields(payload)
-    if not update_project(session["chat_id"], project_id, **fields):
-        raise HTTPException(status_code=404, detail="Project not found.")
-    return {"ok": True}
+    if fields:
+        if not update_project(session["chat_id"], project_id, **fields):
+            raise HTTPException(status_code=404, detail="Project not found.")
+    adjustment = 0.0
+    if payload.current_amount is not None:
+        adjustment = adjust_project_balance(session["chat_id"], project_id, payload.current_amount)
+        if adjustment is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+    return {"ok": True, "adjustment": adjustment}
 
 
 @router.delete("/projects/{project_id}")

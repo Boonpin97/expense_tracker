@@ -123,7 +123,7 @@ export function MobileLayout(props: DashboardViewProps) {
           />
         ) : null}
 
-        {tab === "goals" ? <MobileGoals goals={goals} loading={loading} /> : null}
+        {tab === "goals" ? <MobileGoals goals={goals} projects={projects} loading={loading} /> : null}
 
         {tab === "projects" ? (
           <MobileProjects projects={projects} inflows={inflows} loading={loading} />
@@ -361,7 +361,12 @@ function MobileAddDialog({
                 <Label htmlFor="m-goal">Assign to goal</Label>
                 <Select
                   value={goalId}
-                  onValueChange={setGoalId}
+                  onValueChange={(value) => {
+                    setGoalId(value);
+                    // Pre-fill the goal's linked project; the user can still change it.
+                    const linked = goals.find((g) => g.id === value)?.projectId;
+                    if (linked && projects.some((p) => p.id === linked)) setProjectId(linked);
+                  }}
                   disabled={saving || goals.length === 0}
                 >
                   <SelectTrigger id="m-goal" className="h-11">

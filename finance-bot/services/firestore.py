@@ -306,6 +306,13 @@ def delete_project(chat_id: int, project_id: str) -> bool:
     if not doc_ref.get().exists:
         return False
     doc_ref.delete()
+    # Unlink goals that pointed at this project so they stop auto-tagging income.
+    linked = [goal for goal in get_goals(chat_id) if goal.get("project_id") == project_id]
+    if linked:
+        batch = get_db().batch()
+        for goal in linked:
+            batch.update(_goals_collection(chat_id).document(goal["id"]), {"project_id": None})
+        batch.commit()
     return True
 
 
@@ -316,6 +323,34 @@ def move_project(chat_id: int, project_id: str, direction: int) -> bool:
 def sum_inflows_by_project(chat_id: int) -> dict[str, float]:
     """Sum all-time inflow amounts per project_id. Projects are cumulative."""
     return _sum_inflows_grouped(chat_id, "project_id")
+
+
+def adjust_project_balance(chat_id: int, project_id: str, new_balance: float) -> Optional[float]:
+    """Make a project's displayed balance equal ``new_balance`` by recording the
+    difference as a project-tagged inflow dated now. ``initial_amount`` is left
+    alone. Returns the difference recorded (0.0 if unchanged), or None if the
+    project doesn't exist."""
+    project = get_project_by_id(chat_id, project_id)
+    if not project:
+        return None
+    initial = float(project.get("initial_amount", 0.0) or 0.0)
+    balance = initial + sum_inflows_by_project(chat_id).get(project_id, 0.0)
+    diff = round(new_balance - balance, 2)
+    if diff == 0:
+        return 0.0
+    label = f"{project.get('emoji', '🚀')} {project.get('name', '')}"
+    now = datetime.now(SGT).isoformat()
+    save_inflow(
+        Inflow(
+            item=f"{label} {'top-up' if diff > 0 else 'withdrawal'}",
+            amount=diff,
+            timestamp=now,
+            chat_id=chat_id,
+            created_at=now,
+            project_id=project_id,
+        )
+    )
+    return diff
 
 
 def delete_transactions_for_plan(plan_id: str) -> int:
